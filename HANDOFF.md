@@ -82,6 +82,7 @@ DailyMacApp.swift
 - `InsightEngine.swift`, `EventDetector.swift`, `TimelineSemantics.swift`: deterministic interpretation and evidence gates
 - `DiagnosisBriefRenderer.swift`: typed, deterministic, 32 KiB-capped external-assistant handoff with explicit untrusted-data boundaries
 - `MonitoringTimelineView.swift`: graph-first current interpretation, unified timeline, selection inspector, semantic urgency, scale rules, and progressive disclosure
+- `NetworkThroughputGraph.swift`: actual whole-Mac transfer history from the existing sampled receive/send totals, with an observed-window scale and no destination inspection
 - `ExpandedMonitoringView.swift`: dedicated resizable timeline window, native full-screen control, and optional window interpretation
 - `DailyMacValidation/main.swift`: the project’s bespoke verification runner
 

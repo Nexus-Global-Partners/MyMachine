@@ -142,8 +142,8 @@ struct MonitoringView: View {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
             }
             .buttonStyle(.borderless)
-            .help("Open expanded timeline")
-            .accessibilityLabel("Open expanded timeline")
+            .help("Open full-screen dashboard")
+            .accessibilityLabel("Open full-screen dashboard")
         }
     }
 
