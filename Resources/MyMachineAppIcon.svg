@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="blackGlass" x1="140" y1="80" x2="884" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#242426"/>
+      <stop offset="0.42" stop-color="#111112"/>
+      <stop offset="1" stop-color="#080809"/>
+    </linearGradient>
+    <linearGradient id="edgeLight" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.3" stop-color="#FFFFFF" stop-opacity="0.025"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="whiteGlass" x1="512" y1="278" x2="512" y2="742" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F1F1F3"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="226" fill="url(#blackGlass)"/>
+  <rect x="2" y="2" width="1020" height="1020" rx="224" fill="none" stroke="url(#edgeLight)" stroke-width="4"/>
+
+  <rect
+    x="270"
+    y="280"
+    width="484"
+    height="334"
+    rx="44"
+    fill="none"
+    stroke="url(#whiteGlass)"
+    stroke-width="54"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M220 680 H804"
+    fill="none"
+    stroke="url(#whiteGlass)"
+    stroke-width="54"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

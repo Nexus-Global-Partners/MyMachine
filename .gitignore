@@ -1,0 +1,28 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+
+# Generated packages and local QA artifacts
+outputs/
+work/
+:-
+*.app/
+*.dSYM/
+*.zip
+
+# Local MY MACHINE data must never enter source control
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db
+
+# Per-user IDE state
+xcuserdata/
+*.xcuserstate
+
+# Local secrets, if a developer introduces them later
+.env
+.env.*
+!.env.example
