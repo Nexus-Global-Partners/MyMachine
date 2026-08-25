@@ -283,6 +283,86 @@ public struct InsightEngine: Sendable {
         }
     }
 
+    /// Ranks application families by measured CPU core-seconds in the visible
+    /// window. Foreground and background intervals are both included. The
+    /// denominator is all usable app CPU that was observed, not whole-machine
+    /// CPU, so this remains useful without overstating attribution coverage.
+    public func makeAppComputeContributors(
+        samples: [AppResourceSample],
+        in interval: DateInterval,
+        limit: Int = 3
+    ) -> [AppComputeContribution] {
+        guard limit > 0 else { return [] }
+
+        let usable = clippedAppResources(samples, within: interval).filter {
+            $0.duration > 0
+                && $0.sample.cpuPercent.isFinite
+                && $0.sample.cpuPercent > 0
+                && !$0.sample.ownerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let intervalsByCollection = Dictionary(grouping: usable, by: { $0.sample.timestamp })
+        guard intervalsByCollection.count >= 2 else { return [] }
+
+        var coverage: [DateInterval] = []
+        for measured in intervalsByCollection.values
+            .compactMap({ values -> DateInterval? in
+                guard let latestStart = values.map(\.interval.start).max(),
+                      let earliestEnd = values.map(\.interval.end).min(),
+                      earliestEnd > latestStart else { return nil }
+                return DateInterval(start: latestStart, end: earliestEnd)
+            })
+            .sorted(by: { $0.start < $1.start }) {
+            if let previous = coverage.last,
+               measured.start.timeIntervalSince(previous.end) <= 1.5 {
+                coverage[coverage.count - 1] = DateInterval(
+                    start: previous.start,
+                    end: max(previous.end, measured.end)
+                )
+            } else {
+                coverage.append(measured)
+            }
+        }
+        guard coverage.map(\.duration).max() ?? 0 >= CoverageEvaluator.narrativeMinimum else {
+            return []
+        }
+
+        let totalCoreSeconds = usable.reduce(0.0) {
+            $0 + max(0, $1.sample.cpuPercent) / 100 * $1.duration
+        }
+        guard totalCoreSeconds.isFinite, totalCoreSeconds >= 1 else { return [] }
+
+        let groups = Dictionary(grouping: usable) {
+            $0.sample.ownerBundleID ?? $0.sample.ownerName
+        }
+
+        return groups.compactMap { _, values -> AppComputeContribution? in
+            guard let latest = values.max(by: { $0.sample.timestamp < $1.sample.timestamp })?.sample else {
+                return nil
+            }
+            let coreSeconds = values.reduce(0.0) {
+                $0 + max(0, $1.sample.cpuPercent) / 100 * $1.duration
+            }
+            guard coreSeconds.isFinite, coreSeconds > 0 else { return nil }
+            let share = min(100, max(0, coreSeconds / totalCoreSeconds * 100))
+            guard share >= 2 else { return nil }
+            return AppComputeContribution(
+                ownerName: latest.ownerName,
+                ownerBundleID: latest.ownerBundleID,
+                observedCPUSharePercent: share,
+                cpuCoreSeconds: coreSeconds,
+                observedDuration: values.reduce(0) { $0 + $1.duration }
+            )
+        }
+        .sorted { lhs, rhs in
+            if abs(lhs.observedCPUSharePercent - rhs.observedCPUSharePercent) < 0.000_001 {
+                return lhs.ownerName.localizedCaseInsensitiveCompare(rhs.ownerName) == .orderedAscending
+            }
+            return lhs.observedCPUSharePercent > rhs.observedCPUSharePercent
+        }
+        .prefix(limit)
+        .map { $0 }
+    }
+
     public func makeBackgroundActivityPoints(
         samples: [AppResourceSample],
         systemSamples: [SystemSample] = [],

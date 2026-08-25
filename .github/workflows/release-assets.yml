@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing draft release tag, for example v1.1.0
+        description: Existing immutable Git tag and draft release, for example v1.1.0
         required: true
         default: v1.1.0
 
@@ -18,18 +18,33 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
 
-      - name: Match release tag to app version
+      - name: Verify immutable release source and metadata
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          head_commit=$(git rev-parse HEAD)
+          tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
+          test "$head_commit" = "$tag_commit"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft -q '.isDraft')" = "true"
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           test "$RELEASE_TAG" = "v$version"
+          plutil -lint Resources/Info.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)" = "15.0"
 
       - name: Compile local validation target
         run: swift build -c release --product DailyMacValidation
+
+      - name: Run deterministic validation
+        run: .build/release/DailyMacValidation --skip-live
 
       - name: Package and verify assets
         shell: bash
@@ -42,6 +57,20 @@ jobs:
           unzip -t "outputs/MY-MACHINE-Source-$version.zip"
           (cd outputs && shasum -a 256 -c "SHA256SUMS-$version.txt")
 
+      - name: Audit source archive privacy boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          listing=$(unzip -Z1 "outputs/MY-MACHINE-Source-$version.zip")
+          if printf '%s\n' "$listing" | grep -E '(^|/)(\.git|\.build|outputs|work)(/|$)|\.(sqlite|sqlite-wal|sqlite-shm|db)$'; then
+            echo "Private or generated content entered the source archive" >&2
+            exit 1
+          fi
+          printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/PRIVACY.md'
+          printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/SECURITY.md'
+          printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/Sources/'
+
       - name: Replace draft release assets
         shell: bash
         env:
@@ -49,6 +78,9 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          git fetch --force --no-tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-list -n 1 FETCH_HEAD)" = "$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           gh release view "$RELEASE_TAG" --json isDraft -q '.isDraft' | grep -qx true
           gh release upload "$RELEASE_TAG" \

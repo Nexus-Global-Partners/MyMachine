@@ -49,7 +49,7 @@ unzip -t "outputs/MY-MACHINE-Source-1.1.0.zip"
 shasum -a 256 -c "outputs/SHA256SUMS-1.1.0.txt"
 ```
 
-The final validation check samples real hardware. It is intentionally a local release check rather than a guaranteed cloud-runner test. GitHub CI still compiles debug and release products, packages the app, verifies the signature and archives, checks the generated hashes, and audits the source archive boundary.
+The final validation check samples real hardware. It is intentionally a local release check rather than a guaranteed cloud-runner test. GitHub CI runs the deterministic validation suite in both debug and release configurations, then packages the app, verifies the signature and archives, checks the generated hashes, and audits the source archive boundary.
 
 For UI changes, test the menu panel at normal menu-bar scale and the expanded view on the smallest Mac size you support. Confirm selection can be cleared, missing data stays visibly missing, and scrolling or resize remains smooth.
 

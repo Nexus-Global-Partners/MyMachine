@@ -33,6 +33,11 @@ jobs:
           swift build -c release --product DailyMac
           swift build -c release --product DailyMacValidation
 
+      - name: Run deterministic validation
+        run: |
+          .build/debug/DailyMacValidation --skip-live
+          .build/release/DailyMacValidation --skip-live
+
       - name: Validate release metadata
         run: |
           plutil -lint Resources/Info.plist

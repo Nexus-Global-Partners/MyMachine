@@ -132,7 +132,8 @@ final class NotificationCoordinator: NSObject, @preconcurrency UNUserNotificatio
 
     private func scheduleFirstBriefingIfNeeded(copy: (title: String, body: String), generation: Int) async {
         let defaults = UserDefaults.standard
-        guard isCurrent(generation), !defaults.bool(forKey: firstBriefingScheduledKey) else { return }
+        guard isCurrent(generation) else { return }
+        let firstBriefingAlreadyAttempted = defaults.bool(forKey: firstBriefingScheduledKey)
 
         let pending = await center.pendingNotificationRequests()
         let delivered = await center.deliveredNotifications()
@@ -143,21 +144,38 @@ final class NotificationCoordinator: NSObject, @preconcurrency UNUserNotificatio
         if existingIdentifiers.contains(firstBriefingIdentifier) ||
             existingIdentifiers.contains(legacyIdentifiers[0]) {
             persistFirstBriefingScheduled(defaults: defaults)
+            center.removePendingNotificationRequests(withIdentifiers: [dailyBriefingIdentifier])
             return
         }
+        // A prior process may have committed the one-time attempt immediately
+        // before it exited. Do not risk a duplicate immediate alert. Because the
+        // successful-delivery day was not persisted, reconciliation can still
+        // schedule the normal end-of-day briefing below.
+        guard !firstBriefingAlreadyAttempted else { return }
 
         let content = notificationContent(title: copy.title, body: copy.body)
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 8, repeats: false)
         let request = UNNotificationRequest(identifier: firstBriefingIdentifier, content: content, trigger: trigger)
+        // Commit the one-time decision before handing the request to macOS. If the
+        // app is terminated immediately after acceptance, a later launch must not
+        // infer that the first briefing was never scheduled and send it again.
+        // A reported scheduling failure, or an intentional cancellation while the
+        // request is in flight, rolls the sentinel back so a real retry stays possible.
+        persistFirstBriefingAttempt(defaults: defaults)
         do {
             try await center.add(request)
             guard isCurrent(generation) else {
                 center.removePendingNotificationRequests(withIdentifiers: [firstBriefingIdentifier])
                 center.removeDeliveredNotifications(withIdentifiers: [firstBriefingIdentifier])
+                clearFirstBriefingScheduled(defaults: defaults)
                 return
             }
             persistFirstBriefingScheduled(defaults: defaults)
+            // If an earlier transient first-alert failure left today's 18:00
+            // fallback pending, the successful immediate briefing replaces it.
+            center.removePendingNotificationRequests(withIdentifiers: [dailyBriefingIdentifier])
         } catch {
+            clearFirstBriefingScheduled(defaults: defaults)
             return
         }
     }
@@ -196,6 +214,18 @@ final class NotificationCoordinator: NSObject, @preconcurrency UNUserNotificatio
     private func persistFirstBriefingScheduled(defaults: UserDefaults) {
         defaults.set(true, forKey: firstBriefingScheduledKey)
         defaults.set(DayBoundaries.key(for: Date()), forKey: firstBriefingDayKey)
+        defaults.synchronize()
+    }
+
+    private func persistFirstBriefingAttempt(defaults: UserDefaults) {
+        defaults.set(true, forKey: firstBriefingScheduledKey)
+        defaults.removeObject(forKey: firstBriefingDayKey)
+        defaults.synchronize()
+    }
+
+    private func clearFirstBriefingScheduled(defaults: UserDefaults) {
+        defaults.removeObject(forKey: firstBriefingScheduledKey)
+        defaults.removeObject(forKey: firstBriefingDayKey)
         defaults.synchronize()
     }
 

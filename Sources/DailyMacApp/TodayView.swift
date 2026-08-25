@@ -20,7 +20,8 @@ struct MonitoringView: View {
                                     snapshot: snapshot,
                                     samples: model.monitoringSamples,
                                     backgroundPoints: model.monitoringBackgroundPoints,
-                                    events: model.monitoringEvents
+                                    events: model.monitoringEvents,
+                                    appContributors: model.monitoringAppContributors
                                 )
                                 .equatable()
                             }

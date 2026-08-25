@@ -20,6 +20,7 @@ public actor SQLiteStore {
     public nonisolated let databaseURL: URL
 
     private var db: OpaquePointer?
+    private var dataGeneration: UInt64 = 0
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -96,25 +97,36 @@ public actor SQLiteStore {
         try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: destination.path)
     }
 
+    public func currentDataGeneration() -> UInt64 { dataGeneration }
+
+    @discardableResult
     public func save(
         sample: SystemSample,
         processes: [ProcessSample],
         appResources: [AppResourceSample] = [],
-        events: [ActivityEvent] = []
-    ) throws {
+        events: [ActivityEvent] = [],
+        ifDataGeneration expectedGeneration: UInt64? = nil
+    ) throws -> Bool {
+        if let expectedGeneration, expectedGeneration != dataGeneration { return false }
         try transaction {
             try insert(sample)
             for process in processes { try insert(process) }
             for resource in appResources { try insert(resource) }
             for event in events { try insert(event) }
         }
+        return true
     }
 
-    public func save(event: ActivityEvent) throws {
+    @discardableResult
+    public func save(event: ActivityEvent, ifDataGeneration expectedGeneration: UInt64? = nil) throws -> Bool {
+        if let expectedGeneration, expectedGeneration != dataGeneration { return false }
         try insert(event)
+        return true
     }
 
-    public func save(report: DailyReport) throws {
+    @discardableResult
+    public func save(report: DailyReport, ifDataGeneration expectedGeneration: UInt64? = nil) throws -> Bool {
+        if let expectedGeneration, expectedGeneration != dataGeneration { return false }
         guard let db else { throw StoreError.write("database is closed") }
         let sql = """
         INSERT INTO daily_reports(day_key, generated_at, timezone_id, report_json)
@@ -132,6 +144,7 @@ public actor SQLiteStore {
         let json = String(data: try encoder.encode(report), encoding: .utf8) ?? "{}"
         bind(json, to: 4, in: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else { throw StoreError.write(String(cString: sqlite3_errmsg(db))) }
+        return true
     }
 
     public func samples(from start: Date, to end: Date) throws -> [SystemSample] {
@@ -480,6 +493,7 @@ public actor SQLiteStore {
     }
 
     public func eraseAllData() throws {
+        dataGeneration &+= 1
         try transaction {
             try execute("DELETE FROM app_resource_samples;")
             try execute("DELETE FROM process_samples;")

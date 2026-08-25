@@ -8,6 +8,7 @@ All notable user-visible changes are recorded here.
 
 ### Added
 
+- Shows a few top observed application CPU contributors for the selected window with honest coverage-aware shares and cached native icons.
 - **Active today** gives immediate non-idle time context without claiming focus or productivity.
 - **Diagnose My Machine** prepares a deterministic, privacy-bounded 24-hour brief that the user can copy into an external assistant. Copy only remains the default; MY MACHINE never uploads, pastes, or sends the brief.
 - The expanded timeline supports native macOS full screen and 1-hour, 6-hour, and 24-hour views.
@@ -16,7 +17,7 @@ All notable user-visible changes are recorded here.
 
 ### Changed
 
-- The graph remains the primary status surface. CPU and GPU keep stable identities, while red is reserved for evidence of a genuinely urgent interval.
+- The graph remains the primary status surface. CPU and GPU keep stable identities, while red is reserved for evidence of a genuinely urgent interval; any red CPU, GPU, or memory segment turns its matching left-hand KPI red for the same measured duration.
 - Timeline selection can be cleared with **Now**, Escape, a second marker click, the label rail, or the time axis.
 - Diagnosis rendering and ordering remain bounded and deterministic so opening the interface stays responsive.
 

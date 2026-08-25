@@ -45,6 +45,7 @@ struct ExpandedMonitoringView: View {
                         samples: model.monitoringSamples,
                         backgroundPoints: model.monitoringBackgroundPoints,
                         events: model.monitoringEvents,
+                        appContributors: model.monitoringAppContributors,
                         presentation: layout.timelinePresentation,
                         expandedProcessorHeight: layout.expandedProcessorHeight
                     )
@@ -197,6 +198,10 @@ struct ExpandedMonitoringView: View {
 
     private var statusColor: Color {
         guard let latestSample else { return Color.white.opacity(0.42) }
+        if let dataThrough = model.monitoringDataThrough,
+           Date().timeIntervalSince(dataThrough) > max(150, latestSample.samplingInterval * 3) {
+            return Color.white.opacity(0.42)
+        }
         let demand = max(latestSample.cpuPercent, latestSample.gpuPercent ?? 0)
         if latestSample.thermalLevel == .serious
             || latestSample.thermalLevel == .critical

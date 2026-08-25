@@ -16,6 +16,7 @@ struct MonitoringTimelineView: View, Equatable {
     let samples: [SystemSample]
     let backgroundPoints: [BackgroundActivityPoint]
     let events: [ActivityEvent]
+    let appContributors: [AppComputeContribution]
     let presentation: TimelinePresentation
     let expandedProcessorHeight: CGFloat?
 
@@ -37,6 +38,7 @@ struct MonitoringTimelineView: View, Equatable {
         samples: [SystemSample],
         backgroundPoints: [BackgroundActivityPoint],
         events: [ActivityEvent],
+        appContributors: [AppComputeContribution] = [],
         presentation: TimelinePresentation = .full,
         expandedProcessorHeight: CGFloat? = nil
     ) {
@@ -45,6 +47,7 @@ struct MonitoringTimelineView: View, Equatable {
         self.samples = orderedSamples
         self.backgroundPoints = backgroundPoints
         self.events = events
+        self.appContributors = appContributors
         self.presentation = presentation
         self.expandedProcessorHeight = expandedProcessorHeight
         self.interval = snapshot.interval
@@ -60,14 +63,8 @@ struct MonitoringTimelineView: View, Equatable {
         )
         self.memoryConditions = memoryConditions
         self.visibleStress = TimelineSemantics.visibleStress(
-            processorReadings: processorTrend.map {
-                TimelineProcessorStressReading(
-                    segment: $0.segment,
-                    timestamp: $0.timestamp,
-                    cpuPercent: $0.cpuPercent,
-                    gpuPercent: $0.gpuPercent
-                )
-            },
+            samples: orderedSamples,
+            within: snapshot.interval,
             constrainedMemoryIntervals: memoryConditions.constrained
         )
         self.processorScaleMaximum = Self.processorScaleMaximum(for: processorTrend)
@@ -102,6 +99,7 @@ struct MonitoringTimelineView: View, Equatable {
             && lhs.samples == rhs.samples
             && lhs.backgroundPoints == rhs.backgroundPoints
             && lhs.events == rhs.events
+            && lhs.appContributors == rhs.appContributors
             && lhs.presentation == rhs.presentation
             && lhs.expandedProcessorHeight == rhs.expandedProcessorHeight
     }
@@ -160,9 +158,9 @@ struct MonitoringTimelineView: View, Equatable {
 
     private var labelWidth: CGFloat {
         switch presentation {
-        case .menuBar: return 148
-        case .full: return 152
-        case .expanded: return 188
+        case .menuBar: return 164
+        case .full: return 196
+        case .expanded: return 220
         }
     }
 
@@ -261,16 +259,70 @@ struct MonitoringTimelineView: View, Equatable {
             Text(processorWindowPrimary)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.primary.opacity(0.82))
-                .lineLimit(2)
-            if let processorWindowImpact {
+                .lineLimit(presentation == .menuBar ? 1 : 2)
+            if presentation != .menuBar, let processorWindowImpact {
                 Text(processorWindowImpact)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
+            if !visibleAppContributors.isEmpty {
+                VStack(alignment: .leading, spacing: presentation == .menuBar ? 2 : 4) {
+                    Text("OBSERVED APP CPU")
+                        .font(.system(size: 9, weight: .semibold))
+                        .tracking(0.45)
+                        .foregroundStyle(.secondary)
+                    ForEach(visibleAppContributors) { contributor in
+                        appContributorRow(contributor)
+                    }
+                }
+                .padding(.top, presentation == .menuBar ? 1 : 3)
+                .help("Share of observed app CPU in this window; this is not the app's share of total whole-machine demand.")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+
+    private var visibleAppContributors: [AppComputeContribution] {
+        Array(appContributors.prefix(presentation == .menuBar ? 1 : 3))
+    }
+
+    private func appContributorRow(_ contributor: AppComputeContribution) -> some View {
+        let percentage = min(100, max(0, contributor.observedCPUSharePercent))
+        return HStack(spacing: 6) {
+            ContributorAppIcon(
+                bundleIdentifier: contributor.ownerBundleID,
+                ownerName: contributor.ownerName
+            )
+            .frame(width: presentation == .menuBar ? 15 : 18, height: presentation == .menuBar ? 15 : 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(contributor.ownerName)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.primary.opacity(0.86))
+                        .lineLimit(1)
+                    Spacer(minLength: 2)
+                    Text("\(Formatters.percent(percentage)) share")
+                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.08))
+                        Capsule()
+                            .fill(Color.primary.opacity(0.42))
+                            .frame(width: geometry.size.width * CGFloat(percentage / 100))
+                    }
+                }
+                .frame(height: 3)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(contributor.ownerName), \(Formatters.percent(percentage)) of observed app CPU in this window")
+        .accessibilityHint("This is a share of the app CPU MY MACHINE observed, not total whole-machine demand.")
     }
 
     private func processorKey(
@@ -1013,6 +1065,39 @@ struct MonitoringTimelineView: View, Equatable {
 
 }
 
+private struct ContributorAppIcon: View {
+    let bundleIdentifier: String?
+    let ownerName: String
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Image(systemName: "app.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .padding(2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .task(id: bundleIdentifier ?? ownerName) {
+            // Let the panel draw first; Launch Services can take a moment on a
+            // cold icon lookup, while every later render hits the memory cache.
+            await Task.yield()
+            image = ApplicationIconCache.shared.image(
+                bundleIdentifier: bundleIdentifier,
+                ownerName: ownerName
+            )
+        }
+    }
+}
+
 private enum TimelineColors {
     static let processor = Color(nsColor: .systemBlue)
     static let handsOn = Color.indigo
@@ -1089,7 +1174,7 @@ private struct UnifiedTimelineLayout: Equatable {
         self.showsMemory = showsMemory
         switch presentation {
         case .full:
-            cpuHeight = 220
+            cpuHeight = 236
             handsOnHeight = 52
             batteryHeight = 56
             memoryHeight = 36
@@ -1101,7 +1186,7 @@ private struct UnifiedTimelineLayout: Equatable {
             memoryHeight = 42
             sectionGap = 14
         case .menuBar:
-            cpuHeight = 148
+            cpuHeight = 164
             handsOnHeight = 44
             batteryHeight = 42
             memoryHeight = 32
@@ -1211,7 +1296,6 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawConfirmedSleep(in: &context, size: size, plotWidth: rects.plotWidth)
             drawProcessorMemory(in: &context, rect: rects.cpu)
             drawProcessor(in: &context, rect: rects.cpu)
-            drawSeriousHeat(in: &context, rect: rects.cpu)
             drawHandsOn(in: &context, rect: rects.handsOn)
             if let battery = rects.battery {
                 drawBattery(in: &context, rect: battery, rightAxisX: rects.plotWidth)
@@ -1590,6 +1674,11 @@ private struct UnifiedDataCanvas: View, Equatable {
             let endX = xPosition(interval.end, plotWidth: plot.width)
             let range = startX...endX
             let run = clippedPolyline(points, to: range)
+            if run.count == 1, let point = run.first {
+                let marker = CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6)
+                context.fill(Path(ellipseIn: marker), with: .color(TimelineColors.critical.opacity(0.96)))
+                continue
+            }
             guard run.count >= 2 else { continue }
             var segment = Path()
             segment.move(to: run[0])
@@ -1700,25 +1789,6 @@ private struct UnifiedDataCanvas: View, Equatable {
                     endPoint: CGPoint(x: band.maxX, y: band.midY)
                 )
             )
-        }
-    }
-
-    private func drawSeriousHeat(in context: inout GraphicsContext, rect: CGRect) {
-        let bucketCount = visualBucketCount(for: rect.width)
-        var buckets = Set<Int>()
-        for point in samples where point.thermalLevel == .serious || point.thermalLevel == .critical {
-            guard point.duration > 0 else { continue }
-            let start = max(interval.start, point.timestamp.addingTimeInterval(-point.duration))
-            let end = min(interval.end, point.timestamp)
-            guard end > start else { continue }
-            let first = visualBucketIndex(for: start, count: bucketCount)
-            let last = visualBucketIndex(for: end, count: bucketCount)
-            for index in first...last { buckets.insert(index) }
-        }
-        for index in buckets.sorted() {
-            let horizontal = visualBucketRect(index: index, count: bucketCount, plotWidth: rect.width)
-            let cap = CGRect(x: horizontal.minX, y: rect.minY, width: horizontal.width, height: 3)
-            context.fill(Path(roundedRect: cap, cornerRadius: 1.5), with: .color(.red.opacity(0.78)))
         }
     }
 
@@ -1833,7 +1903,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             in: &context,
             y: y,
             plotWidth: rect.width,
-            color: .red.opacity(0.95),
+            color: TimelineColors.critical.opacity(0.95),
             height: 10
         )
     }
@@ -1966,9 +2036,6 @@ private struct UnifiedDataCanvas: View, Equatable {
         }
         if !sustainedMemory.isEmpty {
             summary += " Red bands indicate memory constrained for at least two minutes, when slowdown is more likely."
-        }
-        if samples.contains(where: { $0.thermalLevel == .serious || $0.thermalLevel == .critical }) {
-            summary += " A red cap marks heat high enough that macOS may reduce speed."
         }
         return summary
     }

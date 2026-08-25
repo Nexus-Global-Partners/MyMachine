@@ -181,6 +181,22 @@ struct DailyMacValidation {
             try harness.check(selected.last?.timestamp == end, "rolling query excluded the sample ending at the captured end")
         }
 
+        await harness.run("data erasure rejects in-flight stale writes") {
+            let directory = temporaryDirectory(prefix: "DailyMacEraseGeneration")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = try SQLiteStore(directoryURL: directory)
+            let staleGeneration = await store.currentDataGeneration()
+            try await store.eraseAllData()
+            let accepted = try await store.save(
+                sample: sample(at: Date(timeIntervalSince1970: 1_780_000_100)),
+                processes: [],
+                ifDataGeneration: staleGeneration
+            )
+            try harness.check(!accepted, "a write begun before erase was accepted afterward")
+            let remaining = try await store.samples(from: .distantPast, to: .distantFuture)
+            try harness.check(remaining.isEmpty, "stale telemetry reappeared after erase")
+        }
+
         await harness.run("rolling snapshots clip boundary samples and withhold sparse claims") {
             let start = Date(timeIntervalSince1970: 1_780_000_000)
             let end = start.addingTimeInterval(3_600)
@@ -956,28 +972,121 @@ struct DailyMacValidation {
 
         await harness.run("visible stress drives chart and rail from one immutable state") {
             let start = Date(timeIntervalSince1970: 1_780_100_000)
-            let readings = [
-                TimelineProcessorStressReading(segment: 0, timestamp: start, cpuPercent: 40, gpuPercent: 30),
-                TimelineProcessorStressReading(segment: 0, timestamp: start.addingTimeInterval(60), cpuPercent: 85, gpuPercent: 90),
-                TimelineProcessorStressReading(segment: 0, timestamp: start.addingTimeInterval(120), cpuPercent: 35, gpuPercent: 25),
-                TimelineProcessorStressReading(segment: 1, timestamp: start.addingTimeInterval(300), cpuPercent: 99, gpuPercent: nil)
+            let window = DateInterval(start: start, duration: 300)
+            let samples = [
+                sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, cpu: 40, gpu: 30),
+                sample(at: start.addingTimeInterval(120), duration: 60, interval: 60, cpu: 85, gpu: 90),
+                // Even a one-second unrecorded seam must not be counted red.
+                sample(at: start.addingTimeInterval(122), duration: 1, interval: 1, cpu: 90, gpu: nil),
+                // A stale 5-minute duration is bounded by the 30-second sampling
+                // cadence, so only its final 66 measured seconds can become red.
+                sample(at: start.addingTimeInterval(300), duration: 300, interval: 30, cpu: 99, gpu: nil)
             ]
             let briefMemory = DateInterval(start: start, duration: 119)
             let sustainedMemory = DateInterval(start: start.addingTimeInterval(180), duration: 120)
             let stress = TimelineSemantics.visibleStress(
-                processorReadings: readings,
+                samples: samples,
+                within: window,
                 constrainedMemoryIntervals: [briefMemory, sustainedMemory]
             )
 
-            try harness.check(stress.cpuCriticalIntervals.count == 1, "CPU stress did not preserve the visible run")
-            try harness.check(abs(stress.cpuCriticalDuration - 120) < 0.001, "CPU red duration disagreed with the plotted segments")
+            try harness.check(stress.cpuCriticalIntervals.count == 3, "CPU stress merged across an unrecorded gap")
+            try harness.check(abs(stress.cpuCriticalDuration - 127) < 0.001, "CPU red duration did not use bounded measured intervals")
             try harness.check(stress.gpuCriticalIntervals.count == 1, "GPU stress did not preserve the visible run")
-            try harness.check(abs(stress.gpuCriticalDuration - 120) < 0.001, "GPU red duration disagreed with the plotted segments")
+            try harness.check(abs(stress.gpuCriticalDuration - 60) < 0.001, "GPU red duration disagreed with the measured interval")
             try harness.check(stress.memoryCriticalIntervals == [sustainedMemory], "brief memory pressure became red")
             try harness.check(abs(stress.memoryCriticalDuration - 120) < 0.001, "memory red duration was inaccurate")
             try harness.check(
-                !stress.cpuCriticalIntervals.contains(where: { $0.contains(start.addingTimeInterval(240)) }),
+                !stress.cpuCriticalIntervals.contains(where: { $0.contains(start.addingTimeInterval(120.5)) }),
+                "a short recording seam was bridged into red CPU stress"
+            )
+            try harness.check(
+                !stress.cpuCriticalIntervals.contains(where: { $0.contains(start.addingTimeInterval(180)) }),
                 "a recording gap was bridged into red CPU stress"
+            )
+        }
+
+        await harness.run("network summaries preserve raw peaks and fresh run boundaries") {
+            let start = Date(timeIntervalSince1970: 1_780_150_000)
+            let denseInterval = DateInterval(start: start, duration: 802)
+            let dense = (1...400).map { index in
+                sample(
+                    at: start.addingTimeInterval(Double(index) * 2),
+                    duration: 2,
+                    interval: 2,
+                    networkReceived: index == 200 ? 20_000_000 : 2_000,
+                    networkSent: 1_000
+                )
+            }
+            let denseSeries = NetworkThroughputSemantics.prepare(
+                samples: dense,
+                within: denseInterval,
+                pointLimit: 4
+            )
+            try harness.check(
+                abs(denseSeries.summary.peakCombinedBytesPerSecond - 10_000_500) < 0.001,
+                "display downsampling erased the measured network peak"
+            )
+            try harness.check(
+                denseSeries.runs.flatMap { $0 }.count == 4,
+                "network display points did not honor the requested bound"
+            )
+            try harness.check(
+                abs((denseSeries.summary.currentReceivedBytesPerSecond ?? 0) - 1_000) < 0.001,
+                "fresh current download did not use the latest contiguous raw readings"
+            )
+
+            let oldRun = [15.0, 30.0, 45.0].map { offset in
+                sample(
+                    at: start.addingTimeInterval(offset),
+                    duration: 15,
+                    interval: 15,
+                    networkReceived: 15_000,
+                    networkSent: 1_500
+                )
+            }
+            let reset = sample(
+                at: start.addingTimeInterval(60),
+                duration: 0,
+                interval: 15,
+                networkReceived: 0,
+                networkSent: 0
+            )
+            let newRun = [300.0, 315.0, 330.0].map { offset in
+                sample(
+                    at: start.addingTimeInterval(offset),
+                    duration: 15,
+                    interval: 15,
+                    networkReceived: 150_000,
+                    networkSent: 15_000
+                )
+            }
+            let resumed = NetworkThroughputSemantics.prepare(
+                samples: oldRun + [reset] + newRun,
+                within: DateInterval(start: start, duration: 332)
+            )
+            try harness.check(resumed.runs.count == 2, "a network baseline reset did not split the plotted runs")
+            try harness.check(
+                abs((resumed.summary.currentReceivedBytesPerSecond ?? 0) - 10_000) < 0.001,
+                "current download averaged across a prior recording run"
+            )
+
+            let resetAtEnd = NetworkThroughputSemantics.prepare(
+                samples: oldRun + [reset],
+                within: DateInterval(start: start, duration: 62)
+            )
+            try harness.check(
+                resetAtEnd.summary.currentCombinedBytesPerSecond == nil,
+                "a fresh baseline reset exposed an older run as current network activity"
+            )
+
+            let stale = NetworkThroughputSemantics.prepare(
+                samples: oldRun,
+                within: DateInterval(start: start, duration: 400)
+            )
+            try harness.check(
+                stale.summary.currentCombinedBytesPerSecond == nil,
+                "stale network history was labelled as a current rate"
             )
         }
 
@@ -1356,7 +1465,75 @@ struct DailyMacValidation {
             try harness.check(diagnosisElapsed < 0.5, "large diagnosis brief took \(diagnosisElapsed)s")
         }
 
-        await harness.run("live permission-free telemetry invariants") {
+        await harness.run("app CPU contributors are clipped, complete, and deterministic") {
+            let end = Date(timeIntervalSince1970: 1_780_100_000)
+            let window = DateInterval(start: end.addingTimeInterval(-180), end: end)
+            let resources = [
+                AppResourceSample(
+                    timestamp: end.addingTimeInterval(-90), duration: 60,
+                    ownerName: "Conductor", ownerBundleID: "com.example.conductor",
+                    isForeground: false, cpuPercent: 100, memoryBytes: 1,
+                    diskReadBytes: 0, diskWriteBytes: 0, processCount: 2,
+                    workerCount: 1, workerNames: []
+                ),
+                AppResourceSample(
+                    timestamp: end.addingTimeInterval(-90), duration: 60,
+                    ownerName: "ChatGPT", ownerBundleID: "com.example.chatgpt",
+                    isForeground: true, cpuPercent: 50, memoryBytes: 1,
+                    diskReadBytes: 0, diskWriteBytes: 0, processCount: 1,
+                    workerCount: 0, workerNames: []
+                ),
+                AppResourceSample(
+                    timestamp: end.addingTimeInterval(-30), duration: 60,
+                    ownerName: "Conductor", ownerBundleID: "com.example.conductor",
+                    isForeground: false, cpuPercent: 100, memoryBytes: 1,
+                    diskReadBytes: 0, diskWriteBytes: 0, processCount: 2,
+                    workerCount: 1, workerNames: []
+                ),
+                AppResourceSample(
+                    timestamp: end.addingTimeInterval(-30), duration: 60,
+                    ownerName: "ChatGPT", ownerBundleID: "com.example.chatgpt",
+                    isForeground: true, cpuPercent: 50, memoryBytes: 1,
+                    diskReadBytes: 0, diskWriteBytes: 0, processCount: 1,
+                    workerCount: 0, workerNames: []
+                ),
+                AppResourceSample(
+                    timestamp: end.addingTimeInterval(-30), duration: 60,
+                    ownerName: "Ignored", ownerBundleID: "com.example.ignored",
+                    isForeground: false, cpuPercent: .nan, memoryBytes: 1,
+                    diskReadBytes: 0, diskWriteBytes: 0, processCount: 1,
+                    workerCount: 0, workerNames: []
+                )
+            ]
+            let contributors = InsightEngine().makeAppComputeContributors(
+                samples: resources,
+                in: window,
+                limit: 3
+            )
+            try harness.check(contributors.count == 2, "unusable app CPU escaped evidence filtering")
+            try harness.check(contributors.first?.ownerName == "Conductor", "contributors were not ranked by clipped CPU core-seconds")
+            let totalShare = contributors.reduce(0) { $0 + $1.observedCPUSharePercent }
+            try harness.check(abs(totalShare - 100) < 0.001, "observed app CPU shares did not normalize against all usable apps")
+            try harness.check(abs((contributors.first?.observedCPUSharePercent ?? 0) - (2.0 / 3.0 * 100)) < 0.001, "range-boundary clipping changed the dominant app share")
+
+            let repeated = InsightEngine().makeAppComputeContributors(
+                samples: resources.reversed(),
+                in: window,
+                limit: 3
+            )
+            try harness.check(contributors == repeated, "contributor order changed with input order")
+            try harness.check(
+                InsightEngine().makeAppComputeContributors(samples: [resources[0]], in: window).isEmpty,
+                "a single sparse app reading was presented as reliable attribution"
+            )
+            try harness.check(
+                InsightEngine().makeAppComputeContributors(samples: Array(resources.prefix(2)), in: window).isEmpty,
+                "multiple apps from only one collection were presented as reliable attribution"
+            )
+        }
+
+        if !CommandLine.arguments.contains("--skip-live") {
+            await harness.run("live permission-free telemetry invariants") {
             let sampler = TelemetrySampler()
             let start = Date()
             let began = Date()
@@ -1380,6 +1557,7 @@ struct DailyMacValidation {
             try harness.check(second.observedProcessCount <= second.attemptedProcessCount, "process coverage exceeds attempted count")
             try harness.check(elapsed < 5, "two live samples took \(elapsed)s")
             print("INFO  live process coverage: \(second.observedProcessCount)/\(second.attemptedProcessCount); idle input age: \(Int(liveIdleSeconds))s; two-sample wall time: \(String(format: "%.3f", elapsed))s")
+            }
         }
 
         print("\nValidation summary: \(harness.passed) passed, \(harness.failed) failed")

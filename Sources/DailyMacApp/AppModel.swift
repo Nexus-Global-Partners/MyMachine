@@ -96,6 +96,7 @@ struct MonitoringDisplayState: Equatable {
     let samples: [SystemSample]
     let backgroundPoints: [BackgroundActivityPoint]
     let events: [ActivityEvent]
+    let appContributors: [AppComputeContribution]
     let dataThrough: Date?
     let refreshedAt: Date
 }
@@ -160,6 +161,7 @@ final class AppModel: ObservableObject {
     var monitoringSamples: [SystemSample] { monitoringContent?.samples ?? [] }
     var monitoringBackgroundPoints: [BackgroundActivityPoint] { monitoringContent?.backgroundPoints ?? [] }
     var monitoringEvents: [ActivityEvent] { monitoringContent?.events ?? [] }
+    var monitoringAppContributors: [AppComputeContribution] { monitoringContent?.appContributors ?? [] }
     var monitoringDataThrough: Date? { monitoringContent?.dataThrough }
 
     init() {
@@ -626,13 +628,16 @@ final class AppModel: ObservableObject {
         }
         events.append(contentsOf: detector.observe(result.system))
         do {
-            try await store.save(
+            let storeGeneration = await store.currentDataGeneration()
+            guard sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
+            let saved = try await store.save(
                 sample: result.system,
                 processes: result.processes,
                 appResources: result.appResources,
-                events: events
+                events: events,
+                ifDataGeneration: storeGeneration
             )
-            guard sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
+            guard saved, sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
             latestSystem = result.system
             lastSampleTimestamp = result.system.timestamp
             lastUpdated = result.system.timestamp
@@ -726,6 +731,11 @@ final class AppModel: ObservableObject {
             in: interval,
             limit: limit
         )
+        let appContributors = insights.makeAppComputeContributors(
+            samples: appResources,
+            in: interval,
+            limit: 3
+        )
         let visibleEventDates = sleepWakeEvents
             .map(\.timestamp)
             .filter { interval.contains($0) }
@@ -740,6 +750,7 @@ final class AppModel: ObservableObject {
             samples: samples,
             backgroundPoints: backgroundActivityPoints,
             events: sleepWakeEvents,
+            appContributors: appContributors,
             dataThrough: dataThrough,
             refreshedAt: Date()
         )
@@ -787,13 +798,18 @@ final class AppModel: ObservableObject {
     private func generateReport(dayKey: String, publishAsToday: Bool) async throws {
         guard let store, let interval = DayBoundaries.interval(for: dayKey), !dataEraseInProgress else { return }
         let reportEpoch = dataEpoch
+        let storeGeneration = await store.currentDataGeneration()
+        guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
         let samples = try await store.samples(from: interval.start, to: interval.end)
         let processes = try await store.processSamples(from: interval.start, to: interval.end)
         let events = try await store.events(from: interval.start, to: interval.end)
         let history = try await store.reports(limit: 365).filter { $0.dayKey != dayKey }
         guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
         let report = insights.makeReport(dayKey: dayKey, timezone: .autoupdatingCurrent, samples: samples, processSamples: processes, events: events, historicalReports: history)
-        if !samples.isEmpty { try await store.save(report: report) }
+        if !samples.isEmpty {
+            let saved = try await store.save(report: report, ifDataGeneration: storeGeneration)
+            guard saved else { return }
+        }
         guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
         if publishAsToday {
             todayReport = report
@@ -846,7 +862,9 @@ final class AppModel: ObservableObject {
         let eventEpoch = dataEpoch
         Task {
             guard eventEpoch == dataEpoch, !dataEraseInProgress else { return }
-            do { try await store.save(event: event) }
+            let storeGeneration = await store.currentDataGeneration()
+            guard eventEpoch == dataEpoch, !dataEraseInProgress else { return }
+            do { try await store.save(event: event, ifDataGeneration: storeGeneration) }
             catch { await show(error) }
         }
     }

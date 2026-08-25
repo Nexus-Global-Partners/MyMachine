@@ -320,6 +320,33 @@ public struct AppResourceSample: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// A bounded explanation of which named applications contributed most to the
+/// application CPU that MY MACHINE could observe in one visible window. The
+/// percentage is deliberately not a share of whole-machine CPU: protected,
+/// kernel, and very short-lived work can sit outside app-level observation.
+public struct AppComputeContribution: Identifiable, Equatable, Sendable {
+    public var id: String { ownerBundleID ?? ownerName }
+    public let ownerName: String
+    public let ownerBundleID: String?
+    public let observedCPUSharePercent: Double
+    public let cpuCoreSeconds: Double
+    public let observedDuration: TimeInterval
+
+    public init(
+        ownerName: String,
+        ownerBundleID: String?,
+        observedCPUSharePercent: Double,
+        cpuCoreSeconds: Double,
+        observedDuration: TimeInterval
+    ) {
+        self.ownerName = ownerName
+        self.ownerBundleID = ownerBundleID
+        self.observedCPUSharePercent = observedCPUSharePercent
+        self.cpuCoreSeconds = cpuCoreSeconds
+        self.observedDuration = observedDuration
+    }
+}
+
 public struct BackgroundAppSummary: Identifiable, Equatable, Sendable {
     public var id: String { ownerBundleID ?? ownerName }
     public let ownerName: String

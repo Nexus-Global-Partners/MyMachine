@@ -27,7 +27,7 @@ struct NetworkThroughputGraph: View, Equatable {
         self.interval = interval
         self.presentation = presentation
 
-        let prepared = Self.prepare(samples: samples, within: interval)
+        let prepared = NetworkThroughputSemantics.prepare(samples: samples, within: interval)
         runs = prepared.runs
         summary = prepared.summary
         scaleMaximum = Self.niceScaleMaximum(for: prepared.summary.peakCombinedBytesPerSecond)
@@ -50,7 +50,7 @@ struct NetworkThroughputGraph: View, Equatable {
                 presentation: presentation
             )
             .equatable()
-            .frame(minHeight: presentation == .dashboard ? 150 : 120)
+            .frame(minHeight: presentation == .dashboard ? 150 : 105)
 
             if presentation == .expanded {
                 timeAxis
@@ -78,7 +78,7 @@ struct NetworkThroughputGraph: View, Equatable {
             HStack(spacing: presentation == .dashboard ? 20 : 14) {
                 rateLabel(symbol: "arrow.down", value: summary.currentReceivedBytesPerSecond)
                 rateLabel(symbol: "arrow.up", value: summary.currentSentBytesPerSecond)
-                Text("Total (rateString(summary.currentCombinedBytesPerSecond))")
+                Text(currentTotalLabel)
                     .font(.system(.subheadline, design: .rounded).weight(.semibold))
                     .foregroundStyle(primaryText)
                     .monospacedDigit()
@@ -86,11 +86,16 @@ struct NetworkThroughputGraph: View, Equatable {
         }
     }
 
-    private func rateLabel(symbol: String, value: Double) -> some View {
-        Label(rateString(value), systemImage: symbol)
+    private func rateLabel(symbol: String, value: Double?) -> some View {
+        Label(value.map(rateString) ?? "—", systemImage: symbol)
             .font(.system(.subheadline, design: .rounded).weight(.medium))
             .foregroundStyle(secondaryText)
             .monospacedDigit()
+    }
+
+    private var currentTotalLabel: String {
+        summary.currentCombinedBytesPerSecond.map { "Total \(rateString($0))" }
+            ?? "No current reading"
     }
 
     private var timeAxis: some View {
@@ -112,7 +117,14 @@ struct NetworkThroughputGraph: View, Equatable {
     }
 
     private var accessibilitySummary: String {
-        "Network transfer over the selected window. Current download (rateString(summary.currentReceivedBytesPerSecond)); current upload (rateString(summary.currentSentBytesPerSecond)). (summary.meaning) The graph uses measured whole-Mac bytes, not connection capacity."
+        let current: String
+        if let received = summary.currentReceivedBytesPerSecond,
+           let sent = summary.currentSentBytesPerSecond {
+            current = "Current download \(rateString(received)); current upload \(rateString(sent))."
+        } else {
+            current = "No fresh network reading is available now."
+        }
+        return "Network transfer over the selected window. \(current) \(summary.meaning) The graph uses measured whole-Mac bytes, not connection capacity. VPN or virtual interfaces can overlap; destinations and content are never inspected."
     }
 
     private func rateString(_ bytesPerSecond: Double) -> String {
@@ -139,94 +151,6 @@ struct NetworkThroughputGraph: View, Equatable {
         return "\(Int(value.rounded())) B/s"
     }
 
-    private static func prepare(
-        samples: [SystemSample],
-        within interval: DateInterval
-    ) -> (runs: [[NetworkThroughputPoint]], summary: NetworkThroughputSummary) {
-        let ordered = samples
-            .filter { interval.contains($0.timestamp) && $0.duration > 0 }
-            .sorted { $0.timestamp < $1.timestamp }
-
-        var rawRuns: [[NetworkThroughputPoint]] = []
-        var current: [NetworkThroughputPoint] = []
-        var previous: SystemSample?
-
-        func finishCurrent() {
-            guard !current.isEmpty else { return }
-            rawRuns.append(current)
-            current.removeAll(keepingCapacity: true)
-        }
-
-        for sample in ordered {
-            if let previous {
-                let gap = sample.timestamp.timeIntervalSince(previous.timestamp)
-                let expected = max(previous.samplingInterval, sample.samplingInterval)
-                if gap <= 0 || gap > max(120, expected * 2.2) {
-                    finishCurrent()
-                }
-            }
-
-            let seconds = max(1, CoverageEvaluator.boundedDuration(of: sample))
-            let received = Double(sample.networkReceivedBytes) / seconds
-            let sent = Double(sample.networkSentBytes) / seconds
-            current.append(NetworkThroughputPoint(
-                timestamp: sample.timestamp,
-                receivedBytesPerSecond: received,
-                sentBytesPerSecond: sent
-            ))
-            previous = sample
-        }
-        finishCurrent()
-
-        let runs = rawRuns.map { downsample($0, limit: 360) }
-        let points = runs.flatMap { $0 }
-        let recent = Array(points.suffix(3))
-        let currentReceived = recent.isEmpty
-            ? 0
-            : recent.reduce(0) { $0 + $1.receivedBytesPerSecond } / Double(recent.count)
-        let currentSent = recent.isEmpty
-            ? 0
-            : recent.reduce(0) { $0 + $1.sentBytesPerSecond } / Double(recent.count)
-        let peak = points.map(\.combinedBytesPerSecond).max() ?? 0
-        let totalReceived = ordered.reduce(UInt64(0)) { $0 &+ $1.networkReceivedBytes }
-        let totalSent = ordered.reduce(UInt64(0)) { $0 &+ $1.networkSentBytes }
-        let observedDuration = ordered.reduce(0.0) {
-            $0 + CoverageEvaluator.boundedDuration(of: $1)
-        }
-
-        return (
-            runs,
-            NetworkThroughputSummary(
-                currentReceivedBytesPerSecond: currentReceived,
-                currentSentBytesPerSecond: currentSent,
-                peakCombinedBytesPerSecond: peak,
-                totalReceivedBytes: totalReceived,
-                totalSentBytes: totalSent,
-                observedDuration: observedDuration
-            )
-        )
-    }
-
-    private static func downsample(
-        _ points: [NetworkThroughputPoint],
-        limit: Int
-    ) -> [NetworkThroughputPoint] {
-        guard points.count > limit, limit >= 4 else { return points }
-        let stride = Double(points.count) / Double(limit)
-        return (0..<limit).compactMap { index in
-            let lower = Int((Double(index) * stride).rounded(.down))
-            let upper = min(points.count, Int((Double(index + 1) * stride).rounded(.down)))
-            guard lower < upper else { return nil }
-            let bucket = points[lower..<upper]
-            let count = Double(bucket.count)
-            return NetworkThroughputPoint(
-                timestamp: bucket.last?.timestamp ?? points[lower].timestamp,
-                receivedBytesPerSecond: bucket.reduce(0) { $0 + $1.receivedBytesPerSecond } / count,
-                sentBytesPerSecond: bucket.reduce(0) { $0 + $1.sentBytesPerSecond } / count
-            )
-        }
-    }
-
     private static func niceScaleMaximum(for peak: Double) -> Double {
         guard peak.isFinite, peak > 0 else { return 100_000 }
         let magnitude = pow(10, floor(log10(peak)))
@@ -242,33 +166,13 @@ struct NetworkThroughputGraph: View, Equatable {
     }
 }
 
-private struct NetworkThroughputPoint: Equatable {
-    let timestamp: Date
-    let receivedBytesPerSecond: Double
-    let sentBytesPerSecond: Double
-
-    var combinedBytesPerSecond: Double {
-        receivedBytesPerSecond + sentBytesPerSecond
-    }
-}
-
-private struct NetworkThroughputSummary: Equatable {
-    let currentReceivedBytesPerSecond: Double
-    let currentSentBytesPerSecond: Double
-    let peakCombinedBytesPerSecond: Double
-    let totalReceivedBytes: UInt64
-    let totalSentBytes: UInt64
-    let observedDuration: TimeInterval
-
-    var currentCombinedBytesPerSecond: Double {
-        currentReceivedBytesPerSecond + currentSentBytesPerSecond
-    }
-
+private extension NetworkThroughputSummary {
     var meaning: String {
         guard observedDuration >= CoverageEvaluator.narrativeMinimum else {
             return "Collecting enough history to judge transfer activity."
         }
-        let total = totalReceivedBytes &+ totalSentBytes
+        let (combined, overflow) = totalReceivedBytes.addingReportingOverflow(totalSentBytes)
+        let total = overflow ? UInt64.max : combined
         let average = Double(total) / max(1, observedDuration)
         if peakCombinedBytesPerSecond >= 10_000_000 || average >= 2_000_000 {
             return "Large transfers stood out. They can add battery use and compete with calls or sync, but destinations are never inspected."

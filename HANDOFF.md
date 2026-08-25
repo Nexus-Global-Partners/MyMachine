@@ -11,7 +11,7 @@ This is the continuation point for MY MACHINE 1.1.0. The repository is the compl
 - Minimum system: macOS 15
 - Current release: 1.1.0, build 4
 - No third-party packages, server, account, analytics SDK, updater, or network client
-- Latest verification: 41/41 checks passed in both debug and release configurations
+- Latest verification: 43/43 checks passed in both debug and release configurations
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
 
 The internal `DailyMac` names are legacy implementation names. Renaming them is possible, but treat the bundle identifier, preferences domain, launch-at-login registration, data paths, and database migration behavior as one coordinated migration.
@@ -79,11 +79,11 @@ DailyMacApp.swift
 - `AppModel.swift`: orchestration, adaptive sampling, sleep/wake handling, refreshes, and report lifecycle
 - `TelemetrySampler.swift`: permission-free AppKit/CoreGraphics/IOKit/Darwin readings and best-effort process attribution
 - `SQLiteStore.swift`: actor-confined SQLite, schema migrations, WAL transactions, retention, and recovery
-- `InsightEngine.swift`, `EventDetector.swift`, `TimelineSemantics.swift`: deterministic interpretation and evidence gates
+- `InsightEngine.swift`, `EventDetector.swift`, `TimelineSemantics.swift`, `NetworkThroughputSemantics.swift`: deterministic interpretation, evidence gates, and measured-window preparation
 - `DiagnosisBriefRenderer.swift`: typed, deterministic, 32 KiB-capped external-assistant handoff with explicit untrusted-data boundaries
 - `MonitoringTimelineView.swift`: graph-first current interpretation, unified timeline, selection inspector, semantic urgency, scale rules, and progressive disclosure
 - `NetworkThroughputGraph.swift`: actual whole-Mac transfer history from the existing sampled receive/send totals, with an observed-window scale and no destination inspection
-- `ExpandedMonitoringView.swift`: dedicated resizable timeline window, native full-screen control, and optional window interpretation
+- `ExpandedMonitoringView.swift`: dedicated black, native full-screen dashboard that closes cleanly when full screen ends
 - `DailyMacValidation/main.swift`: the project’s bespoke verification runner
 
 ## Validation and packaging
@@ -100,7 +100,7 @@ unzip -t "outputs/MY-MACHINE-Source-1.1.0.zip"
 shasum -a 256 -c "outputs/SHA256SUMS-1.1.0.txt"
 ```
 
-The final validation check reads live hardware and timing, so it is not fully hermetic and remains a local release gate. GitHub CI performs reproducible debug/release compilation, packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
+The final validation check reads live hardware and timing, so it remains a local release gate. GitHub CI runs the deterministic portion in both debug and release configurations, then performs packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
 
 ## Privacy and data behavior
 
@@ -120,13 +120,12 @@ Diagnosis handoff is intentionally not an integration layer. `AppModel` queries 
 
 These are the most useful next engineering tasks, in priority order:
 
-1. Persist the first-use notification sentinel atomically with acceptance, so quitting in the narrow post-delivery window cannot produce a duplicate first-use alert.
-2. Add an XCTest target so GitHub CI can run the deterministic behavioral suite directly; keep the live hardware check as a separate local smoke test.
-3. Decide whether distribution builds should be universal, Developer ID signed, and notarized.
-4. Run a full overnight sleep/wake, login, notification, and resource-endurance cycle on hardware.
+1. Move the deterministic validation executable into XCTest over time for richer CI diagnostics; keep the live hardware check as a separate local smoke test.
+2. Decide whether distribution builds should be universal, Developer ID signed, and notarized.
+3. Run a full overnight sleep/wake, login, notification, and resource-endurance cycle on hardware.
 
 ## Repository hygiene
 
 Never commit `.build/`, `work/`, `outputs/`, SQLite/WAL/SHM files, app backups, full-screen QA captures, or local telemetry. The original development workspace contained private app history and identifiable screenshots in `work/`; those artifacts are intentionally absent from GitHub and the handoff ZIP.
 
-Before publishing a release, verify the repository is clean, run both validation configurations, package from the tagged commit, and attach the app ZIP, source ZIP, and generated SHA-256 file to the GitHub release. The manual release-assets workflow can rebuild and replace those three assets on an existing draft release without publishing it.
+Before publishing a release, verify the repository is clean, run both validation configurations, create the immutable release tag, package from that tagged commit, and attach the app ZIP, source ZIP, and generated SHA-256 file to the GitHub release. The manual release-assets workflow checks out that exact tag, verifies the draft and release metadata, repeats the source-boundary audit, and can replace those three assets without publishing the draft.

@@ -82,28 +82,6 @@ public struct TimelineWindowUsageSummary: Equatable, Sendable {
     }
 }
 
-/// One plotted processor reading after the timeline has applied its range-aware
-/// bucketing and gap segmentation. Stress is evaluated from these exact points
-/// so the chart and its label rail always describe the same visible evidence.
-public struct TimelineProcessorStressReading: Equatable, Sendable {
-    public let segment: Int
-    public let timestamp: Date
-    public let cpuPercent: Double
-    public let gpuPercent: Double?
-
-    public init(
-        segment: Int,
-        timestamp: Date,
-        cpuPercent: Double,
-        gpuPercent: Double?
-    ) {
-        self.segment = segment
-        self.timestamp = timestamp
-        self.cpuPercent = cpuPercent
-        self.gpuPercent = gpuPercent
-    }
-}
-
 /// Immutable red-state evidence for the currently visible timeline. Each run is
 /// both what the Canvas paints red and what the left rail summarizes in red.
 public struct TimelineVisibleStress: Equatable, Sendable {
@@ -156,16 +134,19 @@ public enum TimelineSemantics {
     }
 
     public static func visibleStress(
-        processorReadings: [TimelineProcessorStressReading],
+        samples: [SystemSample],
+        within window: DateInterval,
         constrainedMemoryIntervals: [DateInterval]
     ) -> TimelineVisibleStress {
         TimelineVisibleStress(
             cpuCriticalIntervals: criticalProcessorIntervals(
-                in: processorReadings,
+                in: samples,
+                within: window,
                 value: { $0.cpuPercent }
             ),
             gpuCriticalIntervals: criticalProcessorIntervals(
-                in: processorReadings,
+                in: samples,
+                within: window,
                 value: { $0.gpuPercent }
             ),
             memoryCriticalIntervals: sustainedMemoryConstraints(
@@ -411,33 +392,44 @@ public enum TimelineSemantics {
     }
 
     private static func criticalProcessorIntervals(
-        in readings: [TimelineProcessorStressReading],
-        value: (TimelineProcessorStressReading) -> Double?
+        in samples: [SystemSample],
+        within window: DateInterval,
+        value: (SystemSample) -> Double?
     ) -> [DateInterval] {
-        let ordered = readings.sorted {
-            $0.segment == $1.segment
-                ? $0.timestamp < $1.timestamp
-                : $0.segment < $1.segment
-        }
         var intervals: [DateInterval] = []
-        var previous: TimelineProcessorStressReading?
+        for sample in samples {
+            guard let readingValue = value(sample),
+                  readingValue.isFinite,
+                  readingValue >= criticalProcessorThreshold,
+                  let interval = observedInterval(for: sample, within: window) else { continue }
+            intervals.append(interval)
+        }
 
-        for reading in ordered {
-            guard let currentValue = value(reading), currentValue.isFinite else {
-                previous = nil
+        return exactIntervalUnion(intervals)
+    }
+
+    /// Forms a true set union of measured time. Unlike the continuity-oriented
+    /// merge used by narrative summaries, this must never bridge even a small
+    /// unrecorded seam because its duration is shown as exact red evidence.
+    private static func exactIntervalUnion(_ intervals: [DateInterval]) -> [DateInterval] {
+        var result: [DateInterval] = []
+        for interval in intervals
+            .filter({ $0.duration > 0 })
+            .sorted(by: { $0.start == $1.start ? $0.end < $1.end : $0.start < $1.start }) {
+            guard let previous = result.last else {
+                result.append(interval)
                 continue
             }
-            defer { previous = reading }
-            guard let previous,
-                  previous.segment == reading.segment,
-                  let previousValue = value(previous),
-                  previousValue.isFinite,
-                  reading.timestamp > previous.timestamp,
-                  max(previousValue, currentValue) >= criticalProcessorThreshold else { continue }
-            intervals.append(DateInterval(start: previous.timestamp, end: reading.timestamp))
+            if interval.start <= previous.end {
+                result[result.count - 1] = DateInterval(
+                    start: previous.start,
+                    end: max(previous.end, interval.end)
+                )
+            } else {
+                result.append(interval)
+            }
         }
-
-        return mergeMeasuredIntervals(intervals)
+        return result
     }
 
     private static func credibleDischarge(_ readings: ArraySlice<BatteryTimelineReading>) -> Bool {

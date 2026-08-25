@@ -22,6 +22,7 @@ struct MenuBarMonitoringView: View {
                                 samples: content.samples,
                                 backgroundPoints: content.backgroundPoints,
                                 events: content.events,
+                                appContributors: content.appContributors,
                                 presentation: .menuBar
                             )
                             .equatable()
@@ -146,19 +147,19 @@ struct MenuBarMonitoringView: View {
             Spacer(minLength: 12)
 
             Button {
-                openWindow(id: "expanded-monitoring")
+                route.requestMonitoring()
+                openWindow(id: "main")
                 dismiss()
                 NSApp.activate(ignoringOtherApps: true)
             } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                Image(systemName: "rectangle.split.2x1")
             }
             .buttonStyle(.borderless)
-            .help("Open full-screen dashboard")
-            .accessibilityLabel("Open full-screen dashboard")
+            .help("Open monitoring window")
+            .accessibilityLabel("Open monitoring window")
 
-            Button("Open Full Monitoring") {
-                route.requestMonitoring()
-                openWindow(id: "main")
+            Button("Open Full-Screen Dashboard") {
+                openWindow(id: "expanded-monitoring")
                 dismiss()
                 NSApp.activate(ignoringOtherApps: true)
             }
