@@ -52,6 +52,21 @@ public enum TimelineSelection: Equatable, Sendable {
 /// Pure rules shared by the native timeline and validation executable. They keep
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
+    public static let sustainedMemoryConstraintMinimum: TimeInterval = 2 * 60
+
+    public static func sustainedMemoryConstraints(in intervals: [DateInterval]) -> [DateInterval] {
+        intervals.filter { $0.duration >= sustainedMemoryConstraintMinimum }
+    }
+
+    public static func isSustainedMemoryConstraint(
+        at time: Date,
+        in intervals: [DateInterval]
+    ) -> Bool {
+        sustainedMemoryConstraints(in: intervals).contains {
+            time >= $0.start && time <= $0.end
+        }
+    }
+
     public static func batteryTenPointTiming(for run: BatteryTimelineRun) -> BatteryTenPointTiming {
         let readings = run.readings
         guard readings.count >= 3,

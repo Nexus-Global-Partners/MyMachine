@@ -198,12 +198,10 @@ struct MonitoringTimelineView: View, Equatable {
                         isEstimate: true
                     )
                 }
-                if snapshot.peakMemoryPressure != .low {
+                if let processorMemoryKey {
                     HStack(spacing: 4) {
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(snapshot.peakMemoryPressure == .high
-                                ? TimelineColors.critical
-                                : TimelineColors.memory)
+                            .fill(TimelineColors.memory)
                             .frame(width: 10, height: 4)
                         Text(processorMemoryKey)
                             .font(.caption2)
@@ -243,15 +241,18 @@ struct MonitoringTimelineView: View, Equatable {
         return presentation == .menuBar ? "CPU & GPU" : "CPU & GPU averages"
     }
 
-    private var processorMemoryKey: String {
+    private var processorMemoryKey: String? {
         switch snapshot.peakMemoryPressure {
-        case .low: return ""
+        case .low:
+            return nil
         case .elevated:
-            return snapshot.elevatedMemoryDuration < 60
-                ? "Memory briefly elevated"
-                : "Memory elevated"
+            return snapshot.elevatedMemoryDuration >= 5 * 60
+                ? "Memory elevated"
+                : nil
         case .high:
-            return "Memory constrained"
+            return longestConstrainedMemoryDuration >= 2 * 60
+                ? "Memory constrained"
+                : "Brief memory pressure"
         }
     }
 
@@ -266,6 +267,7 @@ struct MonitoringTimelineView: View, Equatable {
                 background: selectedBackgroundPoints,
                 batteryRun: selectedBatteryRun,
                 previousSample: selectedPreviousSample,
+                isSustainedMemoryConstraint: isSustainedMemoryConstraint(at: selectedTime),
                 onDismiss: { self.selectedTime = nil }
             )
         } else {
@@ -424,10 +426,17 @@ struct MonitoringTimelineView: View, Equatable {
                 message: "Heat may be limiting speed. Let one heavy task finish before adding more work."
             )
         }
-        if latest.memoryPressure == .high {
+        if latest.memoryPressure == .high,
+           isSustainedMemoryConstraint(at: latest.timestamp) {
             return TimelineCurrentStatus(
                 urgency: .critical,
                 message: "Memory is constrained. App switching may feel slower; finish an unused heavy task only if this persists."
+            )
+        }
+        if latest.memoryPressure == .high {
+            return TimelineCurrentStatus(
+                urgency: .elevated,
+                message: "Memory pressure rose briefly. The Mac should remain responsive; no action is needed unless it persists."
             )
         }
         if baseUrgency == .critical {
@@ -456,12 +465,13 @@ struct MonitoringTimelineView: View, Equatable {
 
     private func urgency(for sample: SystemSample) -> TimelineUrgency {
         if sample.thermalLevel == .serious || sample.thermalLevel == .critical
-            || sample.memoryPressure == .high {
+            || (sample.memoryPressure == .high
+                && isSustainedMemoryConstraint(at: sample.timestamp)) {
             return .critical
         }
         let processor = max(sample.cpuPercent, sample.gpuPercent ?? 0)
         if processor >= 85 { return .critical }
-        if sample.thermalLevel == .fair || sample.memoryPressure == .elevated
+        if sample.thermalLevel == .fair || sample.memoryPressure != .low
             || processor >= 60 {
             return .elevated
         }
@@ -485,7 +495,10 @@ struct MonitoringTimelineView: View, Equatable {
         switch sample.memoryPressure {
         case .low: return "comfortable"
         case .elevated: return "elevated"
-        case .high: return "constrained"
+        case .high:
+            return isSustainedMemoryConstraint(at: sample.timestamp)
+                ? "constrained"
+                : "brief pressure"
         }
     }
 
@@ -634,12 +647,29 @@ struct MonitoringTimelineView: View, Equatable {
         case .low:
             return "Comfortable · normal"
         case .elevated:
-            return snapshot.elevatedMemoryDuration < 60
+            return snapshot.elevatedMemoryDuration < 5 * 60
                 ? "Brief rise · no issue"
                 : "Elevated · may slow"
         case .high:
-            return "Constrained · slower"
+            return longestConstrainedMemoryDuration >= 2 * 60
+                ? "Constrained · may slow"
+                : "Brief pressure · watching"
         }
+    }
+
+    private var longestConstrainedMemoryDuration: TimeInterval {
+        memoryConditions.constrained.map(\.duration).max() ?? 0
+    }
+
+    private var sustainedMemoryConstraints: [DateInterval] {
+        TimelineSemantics.sustainedMemoryConstraints(in: memoryConditions.constrained)
+    }
+
+    private func isSustainedMemoryConstraint(at time: Date) -> Bool {
+        TimelineSemantics.isSustainedMemoryConstraint(
+            at: time,
+            in: memoryConditions.constrained
+        )
     }
 
     private var manualActivityStatus: String {
@@ -1461,12 +1491,23 @@ private struct UnifiedDataCanvas: View, Equatable {
 
     private func drawProcessorMemory(in context: inout GraphicsContext, rect: CGRect) {
         let plot = rect.insetBy(dx: 0, dy: 6)
+        let sustained = TimelineSemantics.sustainedMemoryConstraints(
+            in: memoryConditions.constrained
+        )
+        let brief = memoryConditions.constrained.filter { !sustained.contains($0) }
         drawProcessorMemoryRuns(
-            memoryConditions.constrained,
+            brief,
+            in: &context,
+            plot: plot,
+            color: TimelineColors.memory,
+            bandOpacity: 0.055
+        )
+        drawProcessorMemoryRuns(
+            sustained,
             in: &context,
             plot: plot,
             color: TimelineColors.critical,
-            bandOpacity: 0.10
+            bandOpacity: 0.085
         )
     }
 
@@ -1615,6 +1656,10 @@ private struct UnifiedDataCanvas: View, Equatable {
 
     private func drawMemory(in context: inout GraphicsContext, rect: CGRect) {
         let y = rect.midY
+        let sustained = TimelineSemantics.sustainedMemoryConstraints(
+            in: memoryConditions.constrained
+        )
+        let brief = memoryConditions.constrained.filter { !sustained.contains($0) }
         drawMemoryBaselineRuns(
             memoryConditions.observed,
             in: &context,
@@ -1632,7 +1677,15 @@ private struct UnifiedDataCanvas: View, Equatable {
             height: 7
         )
         drawMemoryConditionRuns(
-            memoryConditions.constrained,
+            brief,
+            in: &context,
+            y: y,
+            plotWidth: rect.width,
+            color: TimelineColors.memory.opacity(0.96),
+            height: 9
+        )
+        drawMemoryConditionRuns(
+            sustained,
             in: &context,
             y: y,
             plotWidth: rect.width,
@@ -1767,8 +1820,15 @@ private struct UnifiedDataCanvas: View, Equatable {
         if layout.showsBattery && !batteryRuns.isEmpty {
             summary += " Battery level appears only during unplugged periods."
         }
-        if samples.contains(where: { $0.memoryPressure != .low }) {
-            summary += " Red bands indicate constrained memory and likely slowdown; elevated but manageable memory remains neutral."
+        let sustainedMemory = TimelineSemantics.sustainedMemoryConstraints(
+            in: memoryConditions.constrained
+        )
+        let briefMemory = memoryConditions.constrained.filter { !sustainedMemory.contains($0) }
+        if !memoryConditions.elevated.isEmpty || !briefMemory.isEmpty {
+            summary += " Neutral gray bands show elevated or brief memory pressure that is worth watching but not constrained."
+        }
+        if !sustainedMemory.isEmpty {
+            summary += " Red bands indicate memory constrained for at least two minutes, when slowdown is more likely."
         }
         if samples.contains(where: { $0.thermalLevel == .serious || $0.thermalLevel == .critical }) {
             summary += " A red cap marks heat high enough that macOS may reduce speed."
@@ -1855,6 +1915,7 @@ private struct TimelineInspector: View {
     let background: [BackgroundActivityPoint]
     let batteryRun: BatteryTimelineRun?
     let previousSample: SystemSample?
+    let isSustainedMemoryConstraint: Bool
     let onDismiss: () -> Void
 
     @ViewBuilder
@@ -1987,7 +2048,10 @@ private struct TimelineInspector: View {
         switch sample.memoryPressure {
         case .low: condition = "Comfortable"
         case .elevated: condition = "Elevated · switching may slow"
-        case .high: condition = "Constrained · slowdown likely"
+        case .high:
+            condition = isSustainedMemoryConstraint
+                ? "Constrained · slowdown likely"
+                : "Brief pressure · watching"
         }
 
         let usedPercent: Double

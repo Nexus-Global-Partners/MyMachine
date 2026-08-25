@@ -935,6 +935,25 @@ struct DailyMacValidation {
             )
         }
 
+        await harness.run("memory urgency requires a sustained high-pressure run") {
+            let start = Date(timeIntervalSince1970: 1_780_000_000)
+            let brief = DateInterval(start: start, duration: 119)
+            let sustained = DateInterval(
+                start: start.addingTimeInterval(180),
+                duration: TimelineSemantics.sustainedMemoryConstraintMinimum
+            )
+            let filtered = TimelineSemantics.sustainedMemoryConstraints(in: [brief, sustained])
+            try harness.check(filtered == [sustained], "a brief memory-pressure interval was treated as constrained")
+            try harness.check(
+                !TimelineSemantics.isSustainedMemoryConstraint(at: brief.start.addingTimeInterval(60), in: [brief]),
+                "brief memory pressure became urgent"
+            )
+            try harness.check(
+                TimelineSemantics.isSustainedMemoryConstraint(at: sustained.end, in: [sustained]),
+                "the end of a sustained memory constraint was not recognized"
+            )
+        }
+
         await harness.run("battery timeline never bridges power changes, gaps, or sleep") {
             let start = Date(timeIntervalSince1970: 1_800_300_000)
             let interval = DateInterval(start: start, end: start.addingTimeInterval(400))
