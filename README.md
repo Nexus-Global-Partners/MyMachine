@@ -18,7 +18,7 @@ swift run DailyMacValidation
 ./scripts/package.sh
 ```
 
-The package script builds an optimized app, constructs a standard `.app` bundle, applies an ad-hoc Hardened Runtime signature, and writes the finished artifacts to `outputs/`.
+The package script builds an optimized app for the host architecture, constructs a standard `.app` bundle, applies an ad-hoc Hardened Runtime signature, and writes versioned artifacts to `outputs/`. The downloadable v1.0.1 app is for Apple-silicon Macs; the public source can be built on any supported Mac.
 
 Move `outputs/MY MACHINE.app` into `/Applications`, then open it once. A copied build is ad-hoc signed rather than Apple-notarized, so macOS may require **Open** from Finder or approval in **System Settings → Privacy & Security**. See [HANDOFF.md](HANDOFF.md) for isolated development, architecture, known follow-ups, and release checks.
 

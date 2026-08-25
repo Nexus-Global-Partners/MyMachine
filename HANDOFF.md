@@ -89,11 +89,11 @@ swift run DailyMacValidation
 swift run -c release DailyMacValidation
 ./scripts/package.sh
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
-unzip -t "outputs/MY-MACHINE-1.0.zip"
-unzip -t "outputs/MY-MACHINE-Source-1.0.zip"
+unzip -t "outputs/MY-MACHINE-1.0.1.zip"
+unzip -t "outputs/MY-MACHINE-Source-1.0.1.zip"
 ```
 
-The final validation check reads live hardware and timing, so it is not fully hermetic. The release build is host-architecture only; the original packaged artifact is arm64. Version numbers currently appear in `Resources/Info.plist` and archive names in `scripts/package.sh`, so update both together.
+The final validation check reads live hardware and timing, so it is not fully hermetic. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
 
 ## Privacy and data behavior
 
