@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MonitoringView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ScrollView {
@@ -133,6 +134,16 @@ struct MonitoringView: View {
             .help("Refresh monitoring")
             .accessibilityLabel("Refresh monitoring")
             .disabled(model.monitoringIsRefreshing)
+
+            Button {
+                openWindow(id: "expanded-monitoring")
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .buttonStyle(.borderless)
+            .help("Open expanded timeline")
+            .accessibilityLabel("Open expanded timeline")
         }
     }
 

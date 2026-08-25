@@ -11,7 +11,7 @@ This is the continuation point for MY MACHINE 1.1.0. The repository is the compl
 - Minimum system: macOS 15
 - Current release: 1.1.0, build 3
 - No third-party packages, server, account, analytics SDK, updater, or network client
-- Latest verification: 37/37 checks passed in both debug and release configurations
+- Latest verification: 39/39 checks passed in both debug and release configurations
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
 
 The internal `DailyMac` names are legacy implementation names. Renaming them is possible, but treat the bundle identifier, preferences domain, launch-at-login registration, data paths, and database migration behavior as one coordinated migration.
@@ -75,12 +75,14 @@ DailyMacApp.swift
 ```
 
 - `DailyMacApp.swift`: app entry point and menu-bar lifecycle
+- `AppAppearance.swift`: app-wide System, Light, and Dark appearance choice
 - `AppModel.swift`: orchestration, adaptive sampling, sleep/wake handling, refreshes, and report lifecycle
 - `TelemetrySampler.swift`: permission-free AppKit/CoreGraphics/IOKit/Darwin readings and best-effort process attribution
 - `SQLiteStore.swift`: actor-confined SQLite, schema migrations, WAL transactions, retention, and recovery
 - `InsightEngine.swift`, `EventDetector.swift`, `TimelineSemantics.swift`: deterministic interpretation and evidence gates
 - `DiagnosisBriefRenderer.swift`: typed, deterministic, 32 KiB-capped external-assistant handoff with explicit untrusted-data boundaries
 - `MonitoringTimelineView.swift`: graph-first current interpretation, unified timeline, selection inspector, semantic urgency, scale rules, and progressive disclosure
+- `ExpandedMonitoringView.swift`: dedicated resizable timeline window, native full-screen control, and optional window interpretation
 - `DailyMacValidation/main.swift`: the project’s bespoke verification runner
 
 ## Validation and packaging

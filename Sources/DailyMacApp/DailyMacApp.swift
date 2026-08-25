@@ -6,11 +6,13 @@ import SwiftUI
 struct DailyMacApp: App {
     @NSApplicationDelegateAdaptor(DailyMacApplicationDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
 
     var body: some Scene {
         Window("MY MACHINE", id: "main") {
             RootView()
                 .environmentObject(model)
+                .preferredColorScheme(AppAppearance.resolved(from: appearance).colorScheme)
                 .frame(minWidth: 820, minHeight: 620)
         }
         .defaultSize(width: 980, height: 800)
@@ -31,9 +33,20 @@ struct DailyMacApp: App {
             }
         }
 
+        Window("Expanded Monitoring", id: "expanded-monitoring") {
+            ExpandedMonitoringView()
+                .environmentObject(model)
+                .preferredColorScheme(AppAppearance.resolved(from: appearance).colorScheme)
+                .frame(minWidth: 980, minHeight: 680)
+        }
+        .defaultSize(width: 1280, height: 860)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
         MenuBarExtra {
             MenuBarMonitoringView()
                 .environmentObject(model)
+                .preferredColorScheme(AppAppearance.resolved(from: appearance).colorScheme)
         } label: {
             DailyMacMenuBarLabel()
                 .environmentObject(model)

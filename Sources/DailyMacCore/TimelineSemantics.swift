@@ -49,10 +49,45 @@ public enum TimelineSelection: Equatable, Sendable {
     case unrecorded
 }
 
+/// A compact, evidence-bounded reading of the currently visible timeline.
+/// Durations include only intervals that were actually recorded; missing time is
+/// never relabeled as quiet use, heavy work, or hands-on activity.
+public struct TimelineWindowUsageSummary: Equatable, Sendable {
+    public let observedDuration: TimeInterval
+    public let heavyProcessorDuration: TimeInterval
+    public let longestHeavyProcessorRun: TimeInterval
+    public let manualActivityObservedDuration: TimeInterval
+    public let handsOnDuration: TimeInterval
+    public let longestHandsOnRun: TimeInterval
+
+    public init(
+        observedDuration: TimeInterval,
+        heavyProcessorDuration: TimeInterval,
+        longestHeavyProcessorRun: TimeInterval,
+        manualActivityObservedDuration: TimeInterval,
+        handsOnDuration: TimeInterval,
+        longestHandsOnRun: TimeInterval
+    ) {
+        self.observedDuration = observedDuration
+        self.heavyProcessorDuration = heavyProcessorDuration
+        self.longestHeavyProcessorRun = longestHeavyProcessorRun
+        self.manualActivityObservedDuration = manualActivityObservedDuration
+        self.handsOnDuration = handsOnDuration
+        self.longestHandsOnRun = longestHandsOnRun
+    }
+
+    public var handsOnShare: Double? {
+        guard manualActivityObservedDuration >= CoverageEvaluator.narrativeMinimum else { return nil }
+        return min(1, max(0, handsOnDuration / manualActivityObservedDuration))
+    }
+}
+
 /// Pure rules shared by the native timeline and validation executable. They keep
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
     public static let sustainedMemoryConstraintMinimum: TimeInterval = 2 * 60
+    public static let heavyProcessorThreshold = 60.0
+    public static let handsOnIntensityThreshold = 0.04
 
     public static func sustainedMemoryConstraints(in intervals: [DateInterval]) -> [DateInterval] {
         intervals.filter { $0.duration >= sustainedMemoryConstraintMinimum }
@@ -65,6 +100,46 @@ public enum TimelineSemantics {
         sustainedMemoryConstraints(in: intervals).contains {
             time >= $0.start && time <= $0.end
         }
+    }
+
+    public static func windowUsageSummary(
+        from samples: [SystemSample],
+        within window: DateInterval
+    ) -> TimelineWindowUsageSummary {
+        var observed: [DateInterval] = []
+        var heavyProcessor: [DateInterval] = []
+        var manualActivityObserved: [DateInterval] = []
+        var handsOn: [DateInterval] = []
+
+        for sample in samples.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard let interval = observedInterval(for: sample, within: window) else { continue }
+            observed.append(interval)
+
+            let processorDemand = max(sample.cpuPercent, sample.gpuPercent ?? 0)
+            if processorDemand.isFinite, processorDemand >= heavyProcessorThreshold {
+                heavyProcessor.append(interval)
+            }
+
+            if let activity = sample.manualActivity {
+                manualActivityObserved.append(interval)
+                if activity.intensity(over: sample.duration) >= handsOnIntensityThreshold {
+                    handsOn.append(interval)
+                }
+            }
+        }
+
+        let observedRuns = mergeMeasuredIntervals(observed)
+        let heavyRuns = mergeMeasuredIntervals(heavyProcessor)
+        let manualRuns = mergeMeasuredIntervals(manualActivityObserved)
+        let handsOnRuns = mergeMeasuredIntervals(handsOn)
+        return TimelineWindowUsageSummary(
+            observedDuration: observedRuns.reduce(0) { $0 + $1.duration },
+            heavyProcessorDuration: heavyRuns.reduce(0) { $0 + $1.duration },
+            longestHeavyProcessorRun: heavyRuns.map(\.duration).max() ?? 0,
+            manualActivityObservedDuration: manualRuns.reduce(0) { $0 + $1.duration },
+            handsOnDuration: handsOnRuns.reduce(0) { $0 + $1.duration },
+            longestHandsOnRun: handsOnRuns.map(\.duration).max() ?? 0
+        )
     }
 
     public static func batteryTenPointTiming(for run: BatteryTimelineRun) -> BatteryTenPointTiming {
@@ -242,6 +317,25 @@ public enum TimelineSemantics {
               value.isFinite,
               (0...100).contains(value) else { return false }
         return true
+    }
+
+    private static func mergeMeasuredIntervals(_ intervals: [DateInterval]) -> [DateInterval] {
+        var result: [DateInterval] = []
+        for interval in intervals.sorted(by: { $0.start < $1.start }) {
+            guard let previous = result.last else {
+                result.append(interval)
+                continue
+            }
+            if interval.start.timeIntervalSince(previous.end) <= 1.5 {
+                result[result.count - 1] = DateInterval(
+                    start: previous.start,
+                    end: max(previous.end, interval.end)
+                )
+            } else {
+                result.append(interval)
+            }
+        }
+        return result
     }
 
     private static func credibleDischarge(_ readings: ArraySlice<BatteryTimelineReading>) -> Bool {

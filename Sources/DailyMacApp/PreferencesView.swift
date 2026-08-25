@@ -3,11 +3,25 @@ import SwiftUI
 
 struct PreferencesView: View {
     @EnvironmentObject private var model: AppModel
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
     @State private var confirmErase = false
 
     var body: some View {
         ScrollView {
             Form {
+                Section("Appearance") {
+                    Picker("Look", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { option in
+                            Label(option.label, systemImage: option.symbol)
+                                .tag(option.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("System follows your Mac. Light and Dark keep MY MACHINE in the selected appearance across both the menu and expanded timeline.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Monitoring") {
                     Toggle("Collect activity and performance locally", isOn: Binding(
                         get: { model.collectionState != .paused },

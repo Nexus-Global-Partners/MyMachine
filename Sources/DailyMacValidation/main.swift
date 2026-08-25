@@ -954,6 +954,55 @@ struct DailyMacValidation {
             )
         }
 
+        await harness.run("timeline window summaries count only measured contiguous use") {
+            let start = Date(timeIntervalSince1970: 1_800_250_000)
+            let interval = DateInterval(start: start, duration: 5 * 60)
+            let active = ManualActivityCounts(
+                keyboardEvents: 45,
+                pointerEvents: 900,
+                clickEvents: 12,
+                scrollEvents: 300
+            )
+            let quiet = ManualActivityCounts(
+                keyboardEvents: 0,
+                pointerEvents: 0,
+                clickEvents: 0,
+                scrollEvents: 0
+            )
+            let samples = [
+                sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, cpu: 72, manualActivity: active),
+                sample(at: start.addingTimeInterval(120), duration: 60, interval: 60, cpu: 35, gpu: 81, manualActivity: active),
+                sample(at: start.addingTimeInterval(180), duration: 60, interval: 60, cpu: 22, gpu: 18, manualActivity: quiet),
+                sample(at: start.addingTimeInterval(240), duration: 60, interval: 60, cpu: 66, manualActivity: active),
+                sample(at: start.addingTimeInterval(300), duration: 60, interval: 60, cpu: 69, manualActivity: active)
+            ]
+            let summary = TimelineSemantics.windowUsageSummary(from: samples, within: interval)
+            try harness.check(abs(summary.observedDuration - 300) < 0.001, "window summary lost measured coverage")
+            try harness.check(abs(summary.heavyProcessorDuration - 240) < 0.001, "heavy processor duration was inaccurate")
+            try harness.check(abs(summary.longestHeavyProcessorRun - 120) < 0.001, "a quiet interval failed to split heavy processor runs")
+            try harness.check(abs(summary.manualActivityObservedDuration - 300) < 0.001, "manual activity coverage was inaccurate")
+            try harness.check(abs(summary.handsOnDuration - 240) < 0.001, "hands-on duration was inaccurate")
+            try harness.check(abs(summary.longestHandsOnRun - 120) < 0.001, "a quiet interval failed to split hands-on runs")
+            try harness.check(abs((summary.handsOnShare ?? 0) - 0.8) < 0.001, "hands-on share was inaccurate")
+
+            let sparse = TimelineSemantics.windowUsageSummary(
+                from: [
+                    sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, cpu: 75, manualActivity: active),
+                    sample(at: start.addingTimeInterval(240), duration: 60, interval: 60, cpu: 75, manualActivity: active)
+                ],
+                within: interval
+            )
+            try harness.check(sparse.handsOnShare != nil, "two minutes of input evidence did not reach the narrative minimum")
+            try harness.check(abs(sparse.heavyProcessorDuration - 120) < 0.001, "an unrecorded gap inflated heavy duration")
+            try harness.check(abs(sparse.longestHeavyProcessorRun - 60) < 0.001, "an unrecorded gap joined separate heavy runs")
+
+            let insufficient = TimelineSemantics.windowUsageSummary(
+                from: [sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, manualActivity: active)],
+                within: interval
+            )
+            try harness.check(insufficient.handsOnShare == nil, "less than two minutes of input evidence produced a confident share")
+        }
+
         await harness.run("battery timeline never bridges power changes, gaps, or sleep") {
             let start = Date(timeIntervalSince1970: 1_800_300_000)
             let interval = DateInterval(start: start, end: start.addingTimeInterval(400))

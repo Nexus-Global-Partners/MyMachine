@@ -6,6 +6,7 @@ struct MenuBarMonitoringView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var route = AppRoute.shared
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
@@ -144,6 +145,17 @@ struct MenuBarMonitoringView: View {
 
             Spacer(minLength: 12)
 
+            Button {
+                openWindow(id: "expanded-monitoring")
+                dismiss()
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .buttonStyle(.borderless)
+            .help("Open expanded timeline")
+            .accessibilityLabel("Open expanded timeline")
+
             Button("Open Full Monitoring") {
                 route.requestMonitoring()
                 openWindow(id: "main")
@@ -159,6 +171,16 @@ struct MenuBarMonitoringView: View {
                     Button("Pause for One Hour") { model.pauseForOneHour() }
                     Button("Pause Until Tomorrow") { model.pauseUntilTomorrow() }
                     Button("Pause Until I Resume") { model.pauseIndefinitely() }
+                }
+                Divider()
+                Menu("Appearance") {
+                    ForEach(AppAppearance.allCases) { option in
+                        Button {
+                            appearance = option.rawValue
+                        } label: {
+                            Label(option.label, systemImage: appearance == option.rawValue ? "checkmark" : option.symbol)
+                        }
+                    }
                 }
                 Divider()
                 Button("Quit MY MACHINE") { NSApp.terminate(nil) }

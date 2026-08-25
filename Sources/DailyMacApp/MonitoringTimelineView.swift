@@ -5,6 +5,7 @@ import SwiftUI
 
 enum TimelinePresentation: Equatable {
     case full
+    case expanded
     case menuBar
 }
 
@@ -16,6 +17,7 @@ struct MonitoringTimelineView: View, Equatable {
     let backgroundPoints: [BackgroundActivityPoint]
     let events: [ActivityEvent]
     let presentation: TimelinePresentation
+    let expandedProcessorHeight: CGFloat?
 
     @State private var selectedTime: Date?
 
@@ -27,13 +29,15 @@ struct MonitoringTimelineView: View, Equatable {
     private let processorTrend: [ProcessorTrendPoint]
     private let memoryConditions: MemoryConditionTimeline
     private let processorScaleMaximum: Double
+    private let windowUsageSummary: TimelineWindowUsageSummary
 
     init(
         snapshot: MonitoringSnapshot,
         samples: [SystemSample],
         backgroundPoints: [BackgroundActivityPoint],
         events: [ActivityEvent],
-        presentation: TimelinePresentation = .full
+        presentation: TimelinePresentation = .full,
+        expandedProcessorHeight: CGFloat? = nil
     ) {
         self.snapshot = snapshot
         let orderedSamples = samples.sorted(by: { $0.timestamp < $1.timestamp })
@@ -41,6 +45,7 @@ struct MonitoringTimelineView: View, Equatable {
         self.backgroundPoints = backgroundPoints
         self.events = events
         self.presentation = presentation
+        self.expandedProcessorHeight = expandedProcessorHeight
         self.interval = snapshot.interval
         let processorTrend = Self.makeProcessorTrend(
             from: orderedSamples,
@@ -53,6 +58,10 @@ struct MonitoringTimelineView: View, Equatable {
             within: snapshot.interval
         )
         self.processorScaleMaximum = Self.processorScaleMaximum(for: processorTrend)
+        self.windowUsageSummary = TimelineSemantics.windowUsageSummary(
+            from: orderedSamples,
+            within: snapshot.interval
+        )
 
         let sleeps = TimelineSemantics.sleepIntervals(from: events, within: snapshot.interval)
         self.sleepIntervals = sleeps
@@ -71,7 +80,7 @@ struct MonitoringTimelineView: View, Equatable {
         )
         self.batteryRuns = runs
         let latestIsOnBattery = self.samples.last.map(Self.isValidBatterySample) ?? false
-        self.showsBatteryTrack = presentation == .full
+        self.showsBatteryTrack = presentation != .menuBar
             && (latestIsOnBattery || runs.contains { $0.readings.count >= 2 })
     }
 
@@ -81,13 +90,15 @@ struct MonitoringTimelineView: View, Equatable {
             && lhs.backgroundPoints == rhs.backgroundPoints
             && lhs.events == rhs.events
             && lhs.presentation == rhs.presentation
+            && lhs.expandedProcessorHeight == rhs.expandedProcessorHeight
     }
 
     var body: some View {
         let layout = UnifiedTimelineLayout(
             showsBattery: showsBatteryTrack,
-            showsMemory: presentation == .full,
-            presentation: presentation
+            showsMemory: presentation != .menuBar,
+            presentation: presentation,
+            expandedProcessorHeight: expandedProcessorHeight
         )
 
         VStack(alignment: .leading, spacing: contentSpacing) {
@@ -134,15 +145,27 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var labelWidth: CGFloat {
-        132
+        switch presentation {
+        case .menuBar: return 148
+        case .full: return 152
+        case .expanded: return 188
+        }
     }
 
     private var contentSpacing: CGFloat {
-        presentation == .menuBar ? 8 : 12
+        switch presentation {
+        case .menuBar: return 8
+        case .full: return 12
+        case .expanded: return 16
+        }
     }
 
     private var inspectorHeight: CGFloat {
-        presentation == .menuBar ? 36 : 44
+        switch presentation {
+        case .menuBar: return 36
+        case .full: return 44
+        case .expanded: return 48
+        }
     }
 
     private func labelRail(layout: UnifiedTimelineLayout) -> some View {
@@ -150,11 +173,7 @@ struct MonitoringTimelineView: View, Equatable {
             processorTrackLabel
             .frame(height: layout.cpuHeight, alignment: .topLeading)
 
-            trackLabel(
-                title: "You",
-                status: manualActivityStatus,
-                symbol: "person"
-            )
+            handsOnTrackLabel
             .frame(height: layout.handsOnHeight, alignment: .topLeading)
 
             if showsBatteryTrack {
@@ -179,36 +198,42 @@ struct MonitoringTimelineView: View, Equatable {
 
     @ViewBuilder
     private var processorTrackLabel: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(processorTrackTitle, systemImage: "cpu")
-                .font(.caption.weight(.semibold))
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
+            processorKey(
+                "CPU",
+                meaning: cpuLabel(snapshot.averageCPU),
+                value: snapshot.averageCPU,
+                color: TimelineColors.processor
+            )
+            if let graphicsAverage {
                 processorKey(
-                    "CPU",
-                    meaning: cpuLabel(snapshot.averageCPU),
-                    value: snapshot.averageCPU,
-                    color: TimelineColors.processor
+                    "GPU",
+                    meaning: gpuLabel(graphicsAverage),
+                    value: graphicsAverage,
+                    color: TimelineColors.graphics,
+                    isEstimate: true
                 )
-                if let graphicsAverage {
-                    processorKey(
-                        "GPU",
-                        meaning: gpuLabel(graphicsAverage),
-                        value: graphicsAverage,
-                        color: TimelineColors.graphics,
-                        isEstimate: true
-                    )
+            }
+            if let processorMemoryKey {
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(TimelineColors.memory)
+                        .frame(width: 10, height: 4)
+                    Text(processorMemoryKey)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                if let processorMemoryKey {
-                    HStack(spacing: 4) {
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(TimelineColors.memory)
-                            .frame(width: 10, height: 4)
-                        Text(processorMemoryKey)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
+            }
+            Text(processorWindowPrimary)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.primary.opacity(0.82))
+                .lineLimit(2)
+            if let processorWindowImpact {
+                Text(processorWindowImpact)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -223,22 +248,15 @@ struct MonitoringTimelineView: View, Equatable {
         isEstimate: Bool = false
     ) -> some View {
         HStack(spacing: 4) {
-            Text("\(title)\(isEstimate ? " est." : "")")
+            Text("\(title)\(isEstimate ? " est." : "") \(Formatters.percent(value))")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(color)
-            Text("\(Formatters.percent(value)) · \(meaning.lowercased())")
+            Text("· \(meaning.lowercased())")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .combine)
-    }
-
-    private var processorTrackTitle: String {
-        guard processorTrend.contains(where: { $0.gpuPercent != nil }) else {
-            return presentation == .menuBar ? "Processor" : "Processor average"
-        }
-        return presentation == .menuBar ? "CPU & GPU" : "CPU & GPU averages"
     }
 
     private var processorMemoryKey: String? {
@@ -254,6 +272,28 @@ struct MonitoringTimelineView: View, Equatable {
                 ? "Memory constrained"
                 : "Brief memory pressure"
         }
+    }
+
+    private var handsOnTrackLabel: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(handsOnHeadline, systemImage: "person")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(TimelineColors.handsOn)
+                .lineLimit(1)
+            Text(handsOnObservedLine)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if let handsOnLongestLine {
+                Text(handsOnLongestLine)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.primary.opacity(0.76))
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Hands-on share uses recorded typing, pointer, click, and scroll totals. It does not judge focus or productivity.")
     }
 
     @ViewBuilder
@@ -642,6 +682,42 @@ struct MonitoringTimelineView: View, Equatable {
         return readings.reduce(0.0) { $0 + $1.value * $1.weight } / max(1, totalWeight)
     }
 
+    private var processorWindowPrimary: String {
+        guard windowUsageSummary.observedDuration >= CoverageEvaluator.narrativeMinimum else {
+            return "Building a reliable pattern"
+        }
+        if windowUsageSummary.longestHeavyProcessorRun >= 5 * 60 {
+            return "Heavy · \(railDuration(windowUsageSummary.longestHeavyProcessorRun)) continuous"
+        }
+        if windowUsageSummary.heavyProcessorDuration >= 5 * 60 {
+            return "Heavy bursts · \(railDuration(windowUsageSummary.heavyProcessorDuration)) total"
+        }
+        let average = max(snapshot.averageCPU, graphicsAverage ?? 0)
+        if average >= TimelineSemantics.heavyProcessorThreshold {
+            return "Busy across this window"
+        }
+        if average >= 25 { return "Moderate · headroom left" }
+        return "Light · ample headroom"
+    }
+
+    private var processorWindowImpact: String? {
+        if snapshot.thermalPeak == .serious || snapshot.thermalPeak == .critical {
+            return "Heat may reduce speed"
+        }
+        if !sustainedMemoryConstraints.isEmpty {
+            return "App switching may slow"
+        }
+        guard windowUsageSummary.heavyProcessorDuration >= 5 * 60 else {
+            return windowUsageSummary.observedDuration >= CoverageEvaluator.narrativeMinimum
+                ? "Normal for active work"
+                : nil
+        }
+        let latestIsOnBattery = samples.last.map(Self.isValidBatterySample) ?? false
+        return latestIsOnBattery
+            ? "More warmth + battery use"
+            : "More warmth; still responsive"
+    }
+
     private var memoryStatus: String {
         switch snapshot.peakMemoryPressure {
         case .low:
@@ -672,18 +748,36 @@ struct MonitoringTimelineView: View, Equatable {
         )
     }
 
-    private var manualActivityStatus: String {
-        let measured = samples.compactMap { sample in
-            sample.manualActivity?.intensity(over: sample.duration)
+    private var handsOnHeadline: String {
+        guard let share = windowUsageSummary.handsOnShare else {
+            return "Hands-on · measuring"
         }
-        guard !measured.isEmpty else { return "Measuring from now" }
-        let average = measured.reduce(0, +) / Double(measured.count)
-        let peak = measured.max() ?? 0
-        if peak >= 0.75 { return "Very active periods" }
-        if average >= 0.50 { return "Intense physical input" }
-        if average >= 0.18 { return "Steady physical input" }
-        if peak > 0.04 { return "Light physical input" }
-        return "Mostly quiet"
+        return "Hands-on \(Formatters.percent(share * 100))"
+    }
+
+    private var handsOnObservedLine: String {
+        guard windowUsageSummary.handsOnShare != nil else { return "Measuring from now" }
+        return "\(compactRailDuration(windowUsageSummary.handsOnDuration)) of \(compactRailDuration(windowUsageSummary.manualActivityObservedDuration)) recorded"
+    }
+
+    private var handsOnLongestLine: String? {
+        guard windowUsageSummary.handsOnShare != nil else { return nil }
+        guard windowUsageSummary.longestHandsOnRun >= 60 else { return "Short input bursts" }
+        return "Longest · \(railDuration(windowUsageSummary.longestHandsOnRun))"
+    }
+
+    private func railDuration(_ duration: TimeInterval) -> String {
+        duration < 60 ? "under 1 min" : Formatters.duration(duration)
+    }
+
+    private func compactRailDuration(_ duration: TimeInterval) -> String {
+        guard duration >= 60 else { return "<1m" }
+        let minutes = Int(duration / 60)
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours == 0 { return "\(minutes)m" }
+        if remainder == 0 { return "\(hours)h" }
+        return "\(hours)h \(remainder)m"
     }
 
     private var batteryStatus: String {
@@ -931,7 +1025,8 @@ private struct UnifiedTimelineLayout: Equatable {
     init(
         showsBattery: Bool,
         showsMemory: Bool,
-        presentation: TimelinePresentation
+        presentation: TimelinePresentation,
+        expandedProcessorHeight: CGFloat?
     ) {
         self.showsBattery = showsBattery
         self.showsMemory = showsMemory
@@ -942,9 +1037,15 @@ private struct UnifiedTimelineLayout: Equatable {
             batteryHeight = 56
             memoryHeight = 36
             sectionGap = 12
+        case .expanded:
+            cpuHeight = min(520, max(320, expandedProcessorHeight ?? 320))
+            handsOnHeight = 64
+            batteryHeight = 60
+            memoryHeight = 42
+            sectionGap = 14
         case .menuBar:
-            cpuHeight = 154
-            handsOnHeight = 38
+            cpuHeight = 148
+            handsOnHeight = 44
             batteryHeight = 42
             memoryHeight = 32
             sectionGap = 8
