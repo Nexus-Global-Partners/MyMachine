@@ -42,6 +42,53 @@ enum CollectionState: Equatable {
     }
 }
 
+enum DiagnosisHandoffState: Equatable {
+    case idle
+    case preparing
+    case copied
+    case copiedWithoutOpening(String)
+    case failed(String)
+
+    var isPreparing: Bool {
+        if case .preparing = self { return true }
+        return false
+    }
+
+    var buttonTitle: String {
+        switch self {
+        case .idle: return "Diagnose My Machine"
+        case .preparing: return "Preparing…"
+        case .copied: return "Copied — paste within 10 min"
+        case .copiedWithoutOpening(let destination): return "Copied — \(destination) didn’t open"
+        case .failed: return "Try Diagnosis Again"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .idle: return "stethoscope"
+        case .preparing: return "ellipsis"
+        case .copied, .copiedWithoutOpening: return "checkmark"
+        case .failed: return "arrow.clockwise"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .idle:
+            return "Prepare a private 24-hour brief for an external assistant."
+        case .preparing:
+            return "Preparing a private 24-hour brief locally."
+        case .copied:
+            return "Copied on this Mac. While MY MACHINE remains open, it clears this copy after about 10 minutes if you do not replace it. Nothing is sent until you paste and send it."
+        case .copiedWithoutOpening(let destination):
+            return "The brief was copied, but \(destination) could not be opened. Paste it within 10 minutes wherever you prefer."
+        case .failed(let message):
+            return message
+        }
+    }
+}
+
 /// Everything required to render one monitoring timeline, committed as a
 /// single value so views never briefly mix readings from different refreshes.
 struct MonitoringDisplayState: Equatable {
@@ -80,6 +127,7 @@ final class AppModel: ObservableObject {
     @Published var notificationDeliveryEnabled = false
     @Published var notificationNeedsApproval = false
     @Published var notificationStatusDetail = "Preparing private report-ready notifications."
+    @Published private(set) var diagnosisState: DiagnosisHandoffState = .idle
 
     let dataDirectoryURL: URL
     private let store: SQLiteStore?
@@ -93,6 +141,11 @@ final class AppModel: ObservableObject {
     private var monitoringRefreshGeneration = 0
     private var menuBarRefreshGeneration = 0
     private var menuBarRefreshTask: Task<Void, Never>?
+    private var diagnosisTask: Task<Void, Never>?
+    private var diagnosisFeedbackTask: Task<Void, Never>?
+    private var diagnosisClipboardClearTask: Task<Void, Never>?
+    private var diagnosisGeneration = 0
+    private var diagnosisClipboardChangeCount: Int?
     private var lastRetentionDate: Date?
     private var lastDayKey = DayBoundaries.key(for: Date())
     private var lastSampleTimestamp: Date?
@@ -130,6 +183,9 @@ final class AppModel: ObservableObject {
     deinit {
         monitorTask?.cancel()
         menuBarRefreshTask?.cancel()
+        diagnosisTask?.cancel()
+        diagnosisFeedbackTask?.cancel()
+        diagnosisClipboardClearTask?.cancel()
         for observer in observers {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             NotificationCenter.default.removeObserver(observer)
@@ -222,9 +278,104 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func diagnoseMachine() {
+        guard !diagnosisState.isPreparing else { return }
+        guard let store, !dataEraseInProgress else {
+            diagnosisState = .failed("Monitoring history is not available just now. Nothing was copied or sent.")
+            return
+        }
+
+        diagnosisGeneration &+= 1
+        let generation = diagnosisGeneration
+        let diagnosisEpoch = dataEpoch
+        let endingAt = Date()
+        let interval = MonitoringRange.twentyFourHours.interval(endingAt: endingAt)
+        let destination = settings.diagnosisDestination ?? .copyOnly
+        let includeNames = settings.diagnosisIncludeApplicationNames != false
+        let currentTrend7 = trend7
+        let currentTrend30 = trend30
+        diagnosisFeedbackTask?.cancel()
+        diagnosisState = .preparing
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let samples = try await store.samples(in: interval)
+                let appResources = try await store.appResourceSamples(in: interval)
+                let notableEvents = try await store.events(from: interval.start, to: interval.end)
+                let sleepWakeEvents = try await store.sleepWakeEvents(in: interval, includingPrevious: true)
+                guard !Task.isCancelled,
+                      generation == self.diagnosisGeneration,
+                      diagnosisEpoch == self.dataEpoch,
+                      !self.dataEraseInProgress else { return }
+
+                let renderTask = Task.detached(priority: .userInitiated) {
+                    let snapshot = InsightEngine().makeMonitoringSnapshot(
+                        range: .twentyFourHours,
+                        endingAt: endingAt,
+                        samples: samples,
+                        appResourceSamples: appResources
+                    )
+                    var eventsByID: [UUID: ActivityEvent] = [:]
+                    for event in notableEvents + sleepWakeEvents {
+                        eventsByID[event.id] = event
+                    }
+                    return DiagnosisBriefRenderer.render(
+                        snapshot: snapshot,
+                        samples: samples,
+                        events: Array(eventsByID.values),
+                        trend7: currentTrend7,
+                        trend30: currentTrend30,
+                        includeApplicationNames: includeNames
+                    )
+                }
+                let brief = await renderTask.value
+                guard !Task.isCancelled,
+                      generation == self.diagnosisGeneration,
+                      diagnosisEpoch == self.dataEpoch,
+                      !self.dataEraseInProgress else { return }
+
+                let pasteboard = NSPasteboard.general
+                pasteboard.prepareForNewContents(with: .currentHostOnly)
+                guard pasteboard.setString(brief.markdown, forType: .string) else {
+                    self.diagnosisState = .failed("The private brief could not be copied. Nothing was opened or sent.")
+                    self.diagnosisTask = nil
+                    return
+                }
+                let changeCount = pasteboard.changeCount
+                self.diagnosisClipboardChangeCount = changeCount
+                self.scheduleDiagnosisClipboardClear(changeCount: changeCount)
+
+                if let destinationURL = self.diagnosisURL(for: destination) {
+                    if NSWorkspace.shared.open(destinationURL) {
+                        self.diagnosisState = .copied
+                    } else {
+                        self.diagnosisState = .copiedWithoutOpening(destination.name)
+                    }
+                } else {
+                    self.diagnosisState = .copied
+                }
+                self.diagnosisTask = nil
+                self.scheduleDiagnosisFeedbackReset(generation: generation)
+            } catch {
+                guard generation == self.diagnosisGeneration else { return }
+                self.diagnosisTask = nil
+                self.diagnosisState = .failed("The 24-hour brief could not be prepared just now. Monitoring is still running, and nothing was copied or sent.")
+            }
+        }
+        diagnosisTask = task
+    }
+
     func eraseAllData() {
         guard let store else { return }
         dataEpoch &+= 1
+        diagnosisGeneration &+= 1
+        diagnosisTask?.cancel()
+        diagnosisTask = nil
+        diagnosisFeedbackTask?.cancel()
+        diagnosisFeedbackTask = nil
+        clearDiagnosisClipboardIfOwned()
+        diagnosisState = .idle
         let eraseEpoch = dataEpoch
         dataEraseInProgress = true
         shouldResumeAfterDataErase = shouldResumeAfterDataErase || monitorTask != nil
@@ -304,6 +455,49 @@ final class AppModel: ObservableObject {
     func openNotificationSettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func diagnosisURL(for destination: DiagnosisDestination) -> URL? {
+        switch destination {
+        case .copyOnly: return nil
+        case .chatGPT: return URL(string: "https://chatgpt.com/")
+        case .claude: return URL(string: "https://claude.ai/new")
+        }
+    }
+
+    private func scheduleDiagnosisFeedbackReset(generation: Int) {
+        diagnosisFeedbackTask?.cancel()
+        diagnosisFeedbackTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, !Task.isCancelled, generation == self.diagnosisGeneration else { return }
+            if !self.diagnosisState.isPreparing { self.diagnosisState = .idle }
+            self.diagnosisFeedbackTask = nil
+        }
+    }
+
+    private func scheduleDiagnosisClipboardClear(changeCount: Int) {
+        diagnosisClipboardClearTask?.cancel()
+        diagnosisClipboardClearTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(600))
+            guard let self, !Task.isCancelled,
+                  self.diagnosisClipboardChangeCount == changeCount,
+                  NSPasteboard.general.changeCount == changeCount else { return }
+            NSPasteboard.general.clearContents()
+            self.diagnosisClipboardChangeCount = nil
+            self.diagnosisClipboardClearTask = nil
+        }
+    }
+
+    private func clearDiagnosisClipboardIfOwned() {
+        diagnosisClipboardClearTask?.cancel()
+        diagnosisClipboardClearTask = nil
+        guard let changeCount = diagnosisClipboardChangeCount,
+              NSPasteboard.general.changeCount == changeCount else {
+            diagnosisClipboardChangeCount = nil
+            return
+        }
+        NSPasteboard.general.clearContents()
+        diagnosisClipboardChangeCount = nil
     }
 
     private func bootstrap() async {

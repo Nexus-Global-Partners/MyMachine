@@ -97,6 +97,8 @@ struct MonitoringTimelineView: View, Equatable {
             HStack(alignment: .top, spacing: contentSpacing) {
                 labelRail(layout: layout)
                     .frame(width: labelWidth, height: layout.totalHeight, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectedTime = nil }
 
                 ZStack {
                     UnifiedDataCanvas(
@@ -121,6 +123,8 @@ struct MonitoringTimelineView: View, Equatable {
             }
 
             timeAxis
+                .contentShape(Rectangle())
+                .onTapGesture { selectedTime = nil }
         }
         .onChange(of: snapshot.interval) {
             guard let selectedTime else { return }
@@ -274,7 +278,8 @@ struct MonitoringTimelineView: View, Equatable {
                 time: selectedTime,
                 background: selectedBackgroundPoints,
                 batteryRun: selectedBatteryRun,
-                previousSample: selectedPreviousSample
+                previousSample: selectedPreviousSample,
+                onDismiss: { self.selectedTime = nil }
             )
         } else {
             HStack(spacing: 12) {
@@ -302,6 +307,18 @@ struct MonitoringTimelineView: View, Equatable {
                 .frame(width: 15)
             compactContextCopy
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if selectedTime != nil {
+                Button {
+                    selectedTime = nil
+                } label: {
+                    Label("Now", systemImage: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .help("Clear selection and return to the current status")
+                .accessibilityLabel("Return to current status")
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -1805,7 +1822,11 @@ private struct TimelineSelectionOverlay: View {
             .simultaneousGesture(
                 SpatialTapGesture()
                     .onEnded { value in
-                        updateSelection(at: value.location.x, totalWidth: geometry.size.width)
+                        updateSelection(
+                            at: value.location.x,
+                            totalWidth: geometry.size.width,
+                            togglesCurrentMarker: true
+                        )
                     }
             )
             .simultaneousGesture(
@@ -1819,8 +1840,23 @@ private struct TimelineSelectionOverlay: View {
         .accessibilityHidden(true)
     }
 
-    private func updateSelection(at x: CGFloat, totalWidth: CGFloat) {
+    private func updateSelection(
+        at x: CGFloat,
+        totalWidth: CGFloat,
+        togglesCurrentMarker: Bool = false
+    ) {
         let plotWidth = max(1, totalWidth - rightAxisWidth)
+        if togglesCurrentMarker, let selectedTime {
+            let selectedFraction = min(1, max(
+                0,
+                selectedTime.timeIntervalSince(interval.start) / max(1, interval.duration)
+            ))
+            let selectedX = plotWidth * CGFloat(selectedFraction)
+            if abs(selectedX - x) <= 9 {
+                self.selectedTime = nil
+                return
+            }
+        }
         let fraction = min(1, max(0, x / plotWidth))
         selectedTime = interval.start.addingTimeInterval(interval.duration * Double(fraction))
     }
@@ -1832,6 +1868,7 @@ private struct TimelineInspector: View {
     let background: [BackgroundActivityPoint]
     let batteryRun: BatteryTimelineRun?
     let previousSample: SystemSample?
+    let onDismiss: () -> Void
 
     @ViewBuilder
     var body: some View {
@@ -1872,6 +1909,7 @@ private struct TimelineInspector: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+            dismissButton
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -1898,10 +1936,22 @@ private struct TimelineInspector: View {
             inspectorItem("Power", powerMeaning(sample))
             inspectorItem("Background", backgroundMeaning)
             Spacer(minLength: 0)
+            dismissButton
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(.secondary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var dismissButton: some View {
+        Button(action: onDismiss) {
+            Label("Now", systemImage: "xmark.circle.fill")
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .keyboardShortcut(.cancelAction)
+        .help("Clear selection and return to the current status")
+        .accessibilityLabel("Return to current status")
     }
 
     private func inspectorItem(_ title: String, _ value: String) -> some View {

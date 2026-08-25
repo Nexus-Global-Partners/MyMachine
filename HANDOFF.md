@@ -1,6 +1,6 @@
 # MY MACHINE maintainer handoff
 
-This is the continuation point for MY MACHINE 1.0.1. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
+This is the continuation point for MY MACHINE 1.1.0. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
 
 ## Current state
 
@@ -9,9 +9,9 @@ This is the continuation point for MY MACHINE 1.0.1. The repository is the compl
 - Internal Swift package/executable names: `MY-MACHINE` and `DailyMac`
 - Bundle identifier: `local.mymachine.app`
 - Minimum system: macOS 15
-- Current release: 1.0.1, build 2
+- Current release: 1.1.0, build 3
 - No third-party packages, server, account, analytics SDK, updater, or network client
-- Latest verification: 36/36 checks passed in debug and release configurations
+- Latest verification: 37/37 checks passed in both debug and release configurations
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
 
 The internal `DailyMac` names are legacy implementation names. Renaming them is possible, but treat the bundle identifier, preferences domain, launch-at-login registration, data paths, and database migration behavior as one coordinated migration.
@@ -58,6 +58,7 @@ The default production database is `~/Library/Application Support/MY MACHINE/Dai
 8. The menu panel must appear centered under its menu-bar item, load cached history immediately, refresh on opening, and remain smooth while scrolling.
 9. The app remains menu-bar-only. It should not appear in the Dock.
 10. Monitoring overhead must stay negligible relative to ordinary work.
+11. Diagnosis remains a user-controlled handoff: fixed 24-hour bounded evidence, current-Mac-only clipboard, no auto-paste/upload/send, and no provider API or account coupling.
 
 ## Architecture map
 
@@ -68,6 +69,7 @@ DailyMacApp.swift
       ├─ SQLiteStore.swift
       ├─ InsightEngine.swift / EventDetector.swift
       ├─ TimelineSemantics.swift
+      ├─ DiagnosisBriefRenderer.swift
       ├─ NotificationCoordinator.swift
       └─ SwiftUI monitoring, history, activity, and settings views
 ```
@@ -77,6 +79,7 @@ DailyMacApp.swift
 - `TelemetrySampler.swift`: permission-free AppKit/CoreGraphics/IOKit/Darwin readings and best-effort process attribution
 - `SQLiteStore.swift`: actor-confined SQLite, schema migrations, WAL transactions, retention, and recovery
 - `InsightEngine.swift`, `EventDetector.swift`, `TimelineSemantics.swift`: deterministic interpretation and evidence gates
+- `DiagnosisBriefRenderer.swift`: typed, deterministic, 32 KiB-capped external-assistant handoff with explicit untrusted-data boundaries
 - `MonitoringTimelineView.swift`: graph-first current interpretation, unified timeline, selection inspector, semantic urgency, scale rules, and progressive disclosure
 - `DailyMacValidation/main.swift`: the project’s bespoke verification runner
 
@@ -89,8 +92,8 @@ swift run DailyMacValidation
 swift run -c release DailyMacValidation
 ./scripts/package.sh
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
-unzip -t "outputs/MY-MACHINE-1.0.1.zip"
-unzip -t "outputs/MY-MACHINE-Source-1.0.1.zip"
+unzip -t "outputs/MY-MACHINE-1.1.0.zip"
+unzip -t "outputs/MY-MACHINE-Source-1.1.0.zip"
 ```
 
 The final validation check reads live hardware and timing, so it is not fully hermetic. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
@@ -106,6 +109,8 @@ Default retention:
 - Compact daily reports: 365 days
 
 GPU data is optional and driver-dependent. Process coverage is best effort. Memory footprint may include shared pages. Disk counters never identify files. Network totals never identify destinations.
+
+Diagnosis handoff is intentionally not an integration layer. `AppModel` queries one fixed 24-hour window, `DiagnosisBriefRenderer` creates an allowlisted prompt/evidence bundle, and AppKit writes it to a current-host-only pasteboard. The optional destination choice only opens an official HTTPS page. The app cannot know whether the user later pasted or sent the brief and must never claim that it did.
 
 ## Known follow-ups
 

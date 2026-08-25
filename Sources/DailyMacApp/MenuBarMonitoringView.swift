@@ -67,6 +67,11 @@ struct MenuBarMonitoringView: View {
 
             Spacer(minLength: 12)
 
+            VStack(alignment: .trailing, spacing: 6) {
+                ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
+                DiagnosisActionButton()
+            }
+
             if model.menuBarIsRefreshing {
                 HStack(spacing: 7) {
                     Text("Updating")

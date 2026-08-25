@@ -53,25 +53,59 @@ struct MonitoringView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Monitoring")
-                    .font(.title2.weight(.semibold))
-                HStack(spacing: 5) {
-                    Text(model.monitoringRange == .oneHour
-                        ? "Last hour"
-                        : "Last \(model.monitoringRange.label.lowercased())")
-                    if let dataThrough = model.monitoringDataThrough {
-                        Text("·")
-                        Text("Data through \(dataThrough.formatted(date: .omitted, time: .shortened))")
-                    }
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 18) {
+                monitoringHeading
+                Spacer(minLength: 14)
+                activeDiagnosisControls
+                rangeRefreshControls
             }
+            .fixedSize(horizontal: true, vertical: false)
 
-            Spacer(minLength: 14)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 14) {
+                    monitoringHeading
+                    Spacer(minLength: 10)
+                    rangeRefreshControls
+                }
 
+                HStack(alignment: .center, spacing: 12) {
+                    ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
+                    Spacer(minLength: 10)
+                    DiagnosisActionButton()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var monitoringHeading: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Monitoring")
+                .font(.title2.weight(.semibold))
+            HStack(spacing: 5) {
+                Text(model.monitoringRange == .oneHour
+                    ? "Last hour"
+                    : "Last \(model.monitoringRange.label.lowercased())")
+                if let dataThrough = model.monitoringDataThrough {
+                    Text("·")
+                    Text("Data through \(dataThrough.formatted(date: .omitted, time: .shortened))")
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var activeDiagnosisControls: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
+            DiagnosisActionButton()
+        }
+    }
+
+    private var rangeRefreshControls: some View {
+        HStack(alignment: .center, spacing: 18) {
             Picker("Time range", selection: Binding(
                 get: { model.monitoringRange },
                 set: { model.selectMonitoringRange($0) }

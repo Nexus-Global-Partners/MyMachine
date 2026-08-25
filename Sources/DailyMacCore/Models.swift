@@ -750,6 +750,30 @@ public struct TrendSummary: Codable, Equatable, Sendable {
     }
 }
 
+public enum DiagnosisDestination: String, Codable, CaseIterable, Identifiable, Sendable {
+    case copyOnly
+    case chatGPT
+    case claude
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .copyOnly: return "Copy only"
+        case .chatGPT: return "Open ChatGPT"
+        case .claude: return "Open Claude"
+        }
+    }
+
+    public var name: String {
+        switch self {
+        case .copyOnly: return "the destination"
+        case .chatGPT: return "ChatGPT"
+        case .claude: return "Claude"
+        }
+    }
+}
+
 public struct MonitoringSettings: Codable, Equatable, Sendable {
     public var baseSamplingInterval: TimeInterval
     public var idleThreshold: TimeInterval
@@ -761,6 +785,10 @@ public struct MonitoringSettings: Codable, Equatable, Sendable {
     public var pauseUntil: Date?
     public var launchAtLoginPreference: Bool?
     public var briefingNotificationsEnabled: Bool?
+    /// Optional so settings saved by releases before diagnosis handoff continue
+    /// to decode without a migration.
+    public var diagnosisDestination: DiagnosisDestination?
+    public var diagnosisIncludeApplicationNames: Bool?
 
     public static let `default` = MonitoringSettings(
         baseSamplingInterval: 15,
@@ -772,7 +800,9 @@ public struct MonitoringSettings: Codable, Equatable, Sendable {
         isPaused: false,
         pauseUntil: nil,
         launchAtLoginPreference: nil,
-        briefingNotificationsEnabled: nil
+        briefingNotificationsEnabled: nil,
+        diagnosisDestination: .copyOnly,
+        diagnosisIncludeApplicationNames: true
     )
 }
 
@@ -798,5 +828,10 @@ public enum Formatters {
 
     public static func percent(_ value: Double) -> String {
         String(format: "%.0f%%", value)
+    }
+
+    public static func activeUseToday(_ duration: TimeInterval) -> String {
+        guard duration >= 60 else { return "No active use observed today" }
+        return "Active today · \(self.duration(duration))"
     }
 }

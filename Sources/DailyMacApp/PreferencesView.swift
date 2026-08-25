@@ -66,6 +66,22 @@ struct PreferencesView: View {
                     }
                 }
 
+                Section("Diagnose My Machine") {
+                    Picker("After copying the brief", selection: diagnosisDestinationBinding) {
+                        ForEach(DiagnosisDestination.allCases) { destination in
+                            Text(destination.label).tag(destination)
+                        }
+                    }
+
+                    Toggle("Include application names", isOn: diagnosisApplicationNamesBinding)
+                    Text("Creates a private 24-hour summary and copies it. It can open ChatGPT or Claude, but never pastes or sends anything.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Turn off application names to replace them with anonymous labels.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Privacy") {
                     Label("All telemetry and reports stay on this Mac", systemImage: "lock.shield")
                     Text("Collected: timestamps, foreground app identity, elapsed idle time, interval totals for keyboard actions, pointer movement, clicks and scrolling, app lifecycle, sleep/wake, aggregate machine counters, and best-effort app/process names, owner relationships, and resource rollups. Related background helpers and workers can be shown together under their app.")
@@ -148,6 +164,26 @@ struct PreferencesView: View {
             get: { model.settings[keyPath: keyPath] },
             set: {
                 model.settings[keyPath: keyPath] = $0
+                model.persistSettings()
+            }
+        )
+    }
+
+    private var diagnosisDestinationBinding: Binding<DiagnosisDestination> {
+        Binding(
+            get: { model.settings.diagnosisDestination ?? .copyOnly },
+            set: {
+                model.settings.diagnosisDestination = $0
+                model.persistSettings()
+            }
+        )
+    }
+
+    private var diagnosisApplicationNamesBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.diagnosisIncludeApplicationNames != false },
+            set: {
+                model.settings.diagnosisIncludeApplicationNames = $0
                 model.persistSettings()
             }
         )

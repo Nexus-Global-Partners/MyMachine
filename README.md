@@ -4,7 +4,7 @@ MY MACHINE is a native, local-first macOS background monitor that connects foreg
 
 Repository: [Nexus-Global-Partners/MyMachine](https://github.com/Nexus-Global-Partners/MyMachine) · Maintainer continuation: [HANDOFF.md](HANDOFF.md) · Privacy boundary: [PRIVACY.md](PRIVACY.md)
 
-It deliberately avoids surveillance. It never captures what you type, individual keys, pointer coordinates or targets, screen pixels, screenshots, window titles, URLs, workspace or project names, prompts, document or file contents, messages, clipboard data, file paths, command-line arguments, environment variables, network destinations, credentials, or audio. It stores only interval totals for keyboard actions, pointer movement, clicks, and scrolling so it can show hands-on intensity without reconstructing activity. Significant app and process names, their parent/owner relationship, and aggregate resource readings can be retained briefly for interpretation. Everything stays on the Mac; MY MACHINE does not upload telemetry. It requires no Accessibility, Screen Recording, Input Monitoring, Full Disk Access, Network Extension, administrator, or root permission.
+It deliberately avoids surveillance. It never captures what you type, individual keys, pointer coordinates or targets, screen pixels, screenshots, window titles, URLs, workspace or project names, prompts, document or file contents, messages, clipboard data, file paths, command-line arguments, environment variables, network destinations, credentials, or audio. It stores only interval totals for keyboard actions, pointer movement, clicks, and scrolling so it can show hands-on intensity without reconstructing activity. Significant app and process names, their parent/owner relationship, and aggregate resource readings can be retained briefly for interpretation. Collected telemetry stays on the Mac; MY MACHINE does not upload it. An explicit **Diagnose My Machine** click can prepare and copy a minimized 24-hour brief, after which the user decides whether to paste it into an external assistant. It requires no Accessibility, Screen Recording, Input Monitoring, Full Disk Access, Network Extension, administrator, or root permission.
 
 ## Build
 
@@ -18,7 +18,7 @@ swift run DailyMacValidation
 ./scripts/package.sh
 ```
 
-The package script builds an optimized app for the host architecture, constructs a standard `.app` bundle, applies an ad-hoc Hardened Runtime signature, and writes versioned artifacts to `outputs/`. The downloadable v1.0.1 app is for Apple-silicon Macs; the public source can be built on any supported Mac.
+The package script builds an optimized app for the host architecture, constructs a standard `.app` bundle, applies an ad-hoc Hardened Runtime signature, and writes versioned artifacts to `outputs/`. The downloadable v1.1.0 app is for Apple-silicon Macs; the public source can be built on any supported Mac.
 
 Move `outputs/MY MACHINE.app` into `/Applications`, then open it once. A copied build is ad-hoc signed rather than Apple-notarized, so macOS may require **Open** from Finder or approval in **System Settings → Privacy & Security**. See [HANDOFF.md](HANDOFF.md) for isolated development, architecture, known follow-ups, and release checks.
 
@@ -30,12 +30,17 @@ Move `outputs/MY MACHINE.app` into `/Applications`, then open it once. A copied 
 - Actor-confined SQLite database with WAL transactions, owner-only permissions, bounded raw retention, crash-safe commits, integrity checking, and non-destructive corruption recovery
 - Deterministic insight engine with duration/evidence gates and no AI or network dependency
 - Clicking the menu-bar icon opens a centered, cached view of the last hour immediately, refreshes that view from the local database each time it opens, and provides a visible one-click refresh; the full Monitoring window remains one click away
+- The header states how much non-idle use was observed since the start of today. This is practical time context, never a focus, attention, effort, or productivity score.
+- **Diagnose My Machine** builds a deterministic, privacy-bounded brief from the latest 24 elapsed hours, copies it only after the user clicks, and can open ChatGPT or Claude as a convenience. Copy only is the default. MY MACHINE never reads the clipboard, calls an AI service, inserts the brief into a website, or sends it. Application names can be anonymized in Settings.
 - A graph-first status view keeps whole-Mac CPU demand and the clearly labeled GPU activity estimate as separate lines. Only genuinely urgent line sections turn red; manageable load keeps the original series color. One short sentence explains the practical effect and useful response. CPU and GPU are never combined into an invented universal utilization percentage.
 - Rolling Monitoring view for the last 1, 6, or 24 elapsed hours, led by one unified time-aligned timeline: two gently smoothed interval-average lines with soft edge halos and glassy fills on one shared scale, subtle red bands for constrained memory while manageable memory states remain neutral, physical-input intensity, confirmed sleep, and passive relative-time landmarks. The compact menu keeps only this essential view; battery and the dedicated memory-condition track remain in Full Monitoring and exact power/memory context remains available through selection. Smoothing is visual only and never crosses a recording gap.
+- A selected timeline moment has a visible **Now** control and an Escape shortcut; clicking its marker again, the label rail, or the time axis also returns to the current status.
 - App attribution stays contextual: select an exact time to see which foreground and background apps were observed then, or open the full details. The timeline does not use separate per-app mini graphs.
 - Progressive disclosure: practical meaning is shown first, while exact readings, attribution limits, and metric provenance stay available under Details & privacy
 - Privacy-safe local notifications when a reliable briefing is ready; notification text never contains app names, process names, metrics, or report excerpts
 - Daily summaries remain available in History for longer-term review and export
+
+The diagnosis brief is capped at 32 KiB and contains selected aggregates, coverage and gap context, confirmed sleep, a representative timeline, and top application-family summaries. It excludes raw samples, PIDs, bundle identifiers, worker names, raw input counts, paths, destinations, and stored event prose. Application labels are sanitized and treated as untrusted data. Clipboard content is limited to the current Mac; while MY MACHINE remains running, it is cleared after roughly ten minutes only if it has not been replaced.
 
 Data is stored in `~/Library/Application Support/MY MACHINE/` unless `DAILYMAC_DATA_DIR` is set for an isolated test run. A tiny preferences record for pause, notification, and launch choices is stored by macOS under `~/Library/Preferences/local.mymachine.app.plist` so an immediate quit cannot accidentally undo a privacy choice.
 

@@ -404,7 +404,14 @@ public struct InsightEngine: Sendable {
             let memory = UInt64(max(0, weightedAverage(values) { Double($0.memoryUsedBytes) }))
             let interpretation = "\(first.foregroundApp) was in front for about \(Formatters.duration(duration)). During those intervals, \(PracticalInterpreter.cpu(cpu)) This is whole-machine context, including background work—not attribution to the app alone."
             return AppUsageSummary(name: first.foregroundApp, bundleID: first.foregroundBundleID, activeDuration: duration, averageSystemCPU: cpu, averageMemoryBytes: memory, interpretation: interpretation)
-        }.sorted { $0.activeDuration > $1.activeDuration }
+        }.sorted { lhs, rhs in
+            if lhs.activeDuration != rhs.activeDuration {
+                return lhs.activeDuration > rhs.activeDuration
+            }
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return (lhs.bundleID ?? "") < (rhs.bundleID ?? "")
+        }
     }
 
     private func summarizeCategories(_ samples: [SystemSample]) -> [CategorySummary] {
@@ -413,7 +420,11 @@ public struct InsightEngine: Sendable {
             let duration = values.reduce(0) { $0 + boundedDuration($1) }
             let cpu = weightedAverage(values, value: \SystemSample.cpuPercent)
             return CategorySummary(category: category, activeDuration: duration, averageCPU: cpu, interpretation: "\(category.rawValue) accounted for \(Formatters.duration(duration)) of active use. During those intervals, \(PracticalInterpreter.cpu(cpu)) This is whole-machine context, not proof that the foreground app caused the load.")
-        }.sorted { $0.activeDuration > $1.activeDuration }
+        }.sorted { lhs, rhs in
+            lhs.activeDuration == rhs.activeDuration
+                ? lhs.category.rawValue < rhs.category.rawValue
+                : lhs.activeDuration > rhs.activeDuration
+        }
     }
 
     private func importantMoments(samples: [SystemSample], events: [ActivityEvent]) -> [ReportInsight] {
@@ -838,7 +849,14 @@ public struct InsightEngine: Sendable {
                 averageMemoryBytes: memory,
                 interpretation: "\(first.foregroundApp) was in front for about \(Formatters.duration(duration)) in this window. Whole-machine CPU averaged \(Formatters.percent(cpu)) during those intervals; that is workflow context, not attribution to the app alone."
             )
-        }.sorted { $0.activeDuration > $1.activeDuration }
+        }.sorted { lhs, rhs in
+            if lhs.activeDuration != rhs.activeDuration {
+                return lhs.activeDuration > rhs.activeDuration
+            }
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return (lhs.bundleID ?? "") < (rhs.bundleID ?? "")
+        }
     }
 
     private func summarizeMonitoringCategories(_ samples: [WindowedSample]) -> [CategorySummary] {
@@ -852,7 +870,11 @@ public struct InsightEngine: Sendable {
                 averageCPU: cpu,
                 interpretation: "\(category.rawValue) accounted for \(Formatters.duration(duration)) of observed active use. Whole-machine CPU averaged \(Formatters.percent(cpu)) during those intervals; this is context rather than causal attribution."
             )
-        }.sorted { $0.activeDuration > $1.activeDuration }
+        }.sorted { lhs, rhs in
+            lhs.activeDuration == rhs.activeDuration
+                ? lhs.category.rawValue < rhs.category.rawValue
+                : lhs.activeDuration > rhs.activeDuration
+        }
     }
 
     private func monitoringContextSwitchCount(_ samples: [SegmentedWindowedSample]) -> Int {
@@ -1080,7 +1102,9 @@ public struct InsightEngine: Sendable {
         }
 
         // Every continuous segment keeps its own visual endpoints.
-        for values in Dictionary(grouping: points, by: \.segment).values where selected.count < limit {
+        let pointsBySegment = Dictionary(grouping: points, by: \.segment)
+        for segment in pointsBySegment.keys.sorted() where selected.count < limit {
+            guard let values = pointsBySegment[segment] else { continue }
             add(values.first)
             add(values.last)
         }
