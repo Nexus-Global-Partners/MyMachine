@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose a focused way to make machine behavior easier to understand.
+title: "[Idea] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What should become easier to understand or do?
+      description: Start with the real situation, not the proposed control.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would useful output look like?
+      description: Explain what the person should understand in a few seconds.
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and performance boundary
+      description: Could this work from existing aggregate samples, without content capture or heavier background work?
+    validations:
+      required: true

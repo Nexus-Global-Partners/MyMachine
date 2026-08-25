@@ -1,0 +1,58 @@
+name: Refresh draft release assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing draft release tag, for example v1.1.0
+        required: true
+        default: v1.1.0
+
+permissions:
+  contents: write
+
+jobs:
+  package-and-upload:
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Match release tag to app version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          test "$RELEASE_TAG" = "v$version"
+
+      - name: Compile local validation target
+        run: swift build -c release --product DailyMacValidation
+
+      - name: Package and verify assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/package.sh
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
+          unzip -t "outputs/MY-MACHINE-$version.zip"
+          unzip -t "outputs/MY-MACHINE-Source-$version.zip"
+          (cd outputs && shasum -a 256 -c "SHA256SUMS-$version.txt")
+
+      - name: Replace draft release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          gh release view "$RELEASE_TAG" --json isDraft -q '.isDraft' | grep -qx true
+          gh release upload "$RELEASE_TAG" \
+            "outputs/MY-MACHINE-$version.zip" \
+            "outputs/MY-MACHINE-Source-$version.zip" \
+            "outputs/SHA256SUMS-$version.txt" \
+            --clobber

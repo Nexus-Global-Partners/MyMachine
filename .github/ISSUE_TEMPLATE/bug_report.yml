@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible problem without sharing private machine data.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping. Do not attach a MY MACHINE database, diagnosis brief, process dump, environment dump, or screenshot containing private work.
+  - type: input
+    id: version
+    attributes:
+      label: MY MACHINE version
+      placeholder: 1.1.0 (build 4)
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS
+      placeholder: MacBook Pro M3 Pro, macOS 15.6
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened?
+      description: Explain what you saw and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Prefer steps that use synthetic or non-private data.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Practical impact
+      options:
+        - The app cannot start or monitor
+        - The interface is slow or unclear
+        - A metric or explanation looks wrong
+        - Packaging or installation fails
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed app names, project names, filenames, messages, notifications, and other private context from anything attached.
+          required: true
+        - label: This is not a security vulnerability; I will use private vulnerability reporting for security or privacy exposure.
+          required: true

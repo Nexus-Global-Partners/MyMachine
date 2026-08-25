@@ -9,6 +9,7 @@ SOURCE_STAGE="$(mktemp -d)"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PROJECT_DIR/Resources/Info.plist")"
 APP_ARCHIVE="$OUTPUT_DIR/MY-MACHINE-$VERSION.zip"
 SOURCE_ARCHIVE="$OUTPUT_DIR/MY-MACHINE-Source-$VERSION.zip"
+CHECKSUM_FILE="$OUTPUT_DIR/SHA256SUMS-$VERSION.txt"
 
 cleanup() {
   /bin/rm -rf "$SOURCE_STAGE"
@@ -44,13 +45,26 @@ swift build -c release --product DailyMac
   "$PROJECT_DIR/LICENSE" \
   "$PROJECT_DIR/README.md" \
   "$PROJECT_DIR/HANDOFF.md" \
+  "$PROJECT_DIR/CONTRIBUTING.md" \
+  "$PROJECT_DIR/SECURITY.md" \
+  "$PROJECT_DIR/CHANGELOG.md" \
   "$PROJECT_DIR/PRIVACY.md" \
+  "$PROJECT_DIR/.github" \
   "$PROJECT_DIR/Sources" \
   "$PROJECT_DIR/Resources" \
   "$PROJECT_DIR/scripts" \
   "$SOURCE_STAGE/MY-MACHINE-Source/"
+/bin/rm -f "$SOURCE_ARCHIVE"
 /usr/bin/ditto --norsrc -c -k --keepParent "$SOURCE_STAGE/MY-MACHINE-Source" "$SOURCE_ARCHIVE"
+
+/bin/rm -f "$CHECKSUM_FILE"
+(
+  cd "$OUTPUT_DIR"
+  /usr/bin/shasum -a 256 "${APP_ARCHIVE:t}" "${SOURCE_ARCHIVE:t}" > "${CHECKSUM_FILE:t}"
+  /usr/bin/shasum -a 256 -c "${CHECKSUM_FILE:t}"
+)
 
 echo "Packaged: $APP_DIR"
 echo "Archive: $APP_ARCHIVE"
 echo "Source archive: $SOURCE_ARCHIVE"
+echo "Checksums: $CHECKSUM_FILE"

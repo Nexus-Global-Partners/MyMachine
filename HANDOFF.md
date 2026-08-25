@@ -9,9 +9,9 @@ This is the continuation point for MY MACHINE 1.1.0. The repository is the compl
 - Internal Swift package/executable names: `MY-MACHINE` and `DailyMac`
 - Bundle identifier: `local.mymachine.app`
 - Minimum system: macOS 15
-- Current release: 1.1.0, build 3
+- Current release: 1.1.0, build 4
 - No third-party packages, server, account, analytics SDK, updater, or network client
-- Latest verification: 39/39 checks passed in both debug and release configurations
+- Latest verification: 41/41 checks passed in both debug and release configurations
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
 
 The internal `DailyMac` names are legacy implementation names. Renaming them is possible, but treat the bundle identifier, preferences domain, launch-at-login registration, data paths, and database migration behavior as one coordinated migration.
@@ -29,9 +29,9 @@ swift run DailyMacValidation
 ./scripts/package.sh
 ```
 
-The packaged app and archives appear in `outputs/`. Move `outputs/MY MACHINE.app` into `/Applications`, then open it once. Installing under `/Applications` matters for the complete Launch at Login and notification lifecycle.
+The packaged app, archives, and SHA-256 file appear in `outputs/`. Move `outputs/MY MACHINE.app` into `/Applications`, then open it once. Installing under `/Applications` matters for the complete Launch at Login and notification lifecycle.
 
-The packaging script applies an ad-hoc Hardened Runtime signature. It is not Developer ID signed or notarized, so a copied app may require **Open** from Finder or approval in **System Settings → Privacy & Security**.
+The packaging script applies an ad-hoc Hardened Runtime signature. It is not Developer ID signed or notarized, so a copied app may require a one-time Control-click → **Open** in Finder or approval in **System Settings → Privacy & Security**.
 
 ## Safe development mode
 
@@ -96,9 +96,10 @@ swift run -c release DailyMacValidation
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
 unzip -t "outputs/MY-MACHINE-1.1.0.zip"
 unzip -t "outputs/MY-MACHINE-Source-1.1.0.zip"
+shasum -a 256 -c "outputs/SHA256SUMS-1.1.0.txt"
 ```
 
-The final validation check reads live hardware and timing, so it is not fully hermetic. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
+The final validation check reads live hardware and timing, so it is not fully hermetic and remains a local release gate. GitHub CI performs reproducible debug/release compilation, packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
 
 ## Privacy and data behavior
 
@@ -119,7 +120,7 @@ Diagnosis handoff is intentionally not an integration layer. `AppModel` queries 
 These are the most useful next engineering tasks, in priority order:
 
 1. Persist the first-use notification sentinel atomically with acceptance, so quitting in the narrow post-delivery window cannot produce a duplicate first-use alert.
-2. Add a real XCTest target and CI while keeping the live hardware check as a separate smoke test.
+2. Add an XCTest target so GitHub CI can run the deterministic behavioral suite directly; keep the live hardware check as a separate local smoke test.
 3. Decide whether distribution builds should be universal, Developer ID signed, and notarized.
 4. Run a full overnight sleep/wake, login, notification, and resource-endurance cycle on hardware.
 
@@ -127,4 +128,4 @@ These are the most useful next engineering tasks, in priority order:
 
 Never commit `.build/`, `work/`, `outputs/`, SQLite/WAL/SHM files, app backups, full-screen QA captures, or local telemetry. The original development workspace contained private app history and identifiable screenshots in `work/`; those artifacts are intentionally absent from GitHub and the handoff ZIP.
 
-Before publishing a release, verify the repository is clean, run both validation configurations, package from the tagged commit, and attach the generated source ZIP to the GitHub release.
+Before publishing a release, verify the repository is clean, run both validation configurations, package from the tagged commit, and attach the app ZIP, source ZIP, and generated SHA-256 file to the GitHub release. The manual release-assets workflow can rebuild and replace those three assets on an existing draft release without publishing it.

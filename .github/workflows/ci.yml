@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-package-and-audit:
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      - name: Compile debug products
+        run: |
+          swift build -c debug --product DailyMac
+          swift build -c debug --product DailyMacValidation
+
+      - name: Compile release products
+        run: |
+          swift build -c release --product DailyMac
+          swift build -c release --product DailyMacValidation
+
+      - name: Validate release metadata
+        run: |
+          plutil -lint Resources/Info.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)" = "15.0"
+
+      - name: Package release assets
+        run: ./scripts/package.sh
+
+      - name: Verify app, archives, and hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
+          unzip -t "outputs/MY-MACHINE-$version.zip"
+          unzip -t "outputs/MY-MACHINE-Source-$version.zip"
+          (cd outputs && shasum -a 256 -c "SHA256SUMS-$version.txt")
+
+      - name: Audit source archive privacy boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          listing=$(unzip -Z1 "outputs/MY-MACHINE-Source-$version.zip")
+          if printf '%s\n' "$listing" | grep -E '(^|/)(\.git|\.build|outputs|work)(/|$)|\.(sqlite|sqlite-wal|sqlite-shm|db)$'; then
+            echo "Private or generated content entered the source archive" >&2
+            exit 1
+          fi
+          printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/PRIVACY.md'
+          printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/SECURITY.md'
+          printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/Sources/'
+
+      - name: Upload inspected artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MY-MACHINE-${{ github.sha }}
+          path: |
+            outputs/MY-MACHINE-*.zip
+            outputs/SHA256SUMS-*.txt
+          if-no-files-found: error
+          retention-days: 7
