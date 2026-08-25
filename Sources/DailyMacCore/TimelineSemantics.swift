@@ -82,11 +82,64 @@ public struct TimelineWindowUsageSummary: Equatable, Sendable {
     }
 }
 
+/// One plotted processor reading after the timeline has applied its range-aware
+/// bucketing and gap segmentation. Stress is evaluated from these exact points
+/// so the chart and its label rail always describe the same visible evidence.
+public struct TimelineProcessorStressReading: Equatable, Sendable {
+    public let segment: Int
+    public let timestamp: Date
+    public let cpuPercent: Double
+    public let gpuPercent: Double?
+
+    public init(
+        segment: Int,
+        timestamp: Date,
+        cpuPercent: Double,
+        gpuPercent: Double?
+    ) {
+        self.segment = segment
+        self.timestamp = timestamp
+        self.cpuPercent = cpuPercent
+        self.gpuPercent = gpuPercent
+    }
+}
+
+/// Immutable red-state evidence for the currently visible timeline. Each run is
+/// both what the Canvas paints red and what the left rail summarizes in red.
+public struct TimelineVisibleStress: Equatable, Sendable {
+    public let cpuCriticalIntervals: [DateInterval]
+    public let gpuCriticalIntervals: [DateInterval]
+    public let memoryCriticalIntervals: [DateInterval]
+
+    public init(
+        cpuCriticalIntervals: [DateInterval],
+        gpuCriticalIntervals: [DateInterval],
+        memoryCriticalIntervals: [DateInterval]
+    ) {
+        self.cpuCriticalIntervals = cpuCriticalIntervals
+        self.gpuCriticalIntervals = gpuCriticalIntervals
+        self.memoryCriticalIntervals = memoryCriticalIntervals
+    }
+
+    public var cpuCriticalDuration: TimeInterval {
+        cpuCriticalIntervals.reduce(0) { $0 + $1.duration }
+    }
+
+    public var gpuCriticalDuration: TimeInterval {
+        gpuCriticalIntervals.reduce(0) { $0 + $1.duration }
+    }
+
+    public var memoryCriticalDuration: TimeInterval {
+        memoryCriticalIntervals.reduce(0) { $0 + $1.duration }
+    }
+}
+
 /// Pure rules shared by the native timeline and validation executable. They keep
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
     public static let sustainedMemoryConstraintMinimum: TimeInterval = 2 * 60
     public static let heavyProcessorThreshold = 60.0
+    public static let criticalProcessorThreshold = 85.0
     public static let handsOnIntensityThreshold = 0.04
 
     public static func sustainedMemoryConstraints(in intervals: [DateInterval]) -> [DateInterval] {
@@ -100,6 +153,25 @@ public enum TimelineSemantics {
         sustainedMemoryConstraints(in: intervals).contains {
             time >= $0.start && time <= $0.end
         }
+    }
+
+    public static func visibleStress(
+        processorReadings: [TimelineProcessorStressReading],
+        constrainedMemoryIntervals: [DateInterval]
+    ) -> TimelineVisibleStress {
+        TimelineVisibleStress(
+            cpuCriticalIntervals: criticalProcessorIntervals(
+                in: processorReadings,
+                value: { $0.cpuPercent }
+            ),
+            gpuCriticalIntervals: criticalProcessorIntervals(
+                in: processorReadings,
+                value: { $0.gpuPercent }
+            ),
+            memoryCriticalIntervals: sustainedMemoryConstraints(
+                in: constrainedMemoryIntervals
+            )
+        )
     }
 
     public static func windowUsageSummary(
@@ -336,6 +408,36 @@ public enum TimelineSemantics {
             }
         }
         return result
+    }
+
+    private static func criticalProcessorIntervals(
+        in readings: [TimelineProcessorStressReading],
+        value: (TimelineProcessorStressReading) -> Double?
+    ) -> [DateInterval] {
+        let ordered = readings.sorted {
+            $0.segment == $1.segment
+                ? $0.timestamp < $1.timestamp
+                : $0.segment < $1.segment
+        }
+        var intervals: [DateInterval] = []
+        var previous: TimelineProcessorStressReading?
+
+        for reading in ordered {
+            guard let currentValue = value(reading), currentValue.isFinite else {
+                previous = nil
+                continue
+            }
+            defer { previous = reading }
+            guard let previous,
+                  previous.segment == reading.segment,
+                  let previousValue = value(previous),
+                  previousValue.isFinite,
+                  reading.timestamp > previous.timestamp,
+                  max(previousValue, currentValue) >= criticalProcessorThreshold else { continue }
+            intervals.append(DateInterval(start: previous.timestamp, end: reading.timestamp))
+        }
+
+        return mergeMeasuredIntervals(intervals)
     }
 
     private static func credibleDischarge(_ readings: ArraySlice<BatteryTimelineReading>) -> Bool {

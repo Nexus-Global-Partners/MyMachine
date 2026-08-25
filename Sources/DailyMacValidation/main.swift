@@ -954,6 +954,33 @@ struct DailyMacValidation {
             )
         }
 
+        await harness.run("visible stress drives chart and rail from one immutable state") {
+            let start = Date(timeIntervalSince1970: 1_780_100_000)
+            let readings = [
+                TimelineProcessorStressReading(segment: 0, timestamp: start, cpuPercent: 40, gpuPercent: 30),
+                TimelineProcessorStressReading(segment: 0, timestamp: start.addingTimeInterval(60), cpuPercent: 85, gpuPercent: 90),
+                TimelineProcessorStressReading(segment: 0, timestamp: start.addingTimeInterval(120), cpuPercent: 35, gpuPercent: 25),
+                TimelineProcessorStressReading(segment: 1, timestamp: start.addingTimeInterval(300), cpuPercent: 99, gpuPercent: nil)
+            ]
+            let briefMemory = DateInterval(start: start, duration: 119)
+            let sustainedMemory = DateInterval(start: start.addingTimeInterval(180), duration: 120)
+            let stress = TimelineSemantics.visibleStress(
+                processorReadings: readings,
+                constrainedMemoryIntervals: [briefMemory, sustainedMemory]
+            )
+
+            try harness.check(stress.cpuCriticalIntervals.count == 1, "CPU stress did not preserve the visible run")
+            try harness.check(abs(stress.cpuCriticalDuration - 120) < 0.001, "CPU red duration disagreed with the plotted segments")
+            try harness.check(stress.gpuCriticalIntervals.count == 1, "GPU stress did not preserve the visible run")
+            try harness.check(abs(stress.gpuCriticalDuration - 120) < 0.001, "GPU red duration disagreed with the plotted segments")
+            try harness.check(stress.memoryCriticalIntervals == [sustainedMemory], "brief memory pressure became red")
+            try harness.check(abs(stress.memoryCriticalDuration - 120) < 0.001, "memory red duration was inaccurate")
+            try harness.check(
+                !stress.cpuCriticalIntervals.contains(where: { $0.contains(start.addingTimeInterval(240)) }),
+                "a recording gap was bridged into red CPU stress"
+            )
+        }
+
         await harness.run("timeline window summaries count only measured contiguous use") {
             let start = Date(timeIntervalSince1970: 1_800_250_000)
             let interval = DateInterval(start: start, duration: 5 * 60)

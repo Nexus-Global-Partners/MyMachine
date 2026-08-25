@@ -28,6 +28,7 @@ struct MonitoringTimelineView: View, Equatable {
     private let showsBatteryTrack: Bool
     private let processorTrend: [ProcessorTrendPoint]
     private let memoryConditions: MemoryConditionTimeline
+    private let visibleStress: TimelineVisibleStress
     private let processorScaleMaximum: Double
     private let windowUsageSummary: TimelineWindowUsageSummary
 
@@ -53,9 +54,21 @@ struct MonitoringTimelineView: View, Equatable {
             range: snapshot.range
         )
         self.processorTrend = processorTrend
-        self.memoryConditions = Self.makeMemoryConditions(
+        let memoryConditions = Self.makeMemoryConditions(
             from: orderedSamples,
             within: snapshot.interval
+        )
+        self.memoryConditions = memoryConditions
+        self.visibleStress = TimelineSemantics.visibleStress(
+            processorReadings: processorTrend.map {
+                TimelineProcessorStressReading(
+                    segment: $0.segment,
+                    timestamp: $0.timestamp,
+                    cpuPercent: $0.cpuPercent,
+                    gpuPercent: $0.gpuPercent
+                )
+            },
+            constrainedMemoryIntervals: memoryConditions.constrained
         )
         self.processorScaleMaximum = Self.processorScaleMaximum(for: processorTrend)
         self.windowUsageSummary = TimelineSemantics.windowUsageSummary(
@@ -116,6 +129,7 @@ struct MonitoringTimelineView: View, Equatable {
                         samples: samples,
                         processorTrend: processorTrend,
                         memoryConditions: memoryConditions,
+                        visibleStress: visibleStress,
                         batteryRuns: batteryRuns,
                         sleepIntervals: sleepIntervals,
                         interval: interval,
@@ -189,7 +203,10 @@ struct MonitoringTimelineView: View, Equatable {
                 trackLabel(
                     title: "Memory",
                     status: memoryStatus,
-                    symbol: "memorychip"
+                    symbol: "memorychip",
+                    emphasis: visibleStress.memoryCriticalIntervals.isEmpty
+                        ? nil
+                        : TimelineColors.critical
                 )
                 .frame(height: layout.memoryHeight, alignment: .topLeading)
             }
@@ -201,27 +218,43 @@ struct MonitoringTimelineView: View, Equatable {
         VStack(alignment: .leading, spacing: 3) {
             processorKey(
                 "CPU",
-                meaning: cpuLabel(snapshot.averageCPU),
+                meaning: processorMeaning(
+                    normal: cpuLabel(snapshot.averageCPU),
+                    criticalDuration: visibleStress.cpuCriticalDuration
+                ),
                 value: snapshot.averageCPU,
-                color: TimelineColors.processor
+                color: visibleStress.cpuCriticalIntervals.isEmpty
+                    ? TimelineColors.processor
+                    : TimelineColors.critical,
+                isCritical: !visibleStress.cpuCriticalIntervals.isEmpty
             )
             if let graphicsAverage {
                 processorKey(
                     "GPU",
-                    meaning: gpuLabel(graphicsAverage),
+                    meaning: processorMeaning(
+                        normal: gpuLabel(graphicsAverage),
+                        criticalDuration: visibleStress.gpuCriticalDuration
+                    ),
                     value: graphicsAverage,
-                    color: TimelineColors.graphics,
-                    isEstimate: true
+                    color: visibleStress.gpuCriticalIntervals.isEmpty
+                        ? TimelineColors.graphics
+                        : TimelineColors.critical,
+                    isEstimate: true,
+                    isCritical: !visibleStress.gpuCriticalIntervals.isEmpty
                 )
             }
             if let processorMemoryKey {
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 1.5)
-                        .fill(TimelineColors.memory)
+                        .fill(visibleStress.memoryCriticalIntervals.isEmpty
+                            ? TimelineColors.memory
+                            : TimelineColors.critical)
                         .frame(width: 10, height: 4)
                     Text(processorMemoryKey)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(visibleStress.memoryCriticalIntervals.isEmpty
+                            ? Color.secondary
+                            : TimelineColors.critical)
                         .lineLimit(1)
                 }
             }
@@ -245,7 +278,8 @@ struct MonitoringTimelineView: View, Equatable {
         meaning: String,
         value: Double,
         color: Color,
-        isEstimate: Bool = false
+        isEstimate: Bool = false,
+        isCritical: Bool = false
     ) -> some View {
         HStack(spacing: 4) {
             Text("\(title)\(isEstimate ? " est." : "") \(Formatters.percent(value))")
@@ -253,13 +287,16 @@ struct MonitoringTimelineView: View, Equatable {
                 .foregroundStyle(color)
             Text("· \(meaning.lowercased())")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isCritical ? color : Color.secondary)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .combine)
     }
 
     private var processorMemoryKey: String? {
+        if !visibleStress.memoryCriticalIntervals.isEmpty {
+            return "Memory constrained · \(compactStressDuration(visibleStress.memoryCriticalDuration))"
+        }
         switch snapshot.peakMemoryPressure {
         case .low:
             return nil
@@ -510,7 +547,7 @@ struct MonitoringTimelineView: View, Equatable {
             return .critical
         }
         let processor = max(sample.cpuPercent, sample.gpuPercent ?? 0)
-        if processor >= 85 { return .critical }
+        if processor >= TimelineSemantics.criticalProcessorThreshold { return .critical }
         if sample.thermalLevel == .fair || sample.memoryPressure != .low
             || processor >= 60 {
             return .elevated
@@ -519,7 +556,7 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private func urgency(for usage: Double) -> TimelineUrgency {
-        if usage >= 85 { return .critical }
+        if usage >= TimelineSemantics.criticalProcessorThreshold { return .critical }
         if usage >= 60 { return .elevated }
         return .normal
     }
@@ -587,13 +624,19 @@ struct MonitoringTimelineView: View, Equatable {
         }
     }
 
-    private func trackLabel(title: String, status: String, symbol: String) -> some View {
+    private func trackLabel(
+        title: String,
+        status: String,
+        symbol: String,
+        emphasis: Color? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Label(title, systemImage: symbol)
                 .font(.caption.weight(.semibold))
+                .foregroundStyle(emphasis ?? Color.primary)
             Text(status)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(emphasis ?? Color.secondary)
                 .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -719,6 +762,9 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var memoryStatus: String {
+        if !visibleStress.memoryCriticalIntervals.isEmpty {
+            return "Constrained · \(compactStressDuration(visibleStress.memoryCriticalDuration)); switching may slow"
+        }
         switch snapshot.peakMemoryPressure {
         case .low:
             return "Comfortable · normal"
@@ -738,14 +784,13 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var sustainedMemoryConstraints: [DateInterval] {
-        TimelineSemantics.sustainedMemoryConstraints(in: memoryConditions.constrained)
+        visibleStress.memoryCriticalIntervals
     }
 
     private func isSustainedMemoryConstraint(at time: Date) -> Bool {
-        TimelineSemantics.isSustainedMemoryConstraint(
-            at: time,
-            in: memoryConditions.constrained
-        )
+        visibleStress.memoryCriticalIntervals.contains {
+            time >= $0.start && time <= $0.end
+        }
     }
 
     private var handsOnHeadline: String {
@@ -805,6 +850,18 @@ struct MonitoringTimelineView: View, Equatable {
         case ..<60: return "Moderate"
         default: return "Busy"
         }
+    }
+
+    private func processorMeaning(normal: String, criticalDuration: TimeInterval) -> String {
+        criticalDuration > 0
+            ? "Near limit · \(compactStressDuration(criticalDuration))"
+            : normal
+    }
+
+    private func compactStressDuration(_ duration: TimeInterval) -> String {
+        if duration < 60 { return "<1 min" }
+        let minutes = max(1, Int((duration / 60).rounded()))
+        return minutes == 1 ? "1 min" : "\(minutes) min"
     }
 
     private static func isValidBatterySample(_ sample: SystemSample) -> Bool {
@@ -1127,6 +1184,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     let samples: [SystemSample]
     let processorTrend: [ProcessorTrendPoint]
     let memoryConditions: MemoryConditionTimeline
+    let visibleStress: TimelineVisibleStress
     let batteryRuns: [BatteryTimelineRun]
     let sleepIntervals: [DateInterval]
     let interval: DateInterval
@@ -1137,6 +1195,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         lhs.samples == rhs.samples
             && lhs.processorTrend == rhs.processorTrend
             && lhs.memoryConditions == rhs.memoryConditions
+            && lhs.visibleStress == rhs.visibleStress
             && lhs.batteryRuns == rhs.batteryRuns
             && lhs.sleepIntervals == rhs.sleepIntervals
             && lhs.interval == rhs.interval
@@ -1371,11 +1430,11 @@ private struct UnifiedDataCanvas: View, Equatable {
             )
             drawProcessorUrgency(
                 cpuDisplayPoints,
-                sourcePoints: cpuPoints,
+                criticalIntervals: visibleStress.cpuCriticalIntervals,
                 in: &context,
                 plot: plot
             )
-            for (runIndex, run) in graphicsDisplayRuns.enumerated() {
+            for run in graphicsDisplayRuns {
                 drawProcessorLine(
                     run,
                     color: TimelineColors.graphics,
@@ -1385,7 +1444,7 @@ private struct UnifiedDataCanvas: View, Equatable {
                 )
                 drawProcessorUrgency(
                     run,
-                    sourcePoints: graphicsRuns[runIndex],
+                    criticalIntervals: visibleStress.gpuCriticalIntervals,
                     in: &context,
                     plot: plot
                 )
@@ -1521,27 +1580,15 @@ private struct UnifiedDataCanvas: View, Equatable {
 
     private func drawProcessorUrgency(
         _ points: [CGPoint],
-        sourcePoints: [CGPoint],
+        criticalIntervals: [DateInterval],
         in context: inout GraphicsContext,
         plot: CGRect
     ) {
-        guard points.count >= 2, sourcePoints.count >= 2 else { return }
-        var criticalRanges: [ClosedRange<CGFloat>] = []
-        for index in 1..<sourcePoints.count {
-            let start = sourcePoints[index - 1]
-            let end = sourcePoints[index]
-            let startValue = processorValue(at: start.y, in: plot)
-            let endValue = processorValue(at: end.y, in: plot)
-            guard max(startValue, endValue) >= 85 else { continue }
-            let range = min(start.x, end.x)...max(start.x, end.x)
-            if let previous = criticalRanges.last, range.lowerBound <= previous.upperBound + 0.5 {
-                criticalRanges[criticalRanges.count - 1] = previous.lowerBound...max(previous.upperBound, range.upperBound)
-            } else {
-                criticalRanges.append(range)
-            }
-        }
-
-        for range in criticalRanges {
+        guard points.count >= 2, !criticalIntervals.isEmpty else { return }
+        for interval in criticalIntervals {
+            let startX = xPosition(interval.start, plotWidth: plot.width)
+            let endX = xPosition(interval.end, plotWidth: plot.width)
+            let range = startX...endX
             let run = clippedPolyline(points, to: range)
             guard run.count >= 2 else { continue }
             var segment = Path()
@@ -1592,9 +1639,7 @@ private struct UnifiedDataCanvas: View, Equatable {
 
     private func drawProcessorMemory(in context: inout GraphicsContext, rect: CGRect) {
         let plot = rect.insetBy(dx: 0, dy: 6)
-        let sustained = TimelineSemantics.sustainedMemoryConstraints(
-            in: memoryConditions.constrained
-        )
+        let sustained = visibleStress.memoryCriticalIntervals
         let brief = memoryConditions.constrained.filter { !sustained.contains($0) }
         drawProcessorMemoryRuns(
             brief,
@@ -1757,9 +1802,7 @@ private struct UnifiedDataCanvas: View, Equatable {
 
     private func drawMemory(in context: inout GraphicsContext, rect: CGRect) {
         let y = rect.midY
-        let sustained = TimelineSemantics.sustainedMemoryConstraints(
-            in: memoryConditions.constrained
-        )
+        let sustained = visibleStress.memoryCriticalIntervals
         let brief = memoryConditions.constrained.filter { !sustained.contains($0) }
         drawMemoryBaselineRuns(
             memoryConditions.observed,
@@ -1883,11 +1926,6 @@ private struct UnifiedDataCanvas: View, Equatable {
         rect.maxY - rect.height * CGFloat(min(processorScaleMaximum, max(0, value)) / processorScaleMaximum)
     }
 
-    private func processorValue(at y: CGFloat, in rect: CGRect) -> Double {
-        let fraction = min(1, max(0, (rect.maxY - y) / max(1, rect.height)))
-        return Double(fraction) * processorScaleMaximum
-    }
-
     private func batteryYPosition(
         _ value: Double,
         in rect: CGRect,
@@ -1921,9 +1959,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         if layout.showsBattery && !batteryRuns.isEmpty {
             summary += " Battery level appears only during unplugged periods."
         }
-        let sustainedMemory = TimelineSemantics.sustainedMemoryConstraints(
-            in: memoryConditions.constrained
-        )
+        let sustainedMemory = visibleStress.memoryCriticalIntervals
         let briefMemory = memoryConditions.constrained.filter { !sustainedMemory.contains($0) }
         if !memoryConditions.elevated.isEmpty || !briefMemory.isEmpty {
             summary += " Neutral gray bands show elevated or brief memory pressure that is worth watching but not constrained."
