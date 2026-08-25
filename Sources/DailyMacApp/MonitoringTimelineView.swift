@@ -225,28 +225,15 @@ struct MonitoringTimelineView: View, Equatable {
         isEstimate: Bool = false
     ) -> some View {
         HStack(spacing: 4) {
-            Capsule()
-                .fill(color)
-                .frame(width: 10, height: 2)
-            Text(processorKeyText(
-                title: title,
-                meaning: meaning,
-                value: value,
-                isEstimate: isEstimate
-            ))
+            Text("\(title)\(isEstimate ? " est." : "")")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(color)
+            Text("\(Formatters.percent(value)) · \(meaning.lowercased())")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-    }
-
-    private func processorKeyText(
-        title: String,
-        meaning: String,
-        value: Double,
-        isEstimate: Bool
-    ) -> String {
-        "\(title)\(isEstimate ? " est." : "") \(Formatters.percent(value)) · \(meaning.lowercased())"
+        .accessibilityElement(children: .combine)
     }
 
     private var processorTrackTitle: String {
