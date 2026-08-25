@@ -26,6 +26,14 @@ struct ExpandedMonitoringView: View {
                                 )
                                 .equatable()
 
+                                NetworkThroughputGraph(
+                                    samples: model.monitoringSamples,
+                                    interval: snapshot.interval,
+                                    presentation: .expanded
+                                )
+                                .equatable()
+                                .frame(minHeight: 170)
+
                                 windowDetails(snapshot)
                             }
                             .padding(24)
