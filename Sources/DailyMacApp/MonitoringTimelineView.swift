@@ -1390,17 +1390,51 @@ private struct UnifiedDataCanvas: View, Equatable {
         plot: CGRect
     ) {
         guard points.count >= 2 else { return }
+        var runs: [(urgency: TimelineUrgency, points: [CGPoint])] = []
+        var activeUrgency: TimelineUrgency?
+        var activePoints: [CGPoint] = []
+
+        func finishRun() -> (TimelineUrgency, [CGPoint])? {
+            defer {
+                activeUrgency = nil
+                activePoints.removeAll(keepingCapacity: true)
+            }
+            guard let activeUrgency, activePoints.count >= 2 else { return nil }
+            return (activeUrgency, activePoints)
+        }
+
         for index in 1..<points.count {
             let start = points[index - 1]
             let end = points[index]
             let startValue = processorValue(at: start.y, in: plot)
             let endValue = processorValue(at: end.y, in: plot)
             let peak = max(startValue, endValue)
-            guard peak >= 60 else { continue }
-            let color = peak >= 85 ? TimelineColors.critical : TimelineColors.elevated
+            let urgency: TimelineUrgency? = peak >= 85
+                ? .critical
+                : (peak >= 60 ? .elevated : nil)
+
+            guard let urgency else {
+                if let run = finishRun() { runs.append(run) }
+                continue
+            }
+            if activeUrgency != urgency {
+                if let run = finishRun() { runs.append(run) }
+                activeUrgency = urgency
+                activePoints = [start, end]
+            } else {
+                if activePoints.isEmpty { activePoints.append(start) }
+                activePoints.append(end)
+            }
+        }
+        if let run = finishRun() { runs.append(run) }
+
+        for run in runs {
+            let color = run.urgency == .critical
+                ? TimelineColors.critical
+                : TimelineColors.elevated
             var segment = Path()
-            segment.move(to: start)
-            segment.addLine(to: end)
+            segment.move(to: run.points[0])
+            for point in run.points.dropFirst() { segment.addLine(to: point) }
             context.stroke(
                 segment,
                 with: .color(color.opacity(0.16)),
