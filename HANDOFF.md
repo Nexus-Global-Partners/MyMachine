@@ -1,6 +1,6 @@
 # MY MACHINE maintainer handoff
 
-This is the continuation point for MY MACHINE 1.0. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
+This is the continuation point for MY MACHINE 1.0.1. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
 
 ## Current state
 
@@ -9,7 +9,7 @@ This is the continuation point for MY MACHINE 1.0. The repository is the complet
 - Internal Swift package/executable names: `MY-MACHINE` and `DailyMac`
 - Bundle identifier: `local.mymachine.app`
 - Minimum system: macOS 15
-- Current release: 1.0, build 1
+- Current release: 1.0.1, build 2
 - No third-party packages, server, account, analytics SDK, updater, or network client
 - Latest verification: 36/36 checks passed in debug and release configurations
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
@@ -111,13 +111,10 @@ GPU data is optional and driver-dependent. Process coverage is best effort. Memo
 
 These are the most useful next engineering tasks, in priority order:
 
-1. Serialize **Delete All Data** against an in-flight report refresh, or add a deletion epoch. Today an already-running refresh can retain pre-delete samples and write a report or notification after deletion begins.
-2. Replace a scheduled notification without removing the valid existing request first. A transient add failure should not lose the day’s alert.
-3. Persist the first-use notification sentinel atomically with acceptance, so quitting in the narrow post-delivery window cannot produce a duplicate first-use alert.
-4. Add a real XCTest target and CI while keeping the live hardware check as a separate smoke test.
-5. Decide whether distribution builds should be universal, Developer ID signed, and notarized.
-6. Centralize versioning so the plist, archive names, and future GitHub releases cannot drift.
-7. Run a full overnight sleep/wake, login, notification, and resource-endurance cycle on hardware.
+1. Persist the first-use notification sentinel atomically with acceptance, so quitting in the narrow post-delivery window cannot produce a duplicate first-use alert.
+2. Add a real XCTest target and CI while keeping the live hardware check as a separate smoke test.
+3. Decide whether distribution builds should be universal, Developer ID signed, and notarized.
+4. Run a full overnight sleep/wake, login, notification, and resource-endurance cycle on hardware.
 
 ## Repository hygiene
 
