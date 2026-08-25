@@ -71,7 +71,8 @@ struct MonitoringTimelineView: View, Equatable {
         )
         self.batteryRuns = runs
         let latestIsOnBattery = self.samples.last.map(Self.isValidBatterySample) ?? false
-        self.showsBatteryTrack = latestIsOnBattery || runs.contains { $0.readings.count >= 2 }
+        self.showsBatteryTrack = presentation == .full
+            && (latestIsOnBattery || runs.contains { $0.readings.count >= 2 })
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -85,6 +86,7 @@ struct MonitoringTimelineView: View, Equatable {
     var body: some View {
         let layout = UnifiedTimelineLayout(
             showsBattery: showsBatteryTrack,
+            showsMemory: presentation == .full,
             presentation: presentation
         )
 
@@ -136,7 +138,7 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var inspectorHeight: CGFloat {
-        presentation == .menuBar ? 40 : 66
+        presentation == .menuBar ? 36 : 44
     }
 
     private func labelRail(layout: UnifiedTimelineLayout) -> some View {
@@ -160,12 +162,14 @@ struct MonitoringTimelineView: View, Equatable {
                 .frame(height: layout.batteryHeight, alignment: .topLeading)
             }
 
-            trackLabel(
-                title: "Memory",
-                status: memoryStatus,
-                symbol: "memorychip"
-            )
-            .frame(height: layout.memoryHeight, alignment: .topLeading)
+            if layout.showsMemory {
+                trackLabel(
+                    title: "Memory",
+                    status: memoryStatus,
+                    symbol: "memorychip"
+                )
+                .frame(height: layout.memoryHeight, alignment: .topLeading)
+            }
         }
     }
 
@@ -193,7 +197,9 @@ struct MonitoringTimelineView: View, Equatable {
                 if snapshot.peakMemoryPressure != .low {
                     HStack(spacing: 4) {
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(snapshot.peakMemoryPressure == .high ? Color.red : Color.orange)
+                            .fill(snapshot.peakMemoryPressure == .high
+                                ? TimelineColors.critical
+                                : TimelineColors.elevated)
                             .frame(width: 10, height: 4)
                         Text(processorMemoryKey)
                             .font(.caption2)
@@ -272,12 +278,15 @@ struct MonitoringTimelineView: View, Equatable {
             )
         } else {
             HStack(spacing: 12) {
-                Text(timelineDescription)
+                Label(currentStatus.message, systemImage: currentStatus.symbol)
+                    .foregroundStyle(.primary.opacity(0.82))
+                    .lineLimit(2)
                 Spacer(minLength: 12)
-                Text("Click or drag any row for exact context")
+                Text("Drag the timeline for exact context")
+                    .foregroundStyle(.secondary)
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
         }
     }
 
@@ -292,7 +301,7 @@ struct MonitoringTimelineView: View, Equatable {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(.secondary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
+        .background(compactContextColor.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .combine)
     }
 
@@ -301,7 +310,7 @@ struct MonitoringTimelineView: View, Equatable {
         if selectedTime == nil {
             Text(compactTakeaway)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary.opacity(0.80))
                 .lineLimit(2)
         } else {
             VStack(alignment: .leading, spacing: 1) {
@@ -359,24 +368,102 @@ struct MonitoringTimelineView: View, Equatable {
         switch selectedState {
         case .sleep, .unrecorded: return .secondary
         case .observed(let sample):
-            switch sample.memoryPressure {
-            case .low: return .accentColor
-            case .elevated: return .orange
-            case .high: return .red
-            }
+            return urgency(for: sample).color
         }
     }
 
     private var compactTakeaway: String {
-        "Drag across the timeline for exact CPU, GPU, memory, and power context."
+        currentStatus.message
     }
 
     private var compactTakeawaySymbol: String {
-        "scope"
+        currentStatus.symbol
     }
 
     private var compactTakeawayColor: Color {
-        .secondary
+        currentStatus.color
+    }
+
+    private var currentStatus: TimelineCurrentStatus {
+        guard let latest = samples.last(where: { $0.duration > 0 }) else {
+            return .unavailable("Waiting for the first complete reading.")
+        }
+        let age = max(0, interval.end.timeIntervalSince(latest.timestamp))
+        guard age <= max(120, latest.samplingInterval * 4) else {
+            return .unavailable("No current reading. Earlier history remains visible below.")
+        }
+
+        let recentCutoff = latest.timestamp.addingTimeInterval(-120)
+        let recent = processorTrend.filter {
+            $0.timestamp >= recentCutoff && $0.timestamp <= latest.timestamp
+        }
+        let cpu = recent.isEmpty
+            ? latest.cpuPercent
+            : recent.reduce(0.0) { $0 + $1.cpuPercent } / Double(recent.count)
+        let graphics = recent.compactMap(\.gpuPercent)
+        let gpu = graphics.isEmpty
+            ? latest.gpuPercent
+            : graphics.reduce(0, +) / Double(graphics.count)
+        let gpuLeads = (gpu ?? 0) > cpu + 5
+        let usage = min(100, max(0, gpuLeads ? (gpu ?? 0) : cpu))
+        let source = gpuLeads ? "GPU activity" : "CPU demand"
+        let estimate = gpuLeads ? "Estimated " : ""
+        let baseUrgency = urgency(for: usage)
+
+        if latest.thermalLevel == .serious || latest.thermalLevel == .critical {
+            return TimelineCurrentStatus(
+                urgency: .critical,
+                message: "Heat may be limiting speed. Let one heavy task finish before adding more work."
+            )
+        }
+        if latest.memoryPressure == .high {
+            return TimelineCurrentStatus(
+                urgency: .critical,
+                message: "Memory is constrained. App switching may feel slower; finish an unused heavy task only if this persists."
+            )
+        }
+        if baseUrgency == .critical {
+            return TimelineCurrentStatus(
+                urgency: .critical,
+                message: "\(estimate)\(source) is near capacity at \(Formatters.percent(usage)). Warmth or faster battery use is normal; act only if work slows."
+            )
+        }
+        if latest.memoryPressure == .elevated || latest.thermalLevel == .fair {
+            return TimelineCurrentStatus(
+                urgency: .elevated,
+                message: "Demand is elevated but manageable. The Mac should remain responsive; no action is needed unless slowdown repeats."
+            )
+        }
+        if baseUrgency == .elevated {
+            return TimelineCurrentStatus(
+                urgency: .elevated,
+                message: "\(estimate)\(source) is high at \(Formatters.percent(usage)), within a normal active-work range. No action is needed."
+            )
+        }
+        return TimelineCurrentStatus(
+            urgency: .normal,
+            message: "Demand looks normal. The Mac has comfortable headroom for active work."
+        )
+    }
+
+    private func urgency(for sample: SystemSample) -> TimelineUrgency {
+        if sample.thermalLevel == .serious || sample.thermalLevel == .critical
+            || sample.memoryPressure == .high {
+            return .critical
+        }
+        let processor = max(sample.cpuPercent, sample.gpuPercent ?? 0)
+        if processor >= 85 { return .critical }
+        if sample.thermalLevel == .fair || sample.memoryPressure == .elevated
+            || processor >= 60 {
+            return .elevated
+        }
+        return .normal
+    }
+
+    private func urgency(for usage: Double) -> TimelineUrgency {
+        if usage >= 85 { return .critical }
+        if usage >= 60 { return .elevated }
+        return .normal
     }
 
     private func compactHandsOnMeaning(_ sample: SystemSample) -> String {
@@ -411,26 +498,32 @@ struct MonitoringTimelineView: View, Equatable {
             Color.clear.frame(width: labelWidth, height: 1)
             GeometryReader { geometry in
                 let plotWidth = max(1, geometry.size.width - UnifiedTimelineLayout.rightAxisWidth)
-                let labelWidth: CGFloat = 72
+                let tickLabelWidth: CGFloat = 46
                 ZStack(alignment: .topLeading) {
-                    ForEach(Array(timeTicks.enumerated()), id: \.offset) { index, tick in
-                        let fraction = CGFloat(index) / CGFloat(max(1, timeTicks.count - 1))
-                        let clockX = plotWidth * fraction
-                        let positionX = index == 0
-                            ? labelWidth / 2
-                            : (index == timeTicks.count - 1 ? plotWidth - labelWidth / 2 : clockX)
-                        Text(tick.formatted(date: .omitted, time: .shortened))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(
-                                width: labelWidth,
-                                alignment: index == 0 ? .leading : (index == timeTicks.count - 1 ? .trailing : .center)
-                            )
-                            .position(x: positionX, y: 8)
+                    ForEach(timeMarks) { mark in
+                        let fraction = min(1, max(
+                            0,
+                            mark.date.timeIntervalSince(interval.start) / max(1, interval.duration)
+                        ))
+                        let clockX = plotWidth * CGFloat(fraction)
+                        let positionX = min(
+                            max(tickLabelWidth / 2, clockX),
+                            plotWidth - tickLabelWidth / 2
+                        )
+                        VStack(spacing: 1) {
+                            Capsule()
+                                .fill(.secondary.opacity(0.38))
+                                .frame(width: 1, height: 3)
+                            Text(mark.label)
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: tickLabelWidth)
+                        }
+                        .position(x: positionX, y: 8)
                     }
                 }
             }
-            .frame(height: 16)
+            .frame(height: 18)
         }
     }
 
@@ -501,20 +594,22 @@ struct MonitoringTimelineView: View, Equatable {
         return previous
     }
 
-    private var timeTicks: [Date] {
-        let count = snapshot.range == .oneHour ? 5 : 6
-        return (0..<count).map { index in
-            interval.start.addingTimeInterval(
-                interval.duration * Double(index) / Double(max(1, count - 1))
+    private var timeMarks: [TimelineAxisMark] {
+        let marks: [(TimeInterval, String)]
+        switch snapshot.range {
+        case .oneHour:
+            marks = [(-3_600, "−1h"), (-1_800, "−30m"), (-600, "−10m"), (-300, "−5m"), (0, "Now")]
+        case .sixHours:
+            marks = [(-21_600, "−6h"), (-7_200, "−2h"), (-3_600, "−1h"), (-1_800, "−30m"), (0, "Now")]
+        case .twentyFourHours:
+            marks = [(-86_400, "−24h"), (-43_200, "−12h"), (-21_600, "−6h"), (-7_200, "−2h"), (0, "Now")]
+        }
+        return marks.map { offset, label in
+            TimelineAxisMark(
+                date: interval.end.addingTimeInterval(offset),
+                label: label
             )
         }
-    }
-
-    private var timelineDescription: String {
-        if !sleepIntervals.isEmpty {
-            return "One shared clock. Orange caps mark memory pressure; gray bands are sleep, when normal app work paused; blanks were not recorded."
-        }
-        return "One shared clock. Orange caps mark memory pressure; blank periods were not recorded, so the app does not guess."
     }
 
     private var graphicsAverage: Double? {
@@ -736,12 +831,64 @@ private enum TimelineColors {
     static let graphics = Color(nsColor: .systemTeal)
     static let battery = Color(nsColor: .systemGreen)
     static let memory = Color(nsColor: .systemGray)
+    static let normal = Color(nsColor: .systemGreen)
+    static let elevated = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 1.0, green: 0.80, blue: 0.22, alpha: 1)
+            : NSColor(srgbRed: 0.72, green: 0.52, blue: 0.0, alpha: 1)
+    })
+    static let critical = Color(nsColor: .systemRed)
+}
+
+private enum TimelineUrgency: Equatable {
+    case normal
+    case elevated
+    case critical
+    case unavailable
+
+    var color: Color {
+        switch self {
+        case .normal: return TimelineColors.normal
+        case .elevated: return TimelineColors.elevated
+        case .critical: return TimelineColors.critical
+        case .unavailable: return .secondary
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .normal: return "checkmark.circle"
+        case .elevated: return "waveform.path.ecg"
+        case .critical: return "exclamationmark.triangle.fill"
+        case .unavailable: return "clock.badge.questionmark"
+        }
+    }
+}
+
+private struct TimelineCurrentStatus {
+    let urgency: TimelineUrgency
+    let message: String
+
+    var color: Color { urgency.color }
+    var symbol: String { urgency.symbol }
+
+    static func unavailable(_ message: String) -> Self {
+        Self(urgency: .unavailable, message: message)
+    }
+}
+
+private struct TimelineAxisMark: Identifiable {
+    let date: Date
+    let label: String
+
+    var id: String { label }
 }
 
 private struct UnifiedTimelineLayout: Equatable {
     static let rightAxisWidth: CGFloat = 38
 
     let showsBattery: Bool
+    let showsMemory: Bool
     let cpuHeight: CGFloat
     let handsOnHeight: CGFloat
     let batteryHeight: CGFloat
@@ -751,9 +898,11 @@ private struct UnifiedTimelineLayout: Equatable {
 
     init(
         showsBattery: Bool,
+        showsMemory: Bool,
         presentation: TimelinePresentation
     ) {
         self.showsBattery = showsBattery
+        self.showsMemory = showsMemory
         switch presentation {
         case .full:
             cpuHeight = 220
@@ -771,14 +920,14 @@ private struct UnifiedTimelineLayout: Equatable {
     }
 
     var sectionCount: Int {
-        3 + (showsBattery ? 1 : 0)
+        2 + (showsBattery ? 1 : 0) + (showsMemory ? 1 : 0)
     }
 
     var totalHeight: CGFloat {
         cpuHeight
             + handsOnHeight
             + (showsBattery ? batteryHeight : 0)
-            + memoryHeight
+            + (showsMemory ? memoryHeight : 0)
             + CGFloat(max(0, sectionCount - 1)) * sectionGap
     }
 
@@ -797,8 +946,11 @@ private struct UnifiedTimelineLayout: Equatable {
             y += batteryHeight
         }
 
-        y += sectionGap
-        let memory = CGRect(x: 0, y: y, width: plotWidth, height: memoryHeight)
+        var memory: CGRect?
+        if showsMemory {
+            y += sectionGap
+            memory = CGRect(x: 0, y: y, width: plotWidth, height: memoryHeight)
+        }
         return UnifiedTimelineRects(
             plotWidth: plotWidth,
             cpu: cpu,
@@ -814,7 +966,7 @@ private struct UnifiedTimelineRects {
     let cpu: CGRect
     let handsOn: CGRect
     let battery: CGRect?
-    let memory: CGRect
+    let memory: CGRect?
 }
 
 private struct ProcessorTrendPoint: Equatable {
@@ -872,7 +1024,9 @@ private struct UnifiedDataCanvas: View, Equatable {
             if let battery = rects.battery {
                 drawBattery(in: &context, rect: battery, rightAxisX: rects.plotWidth)
             }
-            drawMemory(in: &context, rect: rects.memory)
+            if let memory = rects.memory {
+                drawMemory(in: &context, rect: memory)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
@@ -891,10 +1045,12 @@ private struct UnifiedDataCanvas: View, Equatable {
                 with: .color(TimelineColors.battery.opacity(0.035))
             )
         }
-        context.fill(
-            Path(roundedRect: rects.memory, cornerRadius: 4),
-            with: .color(TimelineColors.memory.opacity(0.035))
-        )
+        if let memory = rects.memory {
+            context.fill(
+                Path(roundedRect: memory, cornerRadius: 4),
+                with: .color(TimelineColors.memory.opacity(0.035))
+            )
+        }
     }
 
     private func drawProcessorGrid(
@@ -1080,11 +1236,21 @@ private struct UnifiedDataCanvas: View, Equatable {
                 in: &context,
                 plot: plot
             )
+            drawProcessorUrgency(
+                cpuDisplayPoints,
+                in: &context,
+                plot: plot
+            )
             for run in graphicsDisplayRuns {
                 drawProcessorLine(
                     run,
                     color: TimelineColors.graphics,
                     lineWidth: 1.8,
+                    in: &context,
+                    plot: plot
+                )
+                drawProcessorUrgency(
+                    run,
                     in: &context,
                     plot: plot
                 )
@@ -1218,25 +1384,53 @@ private struct UnifiedDataCanvas: View, Equatable {
         )
     }
 
+    private func drawProcessorUrgency(
+        _ points: [CGPoint],
+        in context: inout GraphicsContext,
+        plot: CGRect
+    ) {
+        guard points.count >= 2 else { return }
+        for index in 1..<points.count {
+            let start = points[index - 1]
+            let end = points[index]
+            let startValue = processorValue(at: start.y, in: plot)
+            let endValue = processorValue(at: end.y, in: plot)
+            let peak = max(startValue, endValue)
+            guard peak >= 60 else { continue }
+            let color = peak >= 85 ? TimelineColors.critical : TimelineColors.elevated
+            var segment = Path()
+            segment.move(to: start)
+            segment.addLine(to: end)
+            context.stroke(
+                segment,
+                with: .color(color.opacity(0.16)),
+                style: StrokeStyle(lineWidth: 5.2, lineCap: .round, lineJoin: .round)
+            )
+            context.stroke(
+                segment,
+                with: .color(color.opacity(0.96)),
+                style: StrokeStyle(lineWidth: 2.3, lineCap: .round, lineJoin: .round)
+            )
+        }
+    }
+
     private func drawProcessorMemory(in context: inout GraphicsContext, rect: CGRect) {
         let plot = rect.insetBy(dx: 0, dy: 6)
         drawProcessorMemoryRuns(
             memoryConditions.elevated,
             in: &context,
             plot: plot,
-            color: .orange,
-            bandOpacity: 0.11,
-            markerOpacity: 0.74,
-            markerHeight: 3
+            color: TimelineColors.elevated,
+            bandOpacity: 0.065,
+            markerOpacity: 0.28
         )
         drawProcessorMemoryRuns(
             memoryConditions.constrained,
             in: &context,
             plot: plot,
-            color: .red,
-            bandOpacity: 0.14,
-            markerOpacity: 0.84,
-            markerHeight: 4
+            color: TimelineColors.critical,
+            bandOpacity: 0.09,
+            markerOpacity: 0.38
         )
     }
 
@@ -1246,29 +1440,36 @@ private struct UnifiedDataCanvas: View, Equatable {
         plot: CGRect,
         color: Color,
         bandOpacity: Double,
-        markerOpacity: Double,
-        markerHeight: CGFloat
+        markerOpacity: Double
     ) {
         for run in runs {
             let rawStart = xPosition(run.start, plotWidth: plot.width)
             let rawEnd = xPosition(run.end, plotWidth: plot.width)
             let center = (rawStart + rawEnd) / 2
-            let width = max(4, rawEnd - rawStart)
+            let width = min(plot.width, max(5, rawEnd - rawStart))
             let x = min(max(plot.minX, center - width / 2), max(plot.minX, plot.maxX - width))
-            let bandHeight = min(18, plot.height * 0.12)
-            let band = CGRect(x: x, y: plot.minY, width: width, height: bandHeight)
+            let band = CGRect(x: x, y: plot.minY, width: width, height: plot.height)
+            let fade = min(0.38, max(0.10, 3 / max(1, width)))
             context.fill(
                 Path(roundedRect: band, cornerRadius: 2),
                 with: .linearGradient(
-                    Gradient(colors: [color.opacity(bandOpacity), color.opacity(0)]),
-                    startPoint: CGPoint(x: band.midX, y: band.minY),
-                    endPoint: CGPoint(x: band.midX, y: band.maxY)
+                    Gradient(stops: [
+                        .init(color: color.opacity(0), location: 0),
+                        .init(color: color.opacity(bandOpacity), location: fade),
+                        .init(color: color.opacity(bandOpacity), location: 1 - fade),
+                        .init(color: color.opacity(0), location: 1)
+                    ]),
+                    startPoint: CGPoint(x: band.minX, y: band.midY),
+                    endPoint: CGPoint(x: band.maxX, y: band.midY)
                 )
             )
-            let marker = CGRect(x: x, y: plot.minY, width: width, height: markerHeight)
-            context.fill(
-                Path(roundedRect: marker, cornerRadius: markerHeight / 2),
-                with: .color(color.opacity(markerOpacity))
+            var marker = Path()
+            marker.move(to: CGPoint(x: center, y: plot.minY + 2))
+            marker.addLine(to: CGPoint(x: center, y: plot.maxY - 2))
+            context.stroke(
+                marker,
+                with: .color(color.opacity(markerOpacity)),
+                style: StrokeStyle(lineWidth: 1, lineCap: .round)
             )
         }
     }
@@ -1385,7 +1586,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             in: &context,
             y: y,
             plotWidth: rect.width,
-            color: .orange.opacity(0.90),
+            color: TimelineColors.elevated.opacity(0.90),
             height: 7
         )
         drawMemoryConditionRuns(
@@ -1486,6 +1687,11 @@ private struct UnifiedDataCanvas: View, Equatable {
         rect.maxY - rect.height * CGFloat(min(processorScaleMaximum, max(0, value)) / processorScaleMaximum)
     }
 
+    private func processorValue(at y: CGFloat, in rect: CGRect) -> Double {
+        let fraction = min(1, max(0, (rect.maxY - y) / max(1, rect.height)))
+        return Double(fraction) * processorScaleMaximum
+    }
+
     private func batteryYPosition(
         _ value: Double,
         in rect: CGRect,
@@ -1505,7 +1711,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     }
 
     private var accessibilitySummary: String {
-        var summary = "A shared timeline aligns whole-machine CPU demand, physical input, battery level when unplugged, and memory condition."
+        var summary = "A shared timeline aligns whole-machine CPU demand and physical input."
         if processorTrend.contains(where: { $0.gpuPercent != nil }) {
             summary += " A second solid line shows the optional graphics-driver activity estimate on the same scale."
         }
@@ -1516,9 +1722,11 @@ private struct UnifiedDataCanvas: View, Equatable {
             summary += " The processor plot uses a zero-to-fifty-percent scale; rarer higher peaks touch the fifty-percent-plus cap."
         }
         if !sleepIntervals.isEmpty { summary += " Gray bands show confirmed Mac sleep, when normal app and agent work is paused." }
-        if !batteryRuns.isEmpty { summary += " Battery level appears only during unplugged periods." }
+        if layout.showsBattery && !batteryRuns.isEmpty {
+            summary += " Battery level appears only during unplugged periods."
+        }
         if samples.contains(where: { $0.memoryPressure != .low }) {
-            summary += " Orange memory episodes may have slowed app switching; stronger red episodes indicate constrained memory and likely slowdown."
+            summary += " Yellow memory bands mark elevated demand that may affect app switching; red bands indicate constrained memory and likely slowdown."
         }
         if samples.contains(where: { $0.thermalLevel == .serious || $0.thermalLevel == .critical }) {
             summary += " A red cap marks heat high enough that macOS may reduce speed."

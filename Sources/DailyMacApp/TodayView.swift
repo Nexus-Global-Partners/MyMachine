@@ -10,14 +10,6 @@ struct MonitoringView: View {
                 header
 
                 if let snapshot = model.monitoringSnapshot {
-                    MachineStatusBanner(
-                        snapshot: snapshot,
-                        samples: model.monitoringSamples,
-                        collectionState: model.collectionState,
-                        presentation: .full,
-                        resumeAction: { model.startMonitoring() }
-                    )
-
                     if snapshot.sampleCount > 0 {
                         if model.monitoringSamples.count >= 2 {
                             VStack(alignment: .leading, spacing: 11) {

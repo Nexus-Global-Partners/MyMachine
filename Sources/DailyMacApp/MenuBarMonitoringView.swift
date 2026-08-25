@@ -14,14 +14,7 @@ struct MenuBarMonitoringView: View {
 
             Group {
                 if let content = model.menuBarMonitoringContent {
-                    VStack(spacing: 10) {
-                        MachineStatusBanner(
-                            snapshot: content.snapshot,
-                            samples: content.samples,
-                            collectionState: model.collectionState,
-                            presentation: .menuBar,
-                            resumeAction: { model.startMonitoring() }
-                        )
+                    VStack(spacing: 0) {
                         if content.snapshot.sampleCount > 0 {
                             MonitoringTimelineView(
                                 snapshot: content.snapshot,

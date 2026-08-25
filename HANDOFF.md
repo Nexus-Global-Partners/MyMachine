@@ -77,8 +77,7 @@ DailyMacApp.swift
 - `TelemetrySampler.swift`: permission-free AppKit/CoreGraphics/IOKit/Darwin readings and best-effort process attribution
 - `SQLiteStore.swift`: actor-confined SQLite, schema migrations, WAL transactions, retention, and recovery
 - `InsightEngine.swift`, `EventDetector.swift`, `TimelineSemantics.swift`: deterministic interpretation and evidence gates
-- `MonitoringTimelineView.swift`: unified timeline, selection inspector, scale rules, and progressive disclosure
-- `MachineStatusBanner.swift`: three-second current-state interpretation and semantic status palette
+- `MonitoringTimelineView.swift`: graph-first current interpretation, unified timeline, selection inspector, semantic urgency, scale rules, and progressive disclosure
 - `DailyMacValidation/main.swift`: the project’s bespoke verification runner
 
 ## Validation and packaging
