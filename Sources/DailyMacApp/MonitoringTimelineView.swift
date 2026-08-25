@@ -199,7 +199,7 @@ struct MonitoringTimelineView: View, Equatable {
                         RoundedRectangle(cornerRadius: 1.5)
                             .fill(snapshot.peakMemoryPressure == .high
                                 ? TimelineColors.critical
-                                : TimelineColors.elevated)
+                                : TimelineColors.memory)
                             .frame(width: 10, height: 4)
                         Text(processorMemoryKey)
                             .font(.caption2)
@@ -257,10 +257,10 @@ struct MonitoringTimelineView: View, Equatable {
         case .low: return ""
         case .elevated:
             return snapshot.elevatedMemoryDuration < 60
-                ? "Memory rise · brief"
-                : "Memory rise · may slow"
+                ? "Memory briefly elevated"
+                : "Memory elevated"
         case .high:
-            return "Memory constrained · slower"
+            return "Memory constrained"
         }
     }
 
@@ -278,9 +278,13 @@ struct MonitoringTimelineView: View, Equatable {
             )
         } else {
             HStack(spacing: 12) {
-                Label(currentStatus.message, systemImage: currentStatus.symbol)
-                    .foregroundStyle(.primary.opacity(0.82))
-                    .lineLimit(2)
+                HStack(spacing: 7) {
+                    Image(systemName: currentStatus.symbol)
+                        .foregroundStyle(currentStatus.color)
+                    Text(currentStatus.message)
+                        .foregroundStyle(.primary.opacity(0.82))
+                        .lineLimit(2)
+                }
                 Spacer(minLength: 12)
                 Text("Drag the timeline for exact context")
                     .foregroundStyle(.secondary)
@@ -498,7 +502,7 @@ struct MonitoringTimelineView: View, Equatable {
             Color.clear.frame(width: labelWidth, height: 1)
             GeometryReader { geometry in
                 let plotWidth = max(1, geometry.size.width - UnifiedTimelineLayout.rightAxisWidth)
-                let tickLabelWidth: CGFloat = 46
+                let tickLabelWidth: CGFloat = 38
                 ZStack(alignment: .topLeading) {
                     ForEach(timeMarks) { mark in
                         let fraction = min(1, max(
@@ -506,10 +510,9 @@ struct MonitoringTimelineView: View, Equatable {
                             mark.date.timeIntervalSince(interval.start) / max(1, interval.duration)
                         ))
                         let clockX = plotWidth * CGFloat(fraction)
-                        let positionX = min(
-                            max(tickLabelWidth / 2, clockX),
-                            plotWidth - tickLabelWidth / 2
-                        )
+                        let positionX = mark.label == "Now"
+                            ? plotWidth + UnifiedTimelineLayout.rightAxisWidth / 2
+                            : max(tickLabelWidth / 2, clockX)
                         VStack(spacing: 1) {
                             Capsule()
                                 .fill(.secondary.opacity(0.38))
@@ -598,7 +601,7 @@ struct MonitoringTimelineView: View, Equatable {
         let marks: [(TimeInterval, String)]
         switch snapshot.range {
         case .oneHour:
-            marks = [(-3_600, "−1h"), (-1_800, "−30m"), (-600, "−10m"), (-300, "−5m"), (0, "Now")]
+            marks = [(-3_600, "−1h"), (-1_800, "−30m"), (-600, "−10m"), (0, "Now")]
         case .sixHours:
             marks = [(-21_600, "−6h"), (-7_200, "−2h"), (-3_600, "−1h"), (-1_800, "−30m"), (0, "Now")]
         case .twentyFourHours:
@@ -832,11 +835,6 @@ private enum TimelineColors {
     static let battery = Color(nsColor: .systemGreen)
     static let memory = Color(nsColor: .systemGray)
     static let normal = Color(nsColor: .systemGreen)
-    static let elevated = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 1.0, green: 0.80, blue: 0.22, alpha: 1)
-            : NSColor(srgbRed: 0.72, green: 0.52, blue: 0.0, alpha: 1)
-    })
     static let critical = Color(nsColor: .systemRed)
 }
 
@@ -849,7 +847,7 @@ private enum TimelineUrgency: Equatable {
     var color: Color {
         switch self {
         case .normal: return TimelineColors.normal
-        case .elevated: return TimelineColors.elevated
+        case .elevated: return .secondary
         case .critical: return TimelineColors.critical
         case .unavailable: return .secondary
         }
@@ -1238,10 +1236,11 @@ private struct UnifiedDataCanvas: View, Equatable {
             )
             drawProcessorUrgency(
                 cpuDisplayPoints,
+                sourcePoints: cpuPoints,
                 in: &context,
                 plot: plot
             )
-            for run in graphicsDisplayRuns {
+            for (runIndex, run) in graphicsDisplayRuns.enumerated() {
                 drawProcessorLine(
                     run,
                     color: TimelineColors.graphics,
@@ -1251,6 +1250,7 @@ private struct UnifiedDataCanvas: View, Equatable {
                 )
                 drawProcessorUrgency(
                     run,
+                    sourcePoints: graphicsRuns[runIndex],
                     in: &context,
                     plot: plot
                 )
@@ -1386,85 +1386,83 @@ private struct UnifiedDataCanvas: View, Equatable {
 
     private func drawProcessorUrgency(
         _ points: [CGPoint],
+        sourcePoints: [CGPoint],
         in context: inout GraphicsContext,
         plot: CGRect
     ) {
-        guard points.count >= 2 else { return }
-        var runs: [(urgency: TimelineUrgency, points: [CGPoint])] = []
-        var activeUrgency: TimelineUrgency?
-        var activePoints: [CGPoint] = []
-
-        func finishRun() -> (TimelineUrgency, [CGPoint])? {
-            defer {
-                activeUrgency = nil
-                activePoints.removeAll(keepingCapacity: true)
-            }
-            guard let activeUrgency, activePoints.count >= 2 else { return nil }
-            return (activeUrgency, activePoints)
-        }
-
-        for index in 1..<points.count {
-            let start = points[index - 1]
-            let end = points[index]
+        guard points.count >= 2, sourcePoints.count >= 2 else { return }
+        var criticalRanges: [ClosedRange<CGFloat>] = []
+        for index in 1..<sourcePoints.count {
+            let start = sourcePoints[index - 1]
+            let end = sourcePoints[index]
             let startValue = processorValue(at: start.y, in: plot)
             let endValue = processorValue(at: end.y, in: plot)
-            let peak = max(startValue, endValue)
-            let urgency: TimelineUrgency? = peak >= 85
-                ? .critical
-                : (peak >= 60 ? .elevated : nil)
-
-            guard let urgency else {
-                if let run = finishRun() { runs.append(run) }
-                continue
-            }
-            if activeUrgency != urgency {
-                if let run = finishRun() { runs.append(run) }
-                activeUrgency = urgency
-                activePoints = [start, end]
+            guard max(startValue, endValue) >= 85 else { continue }
+            let range = min(start.x, end.x)...max(start.x, end.x)
+            if let previous = criticalRanges.last, range.lowerBound <= previous.upperBound + 0.5 {
+                criticalRanges[criticalRanges.count - 1] = previous.lowerBound...max(previous.upperBound, range.upperBound)
             } else {
-                if activePoints.isEmpty { activePoints.append(start) }
-                activePoints.append(end)
+                criticalRanges.append(range)
             }
         }
-        if let run = finishRun() { runs.append(run) }
 
-        for run in runs {
-            let color = run.urgency == .critical
-                ? TimelineColors.critical
-                : TimelineColors.elevated
+        for range in criticalRanges {
+            let run = clippedPolyline(points, to: range)
+            guard run.count >= 2 else { continue }
             var segment = Path()
-            segment.move(to: run.points[0])
-            for point in run.points.dropFirst() { segment.addLine(to: point) }
+            segment.move(to: run[0])
+            for point in run.dropFirst() { segment.addLine(to: point) }
             context.stroke(
                 segment,
-                with: .color(color.opacity(0.16)),
+                with: .color(TimelineColors.critical.opacity(0.16)),
                 style: StrokeStyle(lineWidth: 5.2, lineCap: .round, lineJoin: .round)
             )
             context.stroke(
                 segment,
-                with: .color(color.opacity(0.96)),
+                with: .color(TimelineColors.critical.opacity(0.96)),
                 style: StrokeStyle(lineWidth: 2.3, lineCap: .round, lineJoin: .round)
             )
         }
     }
 
+    private func clippedPolyline(
+        _ points: [CGPoint],
+        to range: ClosedRange<CGFloat>
+    ) -> [CGPoint] {
+        guard points.count >= 2 else { return [] }
+        var result: [CGPoint] = []
+        for index in 1..<points.count {
+            let start = points[index - 1]
+            let end = points[index]
+            guard end.x >= range.lowerBound, start.x <= range.upperBound else { continue }
+            let clippedStartX = max(start.x, range.lowerBound)
+            let clippedEndX = min(end.x, range.upperBound)
+            guard clippedEndX >= clippedStartX else { continue }
+            let dx = end.x - start.x
+            let startFraction = dx > 0 ? (clippedStartX - start.x) / dx : 0
+            let endFraction = dx > 0 ? (clippedEndX - start.x) / dx : 0
+            let clippedStart = CGPoint(
+                x: clippedStartX,
+                y: start.y + (end.y - start.y) * startFraction
+            )
+            let clippedEnd = CGPoint(
+                x: clippedEndX,
+                y: start.y + (end.y - start.y) * endFraction
+            )
+            if result.last != clippedStart { result.append(clippedStart) }
+            if result.last != clippedEnd { result.append(clippedEnd) }
+        }
+        return result
+    }
+
     private func drawProcessorMemory(in context: inout GraphicsContext, rect: CGRect) {
         let plot = rect.insetBy(dx: 0, dy: 6)
-        drawProcessorMemoryRuns(
-            memoryConditions.elevated,
-            in: &context,
-            plot: plot,
-            color: TimelineColors.elevated,
-            bandOpacity: 0.065,
-            markerOpacity: 0.28
-        )
         drawProcessorMemoryRuns(
             memoryConditions.constrained,
             in: &context,
             plot: plot,
             color: TimelineColors.critical,
-            bandOpacity: 0.09,
-            markerOpacity: 0.38
+            bandOpacity: 0.10
         )
     }
 
@@ -1473,12 +1471,26 @@ private struct UnifiedDataCanvas: View, Equatable {
         in context: inout GraphicsContext,
         plot: CGRect,
         color: Color,
-        bandOpacity: Double,
-        markerOpacity: Double
+        bandOpacity: Double
     ) {
-        for run in runs {
-            let rawStart = xPosition(run.start, plotWidth: plot.width)
-            let rawEnd = xPosition(run.end, plotWidth: plot.width)
+        let rawSpans = runs.map { run in
+            (
+                start: xPosition(run.start, plotWidth: plot.width),
+                end: xPosition(run.end, plotWidth: plot.width)
+            )
+        }
+        var spans: [(start: CGFloat, end: CGFloat)] = []
+        for span in rawSpans.sorted(by: { $0.start < $1.start }) {
+            if let previous = spans.last, span.start - previous.end <= 5 {
+                spans[spans.count - 1].end = max(previous.end, span.end)
+            } else {
+                spans.append(span)
+            }
+        }
+
+        for span in spans {
+            let rawStart = span.start
+            let rawEnd = span.end
             let center = (rawStart + rawEnd) / 2
             let width = min(plot.width, max(5, rawEnd - rawStart))
             let x = min(max(plot.minX, center - width / 2), max(plot.minX, plot.maxX - width))
@@ -1496,14 +1508,6 @@ private struct UnifiedDataCanvas: View, Equatable {
                     startPoint: CGPoint(x: band.minX, y: band.midY),
                     endPoint: CGPoint(x: band.maxX, y: band.midY)
                 )
-            )
-            var marker = Path()
-            marker.move(to: CGPoint(x: center, y: plot.minY + 2))
-            marker.addLine(to: CGPoint(x: center, y: plot.maxY - 2))
-            context.stroke(
-                marker,
-                with: .color(color.opacity(markerOpacity)),
-                style: StrokeStyle(lineWidth: 1, lineCap: .round)
             )
         }
     }
@@ -1620,7 +1624,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             in: &context,
             y: y,
             plotWidth: rect.width,
-            color: TimelineColors.elevated.opacity(0.90),
+            color: TimelineColors.memory.opacity(0.86),
             height: 7
         )
         drawMemoryConditionRuns(
@@ -1760,7 +1764,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             summary += " Battery level appears only during unplugged periods."
         }
         if samples.contains(where: { $0.memoryPressure != .low }) {
-            summary += " Yellow memory bands mark elevated demand that may affect app switching; red bands indicate constrained memory and likely slowdown."
+            summary += " Red bands indicate constrained memory and likely slowdown; elevated but manageable memory remains neutral."
         }
         if samples.contains(where: { $0.thermalLevel == .serious || $0.thermalLevel == .critical }) {
             summary += " A red cap marks heat high enough that macOS may reduce speed."

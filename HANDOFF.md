@@ -53,7 +53,7 @@ The default production database is `~/Library/Application Support/MY MACHINE/Dai
 3. Never imply productivity, attention, intent, or causation from correlation.
 4. Preserve the local-only privacy boundary. Do not capture content, destinations, file paths, window titles, screen pixels, keystrokes, prompts, or messages.
 5. Prefer one well-scaled timeline over many small charts. CPU and GPU remain superposed; memory pressure, hands-on input, battery, and confirmed sleep share the same clock.
-6. Use only semantic green, neutral black, yellow, and red for machine state. Data-series colors may remain stable identifiers.
+6. Use semantic green, neutral black, and red for machine state. Reserve red for genuinely urgent evidence; manageable states remain neutral. Data-series colors may remain stable identifiers.
 7. Keep performance/efficiency-core detail subtle inside the CPU fill. Reveal exact P-core/E-core values only when the user inspects a point. Never guess a split for incomplete history.
 8. The menu panel must appear centered under its menu-bar item, load cached history immediately, refresh on opening, and remain smooth while scrolling.
 9. The app remains menu-bar-only. It should not appear in the Dock.
