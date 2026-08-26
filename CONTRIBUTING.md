@@ -44,9 +44,9 @@ swift run DailyMacValidation
 swift run -c release DailyMacValidation
 ./scripts/package.sh
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
-unzip -t "outputs/MY-MACHINE-1.1.0.zip"
-unzip -t "outputs/MY-MACHINE-Source-1.1.0.zip"
-shasum -a 256 -c "outputs/SHA256SUMS-1.1.0.txt"
+unzip -t "outputs/MY-MACHINE-1.1.1.zip"
+unzip -t "outputs/MY-MACHINE-Source-1.1.1.zip"
+shasum -a 256 -c "outputs/SHA256SUMS-1.1.1.txt"
 ```
 
 The final validation check samples real hardware. It is intentionally a local release check rather than a guaranteed cloud-runner test. GitHub CI runs the deterministic validation suite in both debug and release configurations, then packages the app, verifies the signature and archives, checks the generated hashes, and audits the source archive boundary.

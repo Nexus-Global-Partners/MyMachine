@@ -2,11 +2,11 @@
 
 MY MACHINE is a native, local-first macOS background monitor that connects foreground and background application activity with whole-machine performance, then turns the result into practical, plain-language understanding.
 
-Repository: [Nexus-Global-Partners/MyMachine](https://github.com/Nexus-Global-Partners/MyMachine) · [Download MY MACHINE 1.1.0](https://github.com/Nexus-Global-Partners/MyMachine/releases/download/v1.1.0/MY-MACHINE-1.1.0.zip) · [All releases](https://github.com/Nexus-Global-Partners/MyMachine/releases)
+Repository: [Nexus-Global-Partners/MyMachine](https://github.com/Nexus-Global-Partners/MyMachine) · [Download MY MACHINE 1.1.1](https://github.com/Nexus-Global-Partners/MyMachine/releases/download/v1.1.1/MY-MACHINE-1.1.1.zip) · [All releases](https://github.com/Nexus-Global-Partners/MyMachine/releases)
 
 ## Install and see your first useful view
 
-1. Download [MY-MACHINE-1.1.0.zip](https://github.com/Nexus-Global-Partners/MyMachine/releases/download/v1.1.0/MY-MACHINE-1.1.0.zip), unzip it, and move **MY MACHINE.app** into **Applications**.
+1. Download [MY-MACHINE-1.1.1.zip](https://github.com/Nexus-Global-Partners/MyMachine/releases/download/v1.1.1/MY-MACHINE-1.1.1.zip), unzip it, and move **MY MACHINE.app** into **Applications**.
 2. In Finder, Control-click **MY MACHINE.app** and choose **Open**. Confirm **Open** once more if macOS asks. The public build is ad-hoc signed and is not Apple-notarized; this one-time Finder step is expected. If macOS still blocks it, approve it under **System Settings → Privacy & Security** and open it again.
 3. Look for the simple Mac outline in the menu bar. MY MACHINE does not appear in the Dock. Click the icon to see the last hour immediately; the view fills in as local history is recorded.
 4. Use **Open Full-Screen Dashboard** for the immersive dashboard. **Diagnose My Machine** copies a private, minimized context brief only when you click it. Nothing is uploaded or sent for you.
@@ -29,7 +29,7 @@ swift run DailyMacValidation
 ./scripts/package.sh
 ```
 
-The package script builds an optimized app for the host architecture, constructs a standard `.app` bundle, applies an ad-hoc Hardened Runtime signature, and writes versioned artifacts to `outputs/`. The downloadable v1.1.0 app is for Apple-silicon Macs; the public source can be built on any supported Mac.
+The package script builds an optimized app for the host architecture, constructs a standard `.app` bundle, applies an ad-hoc Hardened Runtime signature, and writes versioned artifacts to `outputs/`. The downloadable v1.1.1 app is for Apple-silicon Macs; the public source can be built on any supported Mac.
 
 Move `outputs/MY MACHINE.app` into `/Applications`, then use the same one-time Finder **Open** step described above. See [HANDOFF.md](HANDOFF.md) for isolated development, architecture, known follow-ups, and release checks.
 

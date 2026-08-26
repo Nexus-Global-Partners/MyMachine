@@ -4,6 +4,17 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-26
+
+### Fixed
+
+- The newest timestamp now drives current status even when stored samples arrive out of order; selected history and whole-window summaries are labeled distinctly.
+- Full-screen monitoring reliably fills the active display when macOS declines the native full-screen transition instead of leaving a floating dashboard window.
+- Timeline selection now has an explicit **Show current** action, while Escape, the rail, and time axis remain quick ways back to live status.
+- The 24-hour network graph uses readable relative endpoints and keeps its scale labels inside the visible plot.
+- Application contributor rows exclude unattributed helper processes and stay framed as recognizable apps.
+- Plugged-in and stable-swap states use concise practical wording rather than presenting stale discharge pace or an unexplained raw swap total.
+
 ## [1.1.0] - 2026-08-25
 
 ### Added
@@ -36,7 +47,8 @@ All notable user-visible changes are recorded here.
 
 - Published the initial local-first macOS monitoring app, source handoff, privacy contract, and menu-bar experience.
 
-[Unreleased]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.1.0
 [1.0.1]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.0.0

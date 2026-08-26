@@ -1,6 +1,6 @@
 # MY MACHINE maintainer handoff
 
-This is the continuation point for MY MACHINE 1.1.0. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
+This is the continuation point for MY MACHINE 1.1.1. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
 
 ## Current state
 
@@ -9,7 +9,7 @@ This is the continuation point for MY MACHINE 1.1.0. The repository is the compl
 - Internal Swift package/executable names: `MY-MACHINE` and `DailyMac`
 - Bundle identifier: `local.mymachine.app`
 - Minimum system: macOS 15
-- Current release: 1.1.0, build 4
+- Current release: 1.1.1, build 5
 - No third-party packages, server, account, analytics SDK, updater, or network client
 - Latest verification: 43/43 checks passed in both debug and release configurations
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
@@ -95,9 +95,9 @@ swift run DailyMacValidation
 swift run -c release DailyMacValidation
 ./scripts/package.sh
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
-unzip -t "outputs/MY-MACHINE-1.1.0.zip"
-unzip -t "outputs/MY-MACHINE-Source-1.1.0.zip"
-shasum -a 256 -c "outputs/SHA256SUMS-1.1.0.txt"
+unzip -t "outputs/MY-MACHINE-1.1.1.zip"
+unzip -t "outputs/MY-MACHINE-Source-1.1.1.zip"
+shasum -a 256 -c "outputs/SHA256SUMS-1.1.1.txt"
 ```
 
 The final validation check reads live hardware and timing, so it remains a local release gate. GitHub CI runs the deterministic portion in both debug and release configurations, then performs packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
