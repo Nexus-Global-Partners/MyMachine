@@ -132,6 +132,42 @@ public struct TimelineCurrentProcessorStress: Equatable, Sendable {
     )
 }
 
+public enum TimelineActivitySource: String, Equatable, Sendable {
+    case foreground
+    case automatic
+}
+
+/// A small, time-aligned work context for the lower timeline. The title is a
+/// broad activity category, while the app identity is kept only to render the
+/// most representative local icon. It never infers focus or inspects content.
+public struct TimelineActivityLane: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let appName: String
+    public let bundleIdentifier: String?
+    public let source: TimelineActivitySource
+    public let intervals: [DateInterval]
+    public let observedDuration: TimeInterval
+
+    public init(
+        id: String,
+        title: String,
+        appName: String,
+        bundleIdentifier: String?,
+        source: TimelineActivitySource,
+        intervals: [DateInterval],
+        observedDuration: TimeInterval
+    ) {
+        self.id = id
+        self.title = title
+        self.appName = appName
+        self.bundleIdentifier = bundleIdentifier
+        self.source = source
+        self.intervals = intervals
+        self.observedDuration = observedDuration
+    }
+}
+
 /// Pure rules shared by the native timeline and validation executable. They keep
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
@@ -166,6 +202,128 @@ public enum TimelineSemantics {
                 $0.isFinite && $0 >= criticalProcessorThreshold
             } ?? false
         )
+    }
+
+    public static func activityLanes(
+        from samples: [SystemSample],
+        background: [BackgroundActivityPoint],
+        within window: DateInterval,
+        limit: Int = 3
+    ) -> [TimelineActivityLane] {
+        guard limit > 0 else { return [] }
+
+        struct Candidate {
+            let id: String
+            let title: String
+            let appName: String
+            let bundleIdentifier: String?
+            let source: TimelineActivitySource
+            let intervals: [DateInterval]
+            let duration: TimeInterval
+            let hasAgents: Bool
+        }
+
+        var candidates: [Candidate] = []
+        let foreground = samples.compactMap { sample -> (SystemSample, DateInterval)? in
+            guard !sample.isIdle, sample.category != .idle,
+                  let interval = observedInterval(for: sample, within: window) else { return nil }
+            return (sample, interval)
+        }
+        let categories = Dictionary(grouping: foreground, by: { $0.0.category })
+        for (category, values) in categories {
+            let intervals = exactIntervalUnion(values.map(\.1))
+            let duration = intervals.reduce(0) { $0 + $1.duration }
+            guard duration >= 30 else { continue }
+            let appDurations = Dictionary(grouping: values) {
+                $0.0.foregroundBundleID ?? $0.0.foregroundApp
+            }.mapValues { items in
+                items.reduce(0) { $0 + $1.1.duration }
+            }
+            guard let representativeKey = appDurations.max(by: { $0.value < $1.value })?.key,
+                  let representative = values.last(where: {
+                      ($0.0.foregroundBundleID ?? $0.0.foregroundApp) == representativeKey
+                  })?.0 else { continue }
+            candidates.append(Candidate(
+                id: "foreground-\(category.rawValue)",
+                title: activityTitle(for: category),
+                appName: representative.foregroundApp,
+                bundleIdentifier: representative.foregroundBundleID,
+                source: .foreground,
+                intervals: intervals,
+                duration: duration,
+                hasAgents: false
+            ))
+        }
+
+        let automaticValues = background.compactMap { point -> (BackgroundActivityPoint, DateInterval)? in
+            guard point.duration > 0 else { return nil }
+            let end = min(window.end, point.timestamp)
+            let start = max(window.start, end.addingTimeInterval(-point.duration))
+            guard end > start else { return nil }
+            return (point, DateInterval(start: start, end: end))
+        }
+        if !automaticValues.isEmpty {
+            let intervals = exactIntervalUnion(automaticValues.map(\.1))
+            let duration = intervals.reduce(0) { $0 + $1.duration }
+            if duration >= 30 {
+                let appDurations = Dictionary(grouping: automaticValues) {
+                    $0.0.ownerBundleID ?? $0.0.ownerName
+                }.mapValues { items in
+                    items.reduce(0) { $0 + $1.1.duration }
+                }
+                if let representativeKey = appDurations.max(by: { $0.value < $1.value })?.key,
+                   let representative = automaticValues.last(where: {
+                       ($0.0.ownerBundleID ?? $0.0.ownerName) == representativeKey
+                   })?.0 {
+                    let hasAgents = automaticValues.contains { $0.0.agentWorkerCount > 0 }
+                    candidates.append(Candidate(
+                        id: "automatic-work",
+                        title: hasAgents ? "Agentic development" : "Background work",
+                        appName: representative.ownerName,
+                        bundleIdentifier: representative.ownerBundleID,
+                        source: .automatic,
+                        intervals: intervals,
+                        duration: duration,
+                        hasAgents: hasAgents
+                    ))
+                }
+            }
+        }
+
+        let ranked = candidates.sorted { lhs, rhs in
+            if lhs.hasAgents != rhs.hasAgents { return lhs.hasAgents }
+            if lhs.source != rhs.source { return lhs.source == .automatic }
+            if abs(lhs.duration - rhs.duration) > 0.001 { return lhs.duration > rhs.duration }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+        return ranked.prefix(limit).map {
+            TimelineActivityLane(
+                id: $0.id,
+                title: $0.title,
+                appName: $0.appName,
+                bundleIdentifier: $0.bundleIdentifier,
+                source: $0.source,
+                intervals: $0.intervals,
+                observedDuration: $0.duration
+            )
+        }
+    }
+
+    private static func activityTitle(for category: WorkCategory) -> String {
+        switch category {
+        case .coding: return "Development"
+        case .research: return "Browser use"
+        case .writing: return "Writing"
+        case .communication: return "Communication"
+        case .design: return "Design"
+        case .meetings: return "Meetings"
+        case .files: return "File work"
+        case .media: return "Media"
+        case .music: return "Music"
+        case .administration: return "Administration"
+        case .other: return "Other app use"
+        case .idle: return "Idle"
+        }
     }
 
     public static func sustainedMemoryConstraints(in intervals: [DateInterval]) -> [DateInterval] {

@@ -478,6 +478,46 @@ struct DailyMacValidation {
                     && !staleCritical.gpuIsCritical,
                 "stale processor history was presented as current red urgency"
             )
+            let activityEnd = later.timestamp.addingTimeInterval(600)
+            let activityWindow = DateInterval(
+                start: activityEnd.addingTimeInterval(-600),
+                end: activityEnd
+            )
+            let activityLanes = TimelineSemantics.activityLanes(
+                from: [
+                    sample(at: activityEnd.addingTimeInterval(-360), duration: 120, app: "Conductor", bundle: "com.conductor.app", category: .coding),
+                    sample(at: activityEnd.addingTimeInterval(-180), duration: 90, app: "Arc", bundle: "company.thebrowser.Browser", category: .research),
+                    sample(at: activityEnd.addingTimeInterval(-60), duration: 30, app: "Figma", bundle: "com.figma.Desktop", category: .design)
+                ],
+                background: [
+                    BackgroundActivityPoint(
+                        id: UUID(),
+                        timestamp: activityEnd.addingTimeInterval(-30),
+                        duration: 120,
+                        ownerName: "Conductor",
+                        ownerBundleID: "com.conductor.app",
+                        isForeground: false,
+                        cpuPercent: 20,
+                        memoryBytes: 500_000_000,
+                        diskBytes: 1_000_000,
+                        processCount: 3,
+                        workerCount: 3,
+                        agentWorkerCount: 2,
+                        elevatedMemoryOverlap: false,
+                        seriousThermalOverlap: false
+                    )
+                ],
+                within: activityWindow,
+                limit: 3
+            )
+            try harness.check(
+                activityLanes.count == 3
+                    && activityLanes.first?.title == "Agentic development"
+                    && activityLanes.first?.source == .automatic
+                    && activityLanes.contains(where: { $0.title == "Development" })
+                    && activityLanes.contains(where: { $0.title == "Browser use" }),
+                "activity lanes did not prioritize concise autonomous and foreground work context"
+            )
             let bytes = Formatters.bytes(1_000_000_000)
             try harness.check(bytes.contains("MB") || bytes.contains("GB"), "byte units are not readable: \(bytes)")
 

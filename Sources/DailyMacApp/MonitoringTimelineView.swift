@@ -33,6 +33,7 @@ struct MonitoringTimelineView: View, Equatable {
     private let currentProcessorStress: TimelineCurrentProcessorStress
     private let processorScaleMaximum: Double
     private let windowUsageSummary: TimelineWindowUsageSummary
+    private let activityLanes: [TimelineActivityLane]
 
     init(
         snapshot: MonitoringSnapshot,
@@ -76,6 +77,12 @@ struct MonitoringTimelineView: View, Equatable {
         self.windowUsageSummary = TimelineSemantics.windowUsageSummary(
             from: orderedSamples,
             within: snapshot.interval
+        )
+        self.activityLanes = TimelineSemantics.activityLanes(
+            from: orderedSamples,
+            background: backgroundPoints,
+            within: snapshot.interval,
+            limit: presentation == .menuBar ? 2 : 3
         )
 
         let sleeps = TimelineSemantics.sleepIntervals(from: events, within: snapshot.interval)
@@ -135,6 +142,7 @@ struct MonitoringTimelineView: View, Equatable {
                         visibleStress: visibleStress,
                         batteryRuns: batteryRuns,
                         sleepIntervals: sleepIntervals,
+                        activityLanes: activityLanes,
                         interval: interval,
                         processorScaleMaximum: processorScaleMaximum,
                         layout: layout
@@ -190,7 +198,7 @@ struct MonitoringTimelineView: View, Equatable {
             processorTrackLabel
             .frame(height: layout.cpuHeight, alignment: .topLeading)
 
-            handsOnTrackLabel
+            activityTrackLabel
             .frame(height: layout.handsOnHeight, alignment: .topLeading)
 
             if showsBatteryTrack {
@@ -401,6 +409,45 @@ struct MonitoringTimelineView: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityHint("Hands-on share uses recorded typing, pointer, click, and scroll totals. It does not judge focus or productivity.")
+    }
+
+    @ViewBuilder
+    private var activityTrackLabel: some View {
+        if activityLanes.isEmpty {
+            handsOnTrackLabel
+        } else {
+            VStack(alignment: .leading, spacing: presentation == .menuBar ? 3 : 4) {
+                ForEach(activityLanes) { lane in
+                    HStack(spacing: 6) {
+                        ContributorAppIcon(
+                            bundleIdentifier: lane.bundleIdentifier,
+                            ownerName: lane.appName
+                        )
+                        .frame(width: presentation == .menuBar ? 14 : 16,
+                               height: presentation == .menuBar ? 14 : 16)
+
+                        Text(lane.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(activityColor(for: lane))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.88)
+
+                        Spacer(minLength: 2)
+
+                        Text(lane.source == .automatic ? "AUTO" : "YOU")
+                            .font(.system(size: 8, weight: .semibold))
+                            .tracking(0.3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(lane.title), \(lane.source == .automatic ? "automatic background work" : "foreground app context")")
+                }
+            }
+        }
+    }
+
+    private func activityColor(for lane: TimelineActivityLane) -> Color {
+        lane.source == .automatic ? TimelineColors.automatic : TimelineColors.handsOn
     }
 
     @ViewBuilder
@@ -1120,6 +1167,7 @@ private struct ContributorAppIcon: View {
 private enum TimelineColors {
     static let processor = Color(nsColor: .systemBlue)
     static let handsOn = Color.indigo
+    static let automatic = Color(nsColor: .systemTeal)
     static let graphics = Color(nsColor: .systemTeal)
     static let battery = Color(nsColor: .systemGreen)
     static let memory = Color(nsColor: .systemGray)
@@ -1291,6 +1339,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     let visibleStress: TimelineVisibleStress
     let batteryRuns: [BatteryTimelineRun]
     let sleepIntervals: [DateInterval]
+    let activityLanes: [TimelineActivityLane]
     let interval: DateInterval
     let processorScaleMaximum: Double
     let layout: UnifiedTimelineLayout
@@ -1302,6 +1351,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             && lhs.visibleStress == rhs.visibleStress
             && lhs.batteryRuns == rhs.batteryRuns
             && lhs.sleepIntervals == rhs.sleepIntervals
+            && lhs.activityLanes == rhs.activityLanes
             && lhs.interval == rhs.interval
             && lhs.processorScaleMaximum == rhs.processorScaleMaximum
             && lhs.layout == rhs.layout
@@ -1315,7 +1365,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawConfirmedSleep(in: &context, size: size, plotWidth: rects.plotWidth)
             drawProcessorMemory(in: &context, rect: rects.cpu)
             drawProcessor(in: &context, rect: rects.cpu)
-            drawHandsOn(in: &context, rect: rects.handsOn)
+            drawActivity(in: &context, rect: rects.handsOn)
             if let battery = rects.battery {
                 drawBattery(in: &context, rect: battery, rightAxisX: rects.plotWidth)
             }
@@ -1839,6 +1889,51 @@ private struct UnifiedDataCanvas: View, Equatable {
                 Path(roundedRect: bar, cornerRadius: 1),
                 with: .color(TimelineColors.handsOn.opacity(opacity))
             )
+        }
+    }
+
+    private func drawActivity(in context: inout GraphicsContext, rect: CGRect) {
+        guard !activityLanes.isEmpty else {
+            drawHandsOn(in: &context, rect: rect)
+            return
+        }
+
+        let gap: CGFloat = 3
+        let verticalPadding: CGFloat = 3
+        let usableHeight = max(1, rect.height - verticalPadding * 2
+            - gap * CGFloat(max(0, activityLanes.count - 1)))
+        let laneHeight = max(4, usableHeight / CGFloat(activityLanes.count))
+
+        for (index, lane) in activityLanes.enumerated() {
+            let y = rect.minY + verticalPadding + CGFloat(index) * (laneHeight + gap)
+            let color = lane.source == .automatic
+                ? TimelineColors.automatic
+                : TimelineColors.handsOn
+            for interval in lane.intervals {
+                let startX = xPosition(interval.start, plotWidth: rect.width)
+                let endX = xPosition(interval.end, plotWidth: rect.width)
+                let width = max(2, endX - startX)
+                let bar = CGRect(x: startX, y: y, width: width, height: laneHeight)
+                context.fill(
+                    Path(roundedRect: bar, cornerRadius: min(3, laneHeight / 2)),
+                    with: .linearGradient(
+                        Gradient(stops: [
+                            .init(color: color.opacity(lane.source == .automatic ? 0.52 : 0.44), location: 0),
+                            .init(color: color.opacity(lane.source == .automatic ? 0.30 : 0.25), location: 1)
+                        ]),
+                        startPoint: CGPoint(x: bar.midX, y: bar.minY),
+                        endPoint: CGPoint(x: bar.midX, y: bar.maxY)
+                    )
+                )
+                var highlight = Path()
+                highlight.move(to: CGPoint(x: bar.minX + 1, y: bar.minY + 0.5))
+                highlight.addLine(to: CGPoint(x: bar.maxX - 1, y: bar.minY + 0.5))
+                context.stroke(
+                    highlight,
+                    with: .color(color.opacity(0.70)),
+                    style: StrokeStyle(lineWidth: 1, lineCap: .round)
+                )
+            }
         }
     }
 
