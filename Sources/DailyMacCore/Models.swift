@@ -529,6 +529,7 @@ public struct ReportInsight: Identifiable, Codable, Equatable, Sendable {
 public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendable {
     case oneHour
     case sixHours
+    case twelveHours
     case twentyFourHours
 
     public var id: String { rawValue }
@@ -537,6 +538,7 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
         switch self {
         case .oneHour: return 3_600
         case .sixHours: return 6 * 3_600
+        case .twelveHours: return 12 * 3_600
         case .twentyFourHours: return 24 * 3_600
         }
     }
@@ -545,6 +547,7 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
         switch self {
         case .oneHour: return "1 hour"
         case .sixHours: return "6 hours"
+        case .twelveHours: return "12 hours"
         case .twentyFourHours: return "24 hours"
         }
     }

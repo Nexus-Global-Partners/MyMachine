@@ -58,6 +58,7 @@ struct DailyMacValidation {
             let expected: [(MonitoringRange, TimeInterval)] = [
                 (.oneHour, 3_600),
                 (.sixHours, 21_600),
+                (.twelveHours, 43_200),
                 (.twentyFourHours, 86_400)
             ]
             for (range, duration) in expected {

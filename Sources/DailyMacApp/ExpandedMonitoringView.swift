@@ -114,11 +114,12 @@ struct ExpandedMonitoringView: View {
             )) {
                 Text("1 hr").tag(MonitoringRange.oneHour)
                 Text("6 hr").tag(MonitoringRange.sixHours)
+                Text("12 hr").tag(MonitoringRange.twelveHours)
                 Text("24 hr").tag(MonitoringRange.twentyFourHours)
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: layout.isCompact ? 210 : 250)
+            .frame(width: layout.isCompact ? 260 : 300)
             .controlSize(layout.isCompact ? .regular : .large)
 
             Button {
@@ -188,6 +189,7 @@ struct ExpandedMonitoringView: View {
         switch model.monitoringRange {
         case .oneHour: return "last hour"
         case .sixHours: return "last 6 hours"
+        case .twelveHours: return "last 12 hours"
         case .twentyFourHours: return "last 24 hours"
         }
     }

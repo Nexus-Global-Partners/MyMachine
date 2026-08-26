@@ -114,11 +114,12 @@ struct MonitoringView: View {
             )) {
                 Text("1 hr").tag(MonitoringRange.oneHour)
                 Text("6 hr").tag(MonitoringRange.sixHours)
+                Text("12 hr").tag(MonitoringRange.twelveHours)
                 Text("24 hr").tag(MonitoringRange.twentyFourHours)
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 220)
+            .frame(width: 276)
 
             Button {
                 model.refreshNow()

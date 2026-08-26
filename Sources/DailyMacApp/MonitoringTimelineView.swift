@@ -855,6 +855,8 @@ struct MonitoringTimelineView: View, Equatable {
             marks = [(-3_600, "−1h"), (-1_800, "−30m"), (-600, "−10m"), (0, "Now")]
         case .sixHours:
             marks = [(-21_600, "−6h"), (-7_200, "−2h"), (-3_600, "−1h"), (-1_800, "−30m"), (0, "Now")]
+        case .twelveHours:
+            marks = [(-43_200, "−12h"), (-21_600, "−6h"), (-10_800, "−3h"), (-3_600, "−1h"), (0, "Now")]
         case .twentyFourHours:
             marks = [(-86_400, "−24h"), (-43_200, "−12h"), (-21_600, "−6h"), (-7_200, "−2h"), (0, "Now")]
         }
@@ -1032,6 +1034,7 @@ struct MonitoringTimelineView: View, Equatable {
         switch range {
         case .oneHour: bucketDuration = 30
         case .sixHours: bucketDuration = 120
+        case .twelveHours: bucketDuration = 300
         case .twentyFourHours: bucketDuration = 600
         }
 
