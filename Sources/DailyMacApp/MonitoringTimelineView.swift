@@ -166,6 +166,12 @@ struct MonitoringTimelineView: View, Equatable {
             guard let selectedTime else { return }
             if !snapshot.interval.contains(selectedTime) { self.selectedTime = nil }
         }
+        .task(id: selectedTime) {
+            guard selectedTime != nil else { return }
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            selectedTime = nil
+        }
         .accessibilityElement(children: .contain)
     }
 
