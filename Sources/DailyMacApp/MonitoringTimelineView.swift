@@ -430,7 +430,7 @@ struct MonitoringTimelineView: View, Equatable {
                 Button {
                     selectedTime = nil
                 } label: {
-                    Label("Now", systemImage: "xmark.circle.fill")
+                    Label("Show current", systemImage: "arrow.uturn.backward.circle.fill")
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.small)
@@ -2201,7 +2201,7 @@ private struct TimelineInspector: View {
 
     private var dismissButton: some View {
         Button(action: onDismiss) {
-            Label("Now", systemImage: "xmark.circle.fill")
+            Label("Show current", systemImage: "arrow.uturn.backward.circle.fill")
         }
         .buttonStyle(.borderless)
         .controlSize(.small)
