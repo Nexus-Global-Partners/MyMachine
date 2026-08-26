@@ -339,14 +339,26 @@ struct MonitoringTimelineView: View, Equatable {
         isEstimate: Bool = false,
         isCritical: Bool = false
     ) -> some View {
-        HStack(spacing: 4) {
-            Text("\(title)\(isEstimate ? " est." : "") \(Formatters.percent(value)) avg")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(color)
-            Text("· \(meaning.lowercased())")
-                .font(.caption2)
-                .foregroundStyle(isCritical ? color : Color.secondary)
-                .lineLimit(1)
+        let identity = "\(title)\(isEstimate ? " est." : "") \(Formatters.percent(value)) avg"
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) {
+                Text(identity)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(color)
+                Text("· \(meaning.lowercased())")
+                    .font(.caption2)
+                    .foregroundStyle(isCritical ? color : Color.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(identity)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(color)
+                Text(meaning)
+                    .font(.caption2)
+                    .foregroundStyle(isCritical ? color : Color.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
     }
