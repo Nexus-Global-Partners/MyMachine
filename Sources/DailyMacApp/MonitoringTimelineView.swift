@@ -187,7 +187,7 @@ struct MonitoringTimelineView: View, Equatable {
 
     private var inspectorHeight: CGFloat {
         switch presentation {
-        case .menuBar: return 36
+        case .menuBar: return 44
         case .full: return 44
         case .expanded: return 48
         }
@@ -503,9 +503,43 @@ struct MonitoringTimelineView: View, Equatable {
                 .accessibilityLabel("Return to current status")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(compactContextColor.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    compactContextColor.opacity(0.105),
+                                    compactContextColor.opacity(0.028)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                }
+                .overlay(alignment: .bottom) {
+                    LinearGradient(
+                        colors: [
+                            compactContextColor.opacity(0.72),
+                            compactContextColor.opacity(0.10)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(height: 1)
+                    .clipShape(Capsule())
+                    .padding(.horizontal, 8)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(compactContextColor.opacity(0.14), lineWidth: 0.75)
+                }
+        }
+        .shadow(color: compactContextColor.opacity(0.08), radius: 8, y: 2)
         .accessibilityElement(children: .combine)
     }
 
