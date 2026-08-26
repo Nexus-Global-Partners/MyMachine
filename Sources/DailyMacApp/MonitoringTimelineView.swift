@@ -30,6 +30,7 @@ struct MonitoringTimelineView: View, Equatable {
     private let processorTrend: [ProcessorTrendPoint]
     private let memoryConditions: MemoryConditionTimeline
     private let visibleStress: TimelineVisibleStress
+    private let currentProcessorStress: TimelineCurrentProcessorStress
     private let processorScaleMaximum: Double
     private let windowUsageSummary: TimelineWindowUsageSummary
 
@@ -66,6 +67,10 @@ struct MonitoringTimelineView: View, Equatable {
             samples: orderedSamples,
             within: snapshot.interval,
             constrainedMemoryIntervals: memoryConditions.constrained
+        )
+        self.currentProcessorStress = TimelineSemantics.currentProcessorStress(
+            from: orderedSamples,
+            relativeTo: snapshot.interval.end
         )
         self.processorScaleMaximum = Self.processorScaleMaximum(for: processorTrend)
         self.windowUsageSummary = TimelineSemantics.windowUsageSummary(
@@ -218,27 +223,27 @@ struct MonitoringTimelineView: View, Equatable {
                 "CPU",
                 meaning: processorMeaning(
                     normal: cpuLabel(snapshot.averageCPU),
-                    criticalDuration: visibleStress.cpuCriticalDuration
+                    isCurrentlyCritical: currentProcessorStress.cpuIsCritical
                 ),
                 value: snapshot.averageCPU,
-                color: visibleStress.cpuCriticalIntervals.isEmpty
-                    ? TimelineColors.processor
-                    : TimelineColors.critical,
-                isCritical: !visibleStress.cpuCriticalIntervals.isEmpty
+                color: currentProcessorStress.cpuIsCritical
+                    ? TimelineColors.critical
+                    : TimelineColors.processor,
+                isCritical: currentProcessorStress.cpuIsCritical
             )
             if let graphicsAverage {
                 processorKey(
                     "GPU",
                     meaning: processorMeaning(
                         normal: gpuLabel(graphicsAverage),
-                        criticalDuration: visibleStress.gpuCriticalDuration
+                        isCurrentlyCritical: currentProcessorStress.gpuIsCritical
                     ),
                     value: graphicsAverage,
-                    color: visibleStress.gpuCriticalIntervals.isEmpty
-                        ? TimelineColors.graphics
-                        : TimelineColors.critical,
+                    color: currentProcessorStress.gpuIsCritical
+                        ? TimelineColors.critical
+                        : TimelineColors.graphics,
                     isEstimate: true,
-                    isCritical: !visibleStress.gpuCriticalIntervals.isEmpty
+                    isCritical: currentProcessorStress.gpuIsCritical
                 )
             }
             if let processorMemoryKey {
@@ -908,10 +913,8 @@ struct MonitoringTimelineView: View, Equatable {
         }
     }
 
-    private func processorMeaning(normal: String, criticalDuration: TimeInterval) -> String {
-        criticalDuration > 0
-            ? "Near capacity for \(compactStressDuration(criticalDuration))"
-            : normal
+    private func processorMeaning(normal: String, isCurrentlyCritical: Bool) -> String {
+        isCurrentlyCritical ? "Near capacity now" : normal
     }
 
     private func compactStressDuration(_ duration: TimeInterval) -> String {

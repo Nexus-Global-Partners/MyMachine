@@ -447,6 +447,37 @@ struct DailyMacValidation {
                 TimelineSemantics.latestSample(from: [later, earlier])?.id == later.id,
                 "current status depended on sample array order"
             )
+            let currentStress = TimelineSemantics.currentProcessorStress(
+                from: [
+                    sample(at: later.timestamp.addingTimeInterval(-30), cpu: 92, gpu: 91),
+                    later
+                ],
+                relativeTo: later.timestamp.addingTimeInterval(15)
+            )
+            try harness.check(
+                currentStress.hasFreshReading
+                    && !currentStress.cpuIsCritical
+                    && !currentStress.gpuIsCritical,
+                "historical red processor history leaked into the current rail state"
+            )
+            let currentCritical = TimelineSemantics.currentProcessorStress(
+                from: [later, sample(at: later.timestamp.addingTimeInterval(15), cpu: 89, gpu: 86)],
+                relativeTo: later.timestamp.addingTimeInterval(30)
+            )
+            try harness.check(
+                currentCritical.cpuIsCritical && currentCritical.gpuIsCritical,
+                "fresh critical processor readings did not reach the current rail state"
+            )
+            let staleCritical = TimelineSemantics.currentProcessorStress(
+                from: [sample(at: earlier.timestamp, cpu: 99, gpu: 99)],
+                relativeTo: later.timestamp.addingTimeInterval(600)
+            )
+            try harness.check(
+                !staleCritical.hasFreshReading
+                    && !staleCritical.cpuIsCritical
+                    && !staleCritical.gpuIsCritical,
+                "stale processor history was presented as current red urgency"
+            )
             let bytes = Formatters.bytes(1_000_000_000)
             try harness.check(bytes.contains("MB") || bytes.contains("GB"), "byte units are not readable: \(bytes)")
 

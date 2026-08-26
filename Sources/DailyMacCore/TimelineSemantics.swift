@@ -112,6 +112,26 @@ public struct TimelineVisibleStress: Equatable, Sendable {
     }
 }
 
+/// The red identity shown beside the graph must describe the newest trustworthy
+/// reading, never an earlier red interval that remains visible in history.
+public struct TimelineCurrentProcessorStress: Equatable, Sendable {
+    public let hasFreshReading: Bool
+    public let cpuIsCritical: Bool
+    public let gpuIsCritical: Bool
+
+    public init(hasFreshReading: Bool, cpuIsCritical: Bool, gpuIsCritical: Bool) {
+        self.hasFreshReading = hasFreshReading
+        self.cpuIsCritical = cpuIsCritical
+        self.gpuIsCritical = gpuIsCritical
+    }
+
+    public static let unavailable = Self(
+        hasFreshReading: false,
+        cpuIsCritical: false,
+        gpuIsCritical: false
+    )
+}
+
 /// Pure rules shared by the native timeline and validation executable. They keep
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
@@ -125,6 +145,27 @@ public enum TimelineSemantics {
     /// never change what the UI calls "current."
     public static func latestSample(from samples: [SystemSample]) -> SystemSample? {
         samples.max { lhs, rhs in lhs.timestamp < rhs.timestamp }
+    }
+
+    public static func currentProcessorStress(
+        from samples: [SystemSample],
+        relativeTo end: Date
+    ) -> TimelineCurrentProcessorStress {
+        guard let latest = latestSample(from: samples), latest.duration > 0 else {
+            return .unavailable
+        }
+        let age = max(0, end.timeIntervalSince(latest.timestamp))
+        guard age <= max(120, latest.samplingInterval * 4) else {
+            return .unavailable
+        }
+        return TimelineCurrentProcessorStress(
+            hasFreshReading: true,
+            cpuIsCritical: latest.cpuPercent.isFinite
+                && latest.cpuPercent >= criticalProcessorThreshold,
+            gpuIsCritical: latest.gpuPercent.map {
+                $0.isFinite && $0 >= criticalProcessorThreshold
+            } ?? false
+        )
     }
 
     public static func sustainedMemoryConstraints(in intervals: [DateInterval]) -> [DateInterval] {
