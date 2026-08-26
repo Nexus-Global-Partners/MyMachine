@@ -193,7 +193,7 @@ struct MonitoringTimelineView: View, Equatable {
 
     private var inspectorHeight: CGFloat {
         switch presentation {
-        case .menuBar: return 36
+        case .menuBar: return 44
         case .full: return 44
         case .expanded: return 48
         }
@@ -518,9 +518,30 @@ struct MonitoringTimelineView: View, Equatable {
                 .accessibilityLabel("Return to current status")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(compactContextColor.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.34),
+                                    Color.white.opacity(0.10)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.white.opacity(0.58), lineWidth: 0.8)
+                }
+        }
+        .shadow(color: Color.black.opacity(0.055), radius: 8, y: 2)
         .accessibilityElement(children: .combine)
     }
 
