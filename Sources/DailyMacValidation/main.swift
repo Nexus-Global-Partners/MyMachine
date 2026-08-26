@@ -493,6 +493,22 @@ struct DailyMacValidation {
                 background: [
                     BackgroundActivityPoint(
                         id: UUID(),
+                        timestamp: activityEnd.addingTimeInterval(-165),
+                        duration: 60,
+                        ownerName: "Conductor",
+                        ownerBundleID: "com.conductor.app",
+                        isForeground: false,
+                        cpuPercent: 5,
+                        memoryBytes: 400_000_000,
+                        diskBytes: 500_000,
+                        processCount: 2,
+                        workerCount: 2,
+                        agentWorkerCount: 1,
+                        elevatedMemoryOverlap: false,
+                        seriousThermalOverlap: false
+                    ),
+                    BackgroundActivityPoint(
+                        id: UUID(),
                         timestamp: activityEnd.addingTimeInterval(-30),
                         duration: 120,
                         ownerName: "Conductor",
@@ -515,6 +531,10 @@ struct DailyMacValidation {
                 activityLanes.count == 3
                     && activityLanes.first?.title == "Agentic development"
                     && activityLanes.first?.source == .automatic
+                    && activityLanes.first?.maximumAgentWorkers == 2
+                    && activityLanes.first?.levels.count == 2
+                    && (activityLanes.first?.levels.map(\.intensity).min() ?? 1)
+                        < (activityLanes.first?.levels.map(\.intensity).max() ?? 0)
                     && activityLanes.contains(where: { $0.title == "Development" })
                     && activityLanes.contains(where: { $0.title == "Browser use" }),
                 "activity lanes did not prioritize concise autonomous and foreground work context"

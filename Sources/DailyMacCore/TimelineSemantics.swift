@@ -137,6 +137,28 @@ public enum TimelineActivitySource: String, Equatable, Sendable {
     case automatic
 }
 
+/// One observed intensity point for an automatic-work lane. Values are
+/// normalized within the visible window so the view can communicate changes
+/// without pretending to measure productivity.
+public struct TimelineActivityLevel: Equatable, Sendable {
+    public let timestamp: Date
+    public let duration: TimeInterval
+    public let intensity: Double
+
+    public init(timestamp: Date, duration: TimeInterval, intensity: Double) {
+        self.timestamp = timestamp
+        self.duration = duration
+        self.intensity = intensity
+    }
+}
+
+private struct TimelineActivityLoadSeed {
+    let timestamp: Date
+    let duration: TimeInterval
+    let agents: Int
+    let cpu: Double
+}
+
 /// A small, time-aligned work context for the lower timeline. The title is a
 /// broad activity category, while the app identity is kept only to render the
 /// most representative local icon. It never infers focus or inspects content.
@@ -148,6 +170,8 @@ public struct TimelineActivityLane: Identifiable, Equatable, Sendable {
     public let source: TimelineActivitySource
     public let intervals: [DateInterval]
     public let observedDuration: TimeInterval
+    public let levels: [TimelineActivityLevel]
+    public let maximumAgentWorkers: Int
 
     public init(
         id: String,
@@ -156,7 +180,9 @@ public struct TimelineActivityLane: Identifiable, Equatable, Sendable {
         bundleIdentifier: String?,
         source: TimelineActivitySource,
         intervals: [DateInterval],
-        observedDuration: TimeInterval
+        observedDuration: TimeInterval,
+        levels: [TimelineActivityLevel] = [],
+        maximumAgentWorkers: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -165,6 +191,8 @@ public struct TimelineActivityLane: Identifiable, Equatable, Sendable {
         self.source = source
         self.intervals = intervals
         self.observedDuration = observedDuration
+        self.levels = levels
+        self.maximumAgentWorkers = maximumAgentWorkers
     }
 }
 
@@ -221,6 +249,8 @@ public enum TimelineSemantics {
             let intervals: [DateInterval]
             let duration: TimeInterval
             let hasAgents: Bool
+            let levels: [TimelineActivityLevel]
+            let maximumAgentWorkers: Int
         }
 
         var candidates: [Candidate] = []
@@ -251,7 +281,9 @@ public enum TimelineSemantics {
                 source: .foreground,
                 intervals: intervals,
                 duration: duration,
-                hasAgents: false
+                hasAgents: false,
+                levels: [],
+                maximumAgentWorkers: 0
             ))
         }
 
@@ -274,8 +306,36 @@ public enum TimelineSemantics {
                 if let representativeKey = appDurations.max(by: { $0.value < $1.value })?.key,
                    let representative = automaticValues.last(where: {
                        ($0.0.ownerBundleID ?? $0.0.ownerName) == representativeKey
-                   })?.0 {
+                    })?.0 {
                     let hasAgents = automaticValues.contains { $0.0.agentWorkerCount > 0 }
+                    let groupedLoads: [Date: [(BackgroundActivityPoint, DateInterval)]] =
+                        Dictionary(grouping: automaticValues, by: { $0.0.timestamp })
+                    let loads: [TimelineActivityLoadSeed] = groupedLoads
+                        .map { timestamp, values in
+                            TimelineActivityLoadSeed(
+                                timestamp: timestamp,
+                                duration: values.map { $0.1.duration }.max() ?? 0,
+                                agents: values.reduce(0) { $0 + $1.0.agentWorkerCount },
+                                cpu: values.reduce(0) { $0 + max(0, $1.0.cpuPercent) }
+                            )
+                        }
+                        .sorted { $0.timestamp < $1.timestamp }
+                    let maximumAgentWorkers = loads.map { $0.agents }.max() ?? 0
+                    let maximumCPU = loads.map { $0.cpu }.max() ?? 0
+                    let levels = loads.map { load in
+                        let workerFraction = maximumAgentWorkers > 0
+                            ? Double(load.agents) / Double(maximumAgentWorkers)
+                            : 0
+                        let cpuFraction = maximumCPU > 0 ? load.cpu / maximumCPU : 0
+                        let combined = hasAgents
+                            ? workerFraction * 0.58 + cpuFraction * 0.42
+                            : cpuFraction
+                        return TimelineActivityLevel(
+                            timestamp: load.timestamp,
+                            duration: load.duration,
+                            intensity: min(1, max(0.08, combined))
+                        )
+                    }
                     candidates.append(Candidate(
                         id: "automatic-work",
                         title: hasAgents ? "Agentic development" : "Background work",
@@ -284,7 +344,9 @@ public enum TimelineSemantics {
                         source: .automatic,
                         intervals: intervals,
                         duration: duration,
-                        hasAgents: hasAgents
+                        hasAgents: hasAgents,
+                        levels: levels,
+                        maximumAgentWorkers: maximumAgentWorkers
                     ))
                 }
             }
@@ -304,7 +366,9 @@ public enum TimelineSemantics {
                 bundleIdentifier: $0.bundleIdentifier,
                 source: $0.source,
                 intervals: $0.intervals,
-                observedDuration: $0.duration
+                observedDuration: $0.duration,
+                levels: $0.levels,
+                maximumAgentWorkers: $0.maximumAgentWorkers
             )
         }
     }

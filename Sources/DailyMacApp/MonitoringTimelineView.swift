@@ -440,10 +440,12 @@ struct MonitoringTimelineView: View, Equatable {
 
                         Spacer(minLength: 2)
 
-                        Text(lane.source == .automatic ? "AUTO" : "YOU")
+                        Text(activitySourceCaption(for: lane))
                             .font(.system(size: 8, weight: .semibold))
                             .tracking(0.3)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(lane.title), \(lane.source == .automatic ? "automatic background work" : "foreground app context")")
@@ -454,6 +456,13 @@ struct MonitoringTimelineView: View, Equatable {
 
     private func activityColor(for lane: TimelineActivityLane) -> Color {
         lane.source == .automatic ? TimelineColors.automatic : TimelineColors.handsOn
+    }
+
+    private func activitySourceCaption(for lane: TimelineActivityLane) -> String {
+        if lane.source == .automatic, lane.maximumAgentWorkers > 0 {
+            return "\(lane.maximumAgentWorkers) agents"
+        }
+        return lane.source == .automatic ? "AUTO" : "YOU"
     }
 
     @ViewBuilder
@@ -1918,6 +1927,15 @@ private struct UnifiedDataCanvas: View, Equatable {
             let color = lane.source == .automatic
                 ? TimelineColors.automatic
                 : TimelineColors.handsOn
+            if lane.source == .automatic, !lane.levels.isEmpty {
+                drawAutomaticActivity(
+                    lane.levels,
+                    color: color,
+                    in: &context,
+                    rect: CGRect(x: rect.minX, y: y, width: rect.width, height: laneHeight)
+                )
+                continue
+            }
             for interval in lane.intervals {
                 let startX = xPosition(interval.start, plotWidth: rect.width)
                 let endX = xPosition(interval.end, plotWidth: rect.width)
@@ -1943,6 +1961,89 @@ private struct UnifiedDataCanvas: View, Equatable {
                     style: StrokeStyle(lineWidth: 1, lineCap: .round)
                 )
             }
+        }
+    }
+
+    private func drawAutomaticActivity(
+        _ levels: [TimelineActivityLevel],
+        color: Color,
+        in context: inout GraphicsContext,
+        rect: CGRect
+    ) {
+        let ordered = levels.sorted { $0.timestamp < $1.timestamp }
+        guard !ordered.isEmpty else { return }
+        let baseline = rect.maxY - 1
+        let availableHeight = max(2, rect.height - 2)
+
+        var runs: [[TimelineActivityLevel]] = []
+        for level in ordered {
+            if let previous = runs.last?.last {
+                let allowedGap = max(90, max(previous.duration, level.duration) * 2.2)
+                if level.timestamp.timeIntervalSince(previous.timestamp) > allowedGap {
+                    runs.append([level])
+                } else {
+                    runs[runs.count - 1].append(level)
+                }
+            } else {
+                runs.append([level])
+            }
+        }
+
+        for run in runs {
+            let points = run.map { level in
+                CGPoint(
+                    x: xPosition(level.timestamp, plotWidth: rect.width),
+                    y: baseline - availableHeight * CGFloat(min(1, max(0, level.intensity)))
+                )
+            }
+            if points.count == 1, let point = points.first, let level = run.first {
+                let width = max(3, min(10, rect.width * CGFloat(level.duration / max(1, interval.duration))))
+                let marker = CGRect(
+                    x: point.x - width / 2,
+                    y: point.y,
+                    width: width,
+                    height: max(2, baseline - point.y)
+                )
+                context.fill(
+                    Path(roundedRect: marker, cornerRadius: min(2.5, width / 2)),
+                    with: .color(color.opacity(0.58))
+                )
+                continue
+            }
+
+            let smooth = smoothedProcessorPoints(points)
+            guard let first = smooth.first, let last = smooth.last else { continue }
+            var area = Path()
+            area.move(to: CGPoint(x: first.x, y: baseline))
+            area.addLine(to: first)
+            for point in smooth.dropFirst() { area.addLine(to: point) }
+            area.addLine(to: CGPoint(x: last.x, y: baseline))
+            area.closeSubpath()
+            context.fill(
+                area,
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: color.opacity(0.22), location: 0),
+                        .init(color: color.opacity(0.035), location: 1)
+                    ]),
+                    startPoint: CGPoint(x: rect.midX, y: rect.minY),
+                    endPoint: CGPoint(x: rect.midX, y: baseline)
+                )
+            )
+
+            var line = Path()
+            line.move(to: first)
+            for point in smooth.dropFirst() { line.addLine(to: point) }
+            context.stroke(
+                line,
+                with: .color(color.opacity(0.10)),
+                style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
+            )
+            context.stroke(
+                line,
+                with: .color(color.opacity(0.80)),
+                style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+            )
         }
     }
 
