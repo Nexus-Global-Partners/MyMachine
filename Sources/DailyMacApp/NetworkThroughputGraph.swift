@@ -100,12 +100,20 @@ struct NetworkThroughputGraph: View, Equatable {
 
     private var timeAxis: some View {
         HStack {
-            Text(interval.start.formatted(date: .omitted, time: .shortened))
+            Text(relativeWindowStartLabel)
             Spacer()
-            Text(interval.end.formatted(date: .omitted, time: .shortened))
+            Text("Now")
         }
         .font(.caption2)
         .foregroundStyle(secondaryText)
+    }
+
+    private var relativeWindowStartLabel: String {
+        let roundedMinutes = max(1, Int((interval.duration / 60).rounded()))
+        if roundedMinutes >= 60, roundedMinutes.isMultiple(of: 60) {
+            return "−\(roundedMinutes / 60)h"
+        }
+        return "−\(roundedMinutes)m"
     }
 
     private var primaryText: Color {
@@ -210,6 +218,8 @@ private struct NetworkThroughputCanvas: View, Equatable {
 
             for fraction in [0.0, 0.5, 1.0] {
                 let y = plot.maxY - plot.height * CGFloat(fraction)
+                let labelInset: CGFloat = presentation == .dashboard ? 9 : 7
+                let labelY = min(plot.maxY - labelInset, max(plot.minY + labelInset, y))
                 var grid = Path()
                 grid.move(to: CGPoint(x: plot.minX, y: y))
                 grid.addLine(to: CGPoint(x: plot.maxX, y: y))
@@ -220,7 +230,7 @@ private struct NetworkThroughputCanvas: View, Equatable {
                     Text(NetworkThroughputGraph.rateString(value))
                         .font(.system(size: presentation == .dashboard ? 12 : 10, weight: .medium, design: .rounded))
                         .foregroundStyle(presentation == .dashboard ? Color.white.opacity(0.48) : Color.secondary),
-                    at: CGPoint(x: plot.maxX + axisWidth / 2, y: y),
+                    at: CGPoint(x: plot.maxX + axisWidth / 2, y: labelY),
                     anchor: .center
                 )
             }
