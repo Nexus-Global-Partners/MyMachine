@@ -296,6 +296,7 @@ public struct InsightEngine: Sendable {
 
         let usable = clippedAppResources(samples, within: interval).filter {
             $0.duration > 0
+                && !($0.sample.ownerBundleID?.isEmpty ?? true)
                 && $0.sample.cpuPercent.isFinite
                 && $0.sample.cpuPercent > 0
                 && !$0.sample.ownerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

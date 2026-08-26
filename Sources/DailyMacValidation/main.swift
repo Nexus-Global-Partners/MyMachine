@@ -1509,6 +1509,13 @@ struct DailyMacValidation {
                     isForeground: false, cpuPercent: .nan, memoryBytes: 1,
                     diskReadBytes: 0, diskWriteBytes: 0, processCount: 1,
                     workerCount: 0, workerNames: []
+                ),
+                AppResourceSample(
+                    timestamp: end.addingTimeInterval(-30), duration: 60,
+                    ownerName: "chrome-headless-shell", ownerBundleID: nil,
+                    isForeground: false, cpuPercent: 500, memoryBytes: 1,
+                    diskReadBytes: 0, diskWriteBytes: 0, processCount: 1,
+                    workerCount: 0, workerNames: []
                 )
             ]
             let contributors = InsightEngine().makeAppComputeContributors(
@@ -1517,6 +1524,10 @@ struct DailyMacValidation {
                 limit: 3
             )
             try harness.check(contributors.count == 2, "unusable app CPU escaped evidence filtering")
+            try harness.check(
+                !contributors.contains(where: { $0.ownerName == "chrome-headless-shell" }),
+                "an unresolved process was presented as an application contributor"
+            )
             try harness.check(contributors.first?.ownerName == "Conductor", "contributors were not ranked by clipped CPU core-seconds")
             let totalShare = contributors.reduce(0) { $0 + $1.observedCPUSharePercent }
             try harness.check(abs(totalShare - 100) < 0.001, "observed app CPU shares did not normalize against all usable apps")

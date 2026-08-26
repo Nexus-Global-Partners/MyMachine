@@ -303,6 +303,7 @@ struct MonitoringTimelineView: View, Equatable {
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.primary.opacity(0.86))
                         .lineLimit(1)
+                        .help(contributor.ownerName)
                     Spacer(minLength: 2)
                     Text("\(Formatters.percent(percentage)) share")
                         .font(.caption2.monospacedDigit().weight(.semibold))
