@@ -213,8 +213,8 @@ private struct NetworkThroughputCanvas: View, Equatable {
                 ? Color.white.opacity(0.10)
                 : Color.secondary.opacity(0.16)
             let lineColor = presentation == .dashboard
-                ? Color.white.opacity(0.92)
-                : Color.primary.opacity(0.78)
+                ? Color(red: 0.20, green: 0.92, blue: 0.49)
+                : Color(nsColor: .systemGreen)
 
             for fraction in [0.0, 0.5, 1.0] {
                 let y = plot.maxY - plot.height * CGFloat(fraction)
@@ -236,35 +236,77 @@ private struct NetworkThroughputCanvas: View, Equatable {
             }
 
             for run in runs where run.count >= 2 {
+                let points = smoothedPoints(run.map { point in
+                    CGPoint(
+                        x: xPosition(point.timestamp, in: plot),
+                        y: yPosition(point.combinedBytesPerSecond, in: plot)
+                    )
+                })
+                guard let first = points.first, let last = points.last else { continue }
                 var line = Path()
                 var fill = Path()
-                for (index, point) in run.enumerated() {
-                    let x = xPosition(point.timestamp, in: plot)
-                    let y = yPosition(point.combinedBytesPerSecond, in: plot)
+                for (index, point) in points.enumerated() {
                     if index == 0 {
-                        line.move(to: CGPoint(x: x, y: y))
-                        fill.move(to: CGPoint(x: x, y: plot.maxY))
-                        fill.addLine(to: CGPoint(x: x, y: y))
+                        line.move(to: point)
+                        fill.move(to: CGPoint(x: point.x, y: plot.maxY))
+                        fill.addLine(to: point)
                     } else {
-                        line.addLine(to: CGPoint(x: x, y: y))
-                        fill.addLine(to: CGPoint(x: x, y: y))
+                        line.addLine(to: point)
+                        fill.addLine(to: point)
                     }
                 }
-                if let last = run.last {
-                    fill.addLine(to: CGPoint(x: xPosition(last.timestamp, in: plot), y: plot.maxY))
-                    fill.closeSubpath()
-                }
+                fill.addLine(to: CGPoint(x: last.x, y: plot.maxY))
+                fill.closeSubpath()
                 context.fill(
                     fill,
                     with: .linearGradient(
-                        Gradient(colors: [lineColor.opacity(0.18), lineColor.opacity(0.015)]),
-                        startPoint: CGPoint(x: plot.midX, y: plot.minY),
-                        endPoint: CGPoint(x: plot.midX, y: plot.maxY)
+                        Gradient(stops: [
+                            .init(color: lineColor.opacity(presentation == .dashboard ? 0.15 : 0.10), location: 0),
+                            .init(color: lineColor.opacity(presentation == .dashboard ? 0.045 : 0.025), location: 0.62),
+                            .init(color: lineColor.opacity(0.006), location: 1)
+                        ]),
+                        startPoint: CGPoint(x: (first.x + last.x) / 2, y: plot.minY),
+                        endPoint: CGPoint(x: (first.x + last.x) / 2, y: plot.maxY)
                     )
                 )
-                context.stroke(line, with: .color(lineColor), style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                context.stroke(
+                    line,
+                    with: .color(lineColor.opacity(presentation == .dashboard ? 0.12 : 0.09)),
+                    style: StrokeStyle(lineWidth: presentation == .dashboard ? 7.0 : 6.0, lineCap: .round, lineJoin: .round)
+                )
+                context.stroke(
+                    line,
+                    with: .color(lineColor.opacity(presentation == .dashboard ? 0.96 : 0.90)),
+                    style: StrokeStyle(lineWidth: presentation == .dashboard ? 2.8 : 2.5, lineCap: .round, lineJoin: .round)
+                )
             }
         }
+    }
+
+    /// Uses the same bounded corner-cutting language as the processor graph.
+    /// It cannot overshoot the measured range and it never joins separate runs.
+    private func smoothedPoints(_ points: [CGPoint]) -> [CGPoint] {
+        guard points.count >= 3 else { return points }
+        func cornerCut(_ input: [CGPoint]) -> [CGPoint] {
+            guard let first = input.first, let last = input.last else { return input }
+            var result: [CGPoint] = [first]
+            result.reserveCapacity(input.count * 2)
+            for index in 0..<(input.count - 1) {
+                let start = input[index]
+                let end = input[index + 1]
+                result.append(CGPoint(
+                    x: start.x * 0.75 + end.x * 0.25,
+                    y: start.y * 0.75 + end.y * 0.25
+                ))
+                result.append(CGPoint(
+                    x: start.x * 0.25 + end.x * 0.75,
+                    y: start.y * 0.25 + end.y * 0.75
+                ))
+            }
+            result.append(last)
+            return result
+        }
+        return cornerCut(cornerCut(points))
     }
 
     private func xPosition(_ timestamp: Date, in rect: CGRect) -> CGFloat {
