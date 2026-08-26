@@ -120,6 +120,13 @@ public enum TimelineSemantics {
     public static let criticalProcessorThreshold = 85.0
     public static let handsOnIntensityThreshold = 0.04
 
+    /// Returns the chronologically newest reading. Storage and refresh work may
+    /// deliver otherwise valid samples in a different array order, which must
+    /// never change what the UI calls "current."
+    public static func latestSample(from samples: [SystemSample]) -> SystemSample? {
+        samples.max { lhs, rhs in lhs.timestamp < rhs.timestamp }
+    }
+
     public static func sustainedMemoryConstraints(in intervals: [DateInterval]) -> [DateInterval] {
         intervals.filter { $0.duration >= sustainedMemoryConstraintMinimum }
     }

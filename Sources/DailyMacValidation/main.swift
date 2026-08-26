@@ -441,6 +441,12 @@ struct DailyMacValidation {
             try harness.check(Formatters.duration(5_400) == "1 hr 30 min", "hour duration wording mismatch")
             try harness.check(Formatters.activeUseToday(2_700) == "Active today · 45 min", "active-use summary was unclear")
             try harness.check(Formatters.activeUseToday(0) == "No active use observed today", "zero active use was overstated")
+            let earlier = sample(at: Date(timeIntervalSince1970: 1_780_000_000), cpu: 90)
+            let later = sample(at: Date(timeIntervalSince1970: 1_780_000_060), cpu: 10)
+            try harness.check(
+                TimelineSemantics.latestSample(from: [later, earlier])?.id == later.id,
+                "current status depended on sample array order"
+            )
             let bytes = Formatters.bytes(1_000_000_000)
             try harness.check(bytes.contains("MB") || bytes.contains("GB"), "byte units are not readable: \(bytes)")
 

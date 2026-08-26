@@ -193,7 +193,7 @@ struct ExpandedMonitoringView: View {
     }
 
     private var latestSample: SystemSample? {
-        model.monitoringSamples.last
+        TimelineSemantics.latestSample(from: model.monitoringSamples)
     }
 
     private var statusColor: Color {

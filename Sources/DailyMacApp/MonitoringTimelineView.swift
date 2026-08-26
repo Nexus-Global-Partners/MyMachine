@@ -334,7 +334,7 @@ struct MonitoringTimelineView: View, Equatable {
         isCritical: Bool = false
     ) -> some View {
         HStack(spacing: 4) {
-            Text("\(title)\(isEstimate ? " est." : "") \(Formatters.percent(value))")
+            Text("\(title)\(isEstimate ? " est." : "") \(Formatters.percent(value)) avg")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(color)
             Text("· \(meaning.lowercased())")
@@ -782,17 +782,17 @@ struct MonitoringTimelineView: View, Equatable {
             return "Building a reliable pattern"
         }
         if windowUsageSummary.longestHeavyProcessorRun >= 5 * 60 {
-            return "Heavy · \(railDuration(windowUsageSummary.longestHeavyProcessorRun)) continuous"
+            return "Longest heavy run · \(railDuration(windowUsageSummary.longestHeavyProcessorRun))"
         }
         if windowUsageSummary.heavyProcessorDuration >= 5 * 60 {
-            return "Heavy bursts · \(railDuration(windowUsageSummary.heavyProcessorDuration)) total"
+            return "Heavy time · \(railDuration(windowUsageSummary.heavyProcessorDuration)) total"
         }
         let average = max(snapshot.averageCPU, graphicsAverage ?? 0)
         if average >= TimelineSemantics.heavyProcessorThreshold {
-            return "Busy across this window"
+            return "Busy on average"
         }
-        if average >= 25 { return "Moderate · headroom left" }
-        return "Light · ample headroom"
+        if average >= 25 { return "Moderate on average · headroom left" }
+        return "Light on average · ample headroom"
     }
 
     private var processorWindowImpact: String? {
@@ -878,6 +878,9 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var batteryStatus: String {
+        if TimelineSemantics.latestSample(from: samples)?.powerSource == .adapter {
+            return "Plugged in now · earlier battery use"
+        }
         switch batteryTenPointTiming {
         case .observed(let duration):
             return "Last 10% took \(Formatters.duration(duration))"
@@ -906,7 +909,7 @@ struct MonitoringTimelineView: View, Equatable {
 
     private func processorMeaning(normal: String, criticalDuration: TimeInterval) -> String {
         criticalDuration > 0
-            ? "Near limit · \(compactStressDuration(criticalDuration))"
+            ? "Near capacity for \(compactStressDuration(criticalDuration))"
             : normal
     }
 
@@ -2275,7 +2278,7 @@ private struct TimelineInspector: View {
         if change < -128_000_000 {
             return "\(condition) · \(Formatters.percent(usedPercent)) used · swap falling to \(swap)"
         }
-        return "\(condition) · \(Formatters.percent(usedPercent)) used · swap steady at \(swap)"
+        return "\(condition) · \(Formatters.percent(usedPercent)) used · existing swap stable"
     }
 
     private func powerMeaning(_ sample: SystemSample) -> String {
