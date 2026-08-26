@@ -311,6 +311,7 @@ private final class FullscreenWindowController: ObservableObject {
     private var phase: Phase = .idle
     private var observers: [NSObjectProtocol] = []
     private var closeAfterEntry = false
+    private var usesScreenFillingFallback = false
 
     func prepare(_ window: NSWindow, allowHiddenWindow: Bool) {
         if attachedWindow === window,
@@ -324,6 +325,7 @@ private final class FullscreenWindowController: ObservableObject {
         attachedWindow = window
         phase = .preparing
         closeAfterEntry = false
+        usesScreenFillingFallback = false
         configure(window)
         observeLifecycle(of: window)
 
@@ -341,7 +343,12 @@ private final class FullscreenWindowController: ObservableObject {
         switch phase {
         case .fullScreen:
             phase = .exiting
-            window.toggleFullScreen(nil)
+            if usesScreenFillingFallback {
+                window.alphaValue = 0
+                window.close()
+            } else {
+                window.toggleFullScreen(nil)
+            }
         case .entering, .preparing:
             closeAfterEntry = true
         case .idle, .closed:
@@ -378,14 +385,40 @@ private final class FullscreenWindowController: ObservableObject {
         window.makeKeyAndOrderFront(nil)
         window.toggleFullScreen(nil)
 
-        // A failed transition must not leave an invisible process-owned window.
+        // Native full screen can occasionally be refused while a status-item
+        // panel is still yielding focus. Fill the active display as a reliable
+        // fallback instead of exposing a conventional floating window.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self, weak window] in
             guard let self, let window, self.attachedWindow === window,
                   self.phase == .entering else { return }
-            window.alphaValue = 1
             if !window.styleMask.contains(.fullScreen) {
-                self.phase = .idle
+                self.enterScreenFillingFallback(window)
             }
+        }
+    }
+
+    private func enterScreenFillingFallback(_ window: NSWindow) {
+        guard let screen = window.screen ?? NSScreen.main else {
+            phase = .idle
+            window.alphaValue = 1
+            return
+        }
+
+        usesScreenFillingFallback = true
+        phase = .fullScreen
+        window.alphaValue = 0
+        window.styleMask = [.borderless]
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 1)
+        window.isMovable = false
+        window.isMovableByWindowBackground = false
+        window.setFrame(screen.frame, display: true)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        window.alphaValue = 1
+
+        if closeAfterEntry {
+            closeAfterEntry = false
+            exitAndClose()
         }
     }
 
@@ -409,6 +442,7 @@ private final class FullscreenWindowController: ObservableObject {
         ) { [weak self, weak window] _ in
             MainActor.assumeIsolated {
                 guard let self, let window, self.attachedWindow === window else { return }
+                self.usesScreenFillingFallback = false
                 self.phase = .fullScreen
                 window.alphaValue = 1
                 if self.closeAfterEntry {
@@ -439,6 +473,7 @@ private final class FullscreenWindowController: ObservableObject {
                 guard let self, let window, self.attachedWindow === window else { return }
                 window.alphaValue = 0
                 self.phase = .closed
+                self.usesScreenFillingFallback = false
                 self.attachedWindow = nil
                 self.removeLifecycleObservers()
             }
