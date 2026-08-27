@@ -578,8 +578,8 @@ struct MonitoringTimelineView: View, Equatable {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.34),
-                                    Color.white.opacity(0.10)
+                                    compactSurfaceTint.opacity(0.13),
+                                    compactSurfaceTint.opacity(0.045)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -588,10 +588,22 @@ struct MonitoringTimelineView: View, Equatable {
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.white.opacity(0.58), lineWidth: 0.8)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.82),
+                                    compactSurfaceTint.opacity(0.32),
+                                    Color.primary.opacity(0.10)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 0.9
+                        )
                 }
         }
-        .shadow(color: Color.black.opacity(0.055), radius: 8, y: 2)
+        .shadow(color: compactSurfaceTint.opacity(0.07), radius: 9, y: 2)
+        .shadow(color: Color.black.opacity(0.06), radius: 7, y: 2)
         .accessibilityElement(children: .combine)
     }
 
@@ -668,11 +680,27 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var compactContextColor: Color {
-        guard selectedTime != nil else { return compactTakeawayColor }
+        compactSurfaceTint
+    }
+
+    private var compactSurfaceTint: Color {
+        guard selectedTime != nil else { return currentStatus.surfaceColor }
         switch selectedState {
-        case .sleep, .unrecorded: return .secondary
+        case .sleep, .unrecorded:
+            return .secondary
         case .observed(let sample):
-            return urgency(for: sample).color
+            if sample.memoryPressure != .low {
+                return TimelineColors.memoryStatus
+            }
+            let processor = max(sample.cpuPercent, sample.gpuPercent ?? 0)
+            if sample.thermalLevel == .serious || sample.thermalLevel == .critical
+                || processor >= TimelineSemantics.criticalProcessorThreshold {
+                return TimelineColors.critical
+            }
+            if sample.thermalLevel == .fair || processor >= 60 {
+                return TimelineColors.active
+            }
+            return TimelineColors.normal
         }
     }
 
@@ -682,10 +710,6 @@ struct MonitoringTimelineView: View, Equatable {
 
     private var compactTakeawaySymbol: String {
         currentStatus.symbol
-    }
-
-    private var compactTakeawayColor: Color {
-        currentStatus.color
     }
 
     private var currentStatus: TimelineCurrentStatus {
@@ -717,6 +741,7 @@ struct MonitoringTimelineView: View, Equatable {
         if latest.thermalLevel == .serious || latest.thermalLevel == .critical {
             return TimelineCurrentStatus(
                 urgency: .critical,
+                tone: .pressure,
                 message: "Heat may be limiting speed. Let one heavy task finish before adding more work."
             )
         }
@@ -724,35 +749,41 @@ struct MonitoringTimelineView: View, Equatable {
            isSustainedMemoryConstraint(at: latest.timestamp) {
             return TimelineCurrentStatus(
                 urgency: .critical,
+                tone: .memory,
                 message: "Memory is constrained. App switching may feel slower; finish an unused heavy task only if this persists."
             )
         }
         if latest.memoryPressure == .high {
             return TimelineCurrentStatus(
                 urgency: .elevated,
+                tone: .memory,
                 message: "Memory pressure rose briefly. The Mac should remain responsive; no action is needed unless it persists."
             )
         }
         if baseUrgency == .critical {
             return TimelineCurrentStatus(
                 urgency: .critical,
+                tone: .pressure,
                 message: "\(estimate)\(source) is near capacity at \(Formatters.percent(usage)). Warmth or faster battery use is normal; act only if work slows."
             )
         }
         if latest.memoryPressure == .elevated || latest.thermalLevel == .fair {
             return TimelineCurrentStatus(
                 urgency: .elevated,
+                tone: latest.memoryPressure == .elevated ? .memory : .active,
                 message: "Demand is elevated but manageable. The Mac should remain responsive; no action is needed unless slowdown repeats."
             )
         }
         if baseUrgency == .elevated {
             return TimelineCurrentStatus(
                 urgency: .elevated,
+                tone: .active,
                 message: "\(estimate)\(source) is high at \(Formatters.percent(usage)), within a normal active-work range. No action is needed."
             )
         }
         return TimelineCurrentStatus(
             urgency: .normal,
+            tone: .safe,
             message: "Demand looks normal. The Mac has comfortable headroom for active work."
         )
     }
@@ -1380,8 +1411,28 @@ private enum TimelineColors {
     static let battery = Color(nsColor: .systemGreen)
     static let memory = Color(nsColor: .systemGray)
     static let memoryElevated = Color(nsColor: .systemOrange)
+    static let memoryStatus = Color(nsColor: .systemYellow)
+    static let active = Color(nsColor: .systemCyan)
     static let normal = Color(nsColor: .systemGreen)
     static let critical = Color(nsColor: .systemRed)
+}
+
+private enum TimelineStatusTone {
+    case safe
+    case active
+    case memory
+    case pressure
+    case unavailable
+
+    var color: Color {
+        switch self {
+        case .safe: return TimelineColors.normal
+        case .active: return TimelineColors.active
+        case .memory: return TimelineColors.memoryStatus
+        case .pressure: return TimelineColors.critical
+        case .unavailable: return .secondary
+        }
+    }
 }
 
 private enum TimelineUrgency: Equatable {
@@ -1411,13 +1462,15 @@ private enum TimelineUrgency: Equatable {
 
 private struct TimelineCurrentStatus {
     let urgency: TimelineUrgency
+    let tone: TimelineStatusTone
     let message: String
 
-    var color: Color { urgency.color }
+    var color: Color { tone.color }
+    var surfaceColor: Color { tone.color }
     var symbol: String { urgency.symbol }
 
     static func unavailable(_ message: String) -> Self {
-        Self(urgency: .unavailable, message: message)
+        Self(urgency: .unavailable, tone: .unavailable, message: message)
     }
 }
 
