@@ -240,33 +240,39 @@ struct MonitoringTimelineView: View, Equatable {
     @ViewBuilder
     private var processorTrackLabel: some View {
         VStack(alignment: .leading, spacing: 3) {
-            processorKey(
-                "CPU",
-                meaning: processorMeaning(
-                    normal: cpuLabel(snapshot.averageCPU),
-                    isCurrentlyCritical: currentProcessorStress.cpuIsCritical
-                ),
-                value: snapshot.averageCPU,
-                color: currentProcessorStress.cpuIsCritical
-                    ? TimelineColors.critical
-                    : TimelineColors.processor,
-                isCritical: currentProcessorStress.cpuIsCritical
-            )
-            if let graphicsAverage {
+            if presentation != .menuBar {
                 processorKey(
-                    "GPU",
+                    "CPU",
                     meaning: processorMeaning(
-                        normal: gpuLabel(graphicsAverage),
-                        isCurrentlyCritical: currentProcessorStress.gpuIsCritical
+                        normal: cpuLabel(snapshot.averageCPU),
+                        isCurrentlyCritical: currentProcessorStress.cpuIsCritical
                     ),
-                    value: graphicsAverage,
-                    color: currentProcessorStress.gpuIsCritical
+                    value: snapshot.averageCPU,
+                    color: currentProcessorStress.cpuIsCritical
                         ? TimelineColors.critical
-                        : TimelineColors.graphics,
-                    isEstimate: true,
-                    isCritical: currentProcessorStress.gpuIsCritical
+                        : TimelineColors.processor,
+                    isCritical: currentProcessorStress.cpuIsCritical
                 )
+                if let graphicsAverage {
+                    processorKey(
+                        "GPU",
+                        meaning: processorMeaning(
+                            normal: gpuLabel(graphicsAverage),
+                            isCurrentlyCritical: currentProcessorStress.gpuIsCritical
+                        ),
+                        value: graphicsAverage,
+                        color: currentProcessorStress.gpuIsCritical
+                            ? TimelineColors.critical
+                            : TimelineColors.graphics,
+                        isEstimate: true,
+                        isCritical: currentProcessorStress.gpuIsCritical
+                    )
+                }
             }
+            Text(processorWindowPrimary)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.primary.opacity(0.82))
+                .lineLimit(presentation == .menuBar ? 1 : 2)
             if let processorMemoryKey {
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 1.5)
@@ -282,10 +288,6 @@ struct MonitoringTimelineView: View, Equatable {
                         .lineLimit(1)
                 }
             }
-            Text(processorWindowPrimary)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.primary.opacity(0.82))
-                .lineLimit(presentation == .menuBar ? 1 : 2)
             if presentation != .menuBar, let processorWindowImpact {
                 Text(processorWindowImpact)
                     .font(.caption2)
@@ -298,7 +300,7 @@ struct MonitoringTimelineView: View, Equatable {
             }
             if !visibleAppContributors.isEmpty {
                 VStack(alignment: .leading, spacing: presentation == .menuBar ? 2 : 4) {
-                    Text("OBSERVED APP CPU")
+                    Text(presentation == .menuBar ? "MOST ACTIVE APP" : "OBSERVED APP CPU")
                         .font(.system(size: 9, weight: .semibold))
                         .tracking(0.45)
                         .foregroundStyle(.secondary)
@@ -315,7 +317,10 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var visibleAppContributors: [AppComputeContribution] {
-        Array(appContributors.prefix(presentation == .menuBar ? 1 : 3))
+        if presentation == .menuBar {
+            return Array(appContributors.filter { $0.observedCPUSharePercent >= 35 }.prefix(1))
+        }
+        return Array(appContributors.prefix(3))
     }
 
     private func appContributorRow(_ contributor: AppComputeContribution) -> some View {
