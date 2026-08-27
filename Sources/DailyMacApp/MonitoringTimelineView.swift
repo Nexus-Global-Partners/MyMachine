@@ -547,18 +547,26 @@ struct MonitoringTimelineView: View, Equatable {
                 )
                 .layoutPriority(1)
             }
-            if selectedTime != nil {
-                Button {
-                    selectedTime = nil
-                } label: {
-                    Label("Show current", systemImage: "arrow.uturn.backward.circle.fill")
+            Group {
+                if selectedTime != nil {
+                    Button {
+                        selectedTime = nil
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward.circle.fill")
+                            .symbolRenderingMode(.hierarchical)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .help("Show current status")
+                    .accessibilityLabel("Return to current status")
+                } else {
+                    Color.clear
+                        .accessibilityHidden(true)
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .keyboardShortcut(.cancelAction)
-                .help("Clear selection and return to the current status")
-                .accessibilityLabel("Return to current status")
             }
+            .frame(width: 20, height: 24)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
