@@ -329,6 +329,25 @@ struct DailyMacValidation {
             try harness.check(points.allSatisfy { ($0.manualActivityIntensity ?? 0) >= 0 && ($0.manualActivityIntensity ?? 0) <= 1 }, "manual-activity intensity left its 0...1 range")
         }
 
+        await harness.run("thermal context stays categorical and never bridges gaps") {
+            let start = Date(timeIntervalSince1970: 1_780_100_000)
+            let window = DateInterval(start: start, end: start.addingTimeInterval(480))
+            let samples = [
+                sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, thermal: .fair),
+                sample(at: start.addingTimeInterval(120), duration: 60, interval: 60, thermal: .fair),
+                sample(at: start.addingTimeInterval(180), duration: 60, interval: 60, thermal: .serious),
+                sample(at: start.addingTimeInterval(240), duration: 60, interval: 60, thermal: .critical),
+                sample(at: start.addingTimeInterval(420), duration: 60, interval: 60, thermal: .fair),
+                sample(at: start.addingTimeInterval(480), duration: 60, interval: 60, thermal: .nominal)
+            ]
+            let context = TimelineSemantics.thermalContext(from: samples, within: window)
+            try harness.check(context.managedIntervals.count == 2, "thermal context bridged an unrecorded gap")
+            try harness.check(abs(context.managedDuration - 180) < 0.001, "managed-heat duration was inaccurate")
+            try harness.check(abs(context.seriousDuration - 60) < 0.001, "serious-heat duration was inaccurate")
+            try harness.check(abs(context.criticalDuration - 60) < 0.001, "critical-heat duration was inaccurate")
+            try harness.check(context.hasElevatedHeat, "elevated thermal context disappeared")
+        }
+
         await harness.run("process ownership follows app families without inspecting work content") {
             let applications = [
                 RunningApplicationIdentity(processID: 100, name: "Conductor", bundleID: "com.conductor.app", isUserApplication: true),

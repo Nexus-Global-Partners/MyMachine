@@ -29,6 +29,7 @@ struct MonitoringTimelineView: View, Equatable {
     private let showsBatteryTrack: Bool
     private let processorTrend: [ProcessorTrendPoint]
     private let memoryConditions: MemoryConditionTimeline
+    private let thermalContext: TimelineThermalContext
     private let visibleStress: TimelineVisibleStress
     private let currentProcessorStress: TimelineCurrentProcessorStress
     private let processorScaleMaximum: Double
@@ -65,6 +66,10 @@ struct MonitoringTimelineView: View, Equatable {
             within: snapshot.interval
         )
         self.memoryConditions = memoryConditions
+        self.thermalContext = TimelineSemantics.thermalContext(
+            from: orderedSamples,
+            within: snapshot.interval
+        )
         self.visibleStress = TimelineSemantics.visibleStress(
             samples: orderedSamples,
             within: snapshot.interval,
@@ -150,6 +155,7 @@ struct MonitoringTimelineView: View, Equatable {
                         samples: samples,
                         processorTrend: processorTrend,
                         memoryConditions: memoryConditions,
+                        thermalContext: thermalContext,
                         visibleStress: visibleStress,
                         batteryRuns: batteryRuns,
                         sleepIntervals: sleepIntervals,
@@ -287,6 +293,18 @@ struct MonitoringTimelineView: View, Equatable {
                             : TimelineColors.critical)
                         .lineLimit(1)
                 }
+            }
+            if let processorThermalKey {
+                HStack(spacing: 4) {
+                    Image(systemName: "thermometer.medium")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(processorThermalKey.color)
+                    Text(processorThermalKey.text)
+                        .font(.caption2)
+                        .foregroundStyle(processorThermalKey.color)
+                        .lineLimit(1)
+                }
+                .help("This is macOS thermal-pressure context, not an exact temperature or fan-speed reading.")
             }
             if presentation != .menuBar, let processorWindowImpact {
                 Text(processorWindowImpact)
@@ -492,6 +510,28 @@ struct MonitoringTimelineView: View, Equatable {
                 ? "Memory constrained"
                 : "Brief memory pressure"
         }
+    }
+
+    private var processorThermalKey: (text: String, color: Color)? {
+        if thermalContext.criticalDuration > 0 {
+            return (
+                "Heat limited speed · \(compactStressDuration(thermalContext.criticalDuration))",
+                TimelineColors.critical
+            )
+        }
+        if thermalContext.seriousDuration > 0 {
+            return (
+                "Heat pressure · \(compactStressDuration(thermalContext.seriousDuration))",
+                TimelineColors.critical
+            )
+        }
+        if thermalContext.managedDuration > 0 {
+            return (
+                "Heat being managed · \(compactStressDuration(thermalContext.managedDuration))",
+                TimelineColors.thermal
+            )
+        }
+        return nil
     }
 
     @ViewBuilder
@@ -1412,6 +1452,7 @@ private enum TimelineColors {
     static let memory = Color(nsColor: .systemGray)
     static let memoryElevated = Color(nsColor: .systemOrange)
     static let memoryStatus = Color(nsColor: .systemYellow)
+    static let thermal = Color(nsColor: .systemOrange)
     static let active = Color(nsColor: .systemCyan)
     static let normal = Color(nsColor: .systemGreen)
     static let critical = Color(nsColor: .systemRed)
@@ -1602,6 +1643,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     let samples: [SystemSample]
     let processorTrend: [ProcessorTrendPoint]
     let memoryConditions: MemoryConditionTimeline
+    let thermalContext: TimelineThermalContext
     let visibleStress: TimelineVisibleStress
     let batteryRuns: [BatteryTimelineRun]
     let sleepIntervals: [DateInterval]
@@ -1613,6 +1655,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         lhs.samples == rhs.samples
             && lhs.processorTrend == rhs.processorTrend
             && lhs.memoryConditions == rhs.memoryConditions
+            && lhs.thermalContext == rhs.thermalContext
             && lhs.visibleStress == rhs.visibleStress
             && lhs.batteryRuns == rhs.batteryRuns
             && lhs.sleepIntervals == rhs.sleepIntervals
@@ -1627,6 +1670,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawTrackBackgrounds(in: &context, rects: rects)
             drawProcessorGrid(in: &context, rect: rects.cpu, rightAxisX: rects.plotWidth)
             drawConfirmedSleep(in: &context, size: size, plotWidth: rects.plotWidth)
+            drawThermalAtmosphere(in: &context, rect: rects.cpu)
             drawProcessorMemory(in: &context, rect: rects.cpu)
             drawProcessor(in: &context, rect: rects.cpu)
             if let battery = rects.battery {
@@ -1720,6 +1764,76 @@ private struct UnifiedDataCanvas: View, Equatable {
                     anchor: .top
                 )
             }
+        }
+    }
+
+    /// A quiet light ribbon at the top of the processor plot communicates the
+    /// supported macOS thermal state. Its different geometry keeps it distinct
+    /// from the vertical amber memory markers and subordinate to CPU/GPU lines.
+    private func drawThermalAtmosphere(in context: inout GraphicsContext, rect: CGRect) {
+        let plot = rect.insetBy(dx: 0, dy: 6)
+        drawThermalRuns(
+            thermalContext.managedIntervals,
+            in: &context,
+            plot: plot,
+            color: TimelineColors.thermal,
+            bandOpacity: 0.028,
+            rayOpacity: 0.34
+        )
+        drawThermalRuns(
+            thermalContext.seriousIntervals + thermalContext.criticalIntervals,
+            in: &context,
+            plot: plot,
+            color: TimelineColors.critical,
+            bandOpacity: 0.045,
+            rayOpacity: 0.66
+        )
+    }
+
+    private func drawThermalRuns(
+        _ runs: [DateInterval],
+        in context: inout GraphicsContext,
+        plot: CGRect,
+        color: Color,
+        bandOpacity: Double,
+        rayOpacity: Double
+    ) {
+        for run in runs {
+            let rawStart = xPosition(run.start, plotWidth: plot.width)
+            let rawEnd = xPosition(run.end, plotWidth: plot.width)
+            let center = (rawStart + rawEnd) / 2
+            let width = min(plot.width, max(6, rawEnd - rawStart))
+            let x = min(max(plot.minX, center - width / 2), max(plot.minX, plot.maxX - width))
+            let band = CGRect(x: x, y: plot.minY, width: width, height: plot.height)
+            let fade = min(0.42, max(0.12, 2.5 / max(1, width)))
+
+            context.fill(
+                Path(roundedRect: band, cornerRadius: 3),
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: color.opacity(0), location: 0),
+                        .init(color: color.opacity(bandOpacity), location: fade),
+                        .init(color: color.opacity(bandOpacity * 0.58), location: 1 - fade),
+                        .init(color: color.opacity(0), location: 1)
+                    ]),
+                    startPoint: CGPoint(x: band.minX, y: band.midY),
+                    endPoint: CGPoint(x: band.maxX, y: band.midY)
+                )
+            )
+
+            var ray = Path()
+            ray.move(to: CGPoint(x: band.minX + 1, y: plot.minY + 1.5))
+            ray.addLine(to: CGPoint(x: band.maxX - 1, y: plot.minY + 1.5))
+            context.stroke(
+                ray,
+                with: .color(color.opacity(rayOpacity * 0.16)),
+                style: StrokeStyle(lineWidth: 6, lineCap: .round)
+            )
+            context.stroke(
+                ray,
+                with: .color(color.opacity(rayOpacity)),
+                style: StrokeStyle(lineWidth: 1.15, lineCap: .round)
+            )
         }
     }
 
@@ -2333,6 +2447,9 @@ private struct UnifiedDataCanvas: View, Equatable {
         }
         if !sustainedMemory.isEmpty {
             summary += " Red bands indicate memory constrained for at least two minutes, when slowdown is more likely."
+        }
+        if thermalContext.hasElevatedHeat {
+            summary += " A quiet warm ribbon at the top of the processor plot marks periods when macOS reported reduced thermal headroom; it is not an exact temperature or fan-speed reading."
         }
         return summary
     }

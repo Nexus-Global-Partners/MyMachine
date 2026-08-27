@@ -54,8 +54,8 @@ public enum MetricCatalog {
         ),
         MetricDisclosure(
             metric: "Thermal state", origin: .measured,
-            plainLanguage: "Whether heat was beginning to constrain the Mac.",
-            technicalDetail: "Read from ProcessInfo's system thermal state. Exact temperatures are intentionally not claimed."
+            plainLanguage: "Whether heat was beginning to constrain the Mac, shown as a quiet warm ribbon in the processor graph.",
+            technicalDetail: "Read from ProcessInfo's system thermal state. The ribbon communicates categorical thermal headroom; exact temperatures are intentionally not claimed."
         ),
         MetricDisclosure(
             metric: "Disk activity", origin: .measured,
@@ -84,7 +84,7 @@ public enum MetricCatalog {
         ),
         MetricDisclosure(
             metric: "Fan speed and temperatures", origin: .unavailable,
-            plainLanguage: "Not shown; the supported thermal state is used instead.",
+            plainLanguage: "Not shown; supported thermal headroom is used instead.",
             technicalDetail: "Fan RPM and sensor temperatures would require model-specific or unsupported interfaces, so MY MACHINE does not claim them."
         )
     ]

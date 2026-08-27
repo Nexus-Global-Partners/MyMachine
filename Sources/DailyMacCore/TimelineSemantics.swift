@@ -112,6 +112,42 @@ public struct TimelineVisibleStress: Equatable, Sendable {
     }
 }
 
+/// Supported, categorical heat context for the shared machine timeline. macOS
+/// exposes thermal pressure—not model-specific sensor temperatures or fan RPM—
+/// so these intervals intentionally describe practical headroom rather than
+/// inventing degrees or ventilation speed.
+public struct TimelineThermalContext: Equatable, Sendable {
+    public let managedIntervals: [DateInterval]
+    public let seriousIntervals: [DateInterval]
+    public let criticalIntervals: [DateInterval]
+
+    public init(
+        managedIntervals: [DateInterval],
+        seriousIntervals: [DateInterval],
+        criticalIntervals: [DateInterval]
+    ) {
+        self.managedIntervals = managedIntervals
+        self.seriousIntervals = seriousIntervals
+        self.criticalIntervals = criticalIntervals
+    }
+
+    public var managedDuration: TimeInterval {
+        managedIntervals.reduce(0) { $0 + $1.duration }
+    }
+
+    public var seriousDuration: TimeInterval {
+        seriousIntervals.reduce(0) { $0 + $1.duration }
+    }
+
+    public var criticalDuration: TimeInterval {
+        criticalIntervals.reduce(0) { $0 + $1.duration }
+    }
+
+    public var hasElevatedHeat: Bool {
+        !managedIntervals.isEmpty || !seriousIntervals.isEmpty || !criticalIntervals.isEmpty
+    }
+}
+
 /// The red identity shown beside the graph must describe the newest trustworthy
 /// reading, never an earlier red interval that remains visible in history.
 public struct TimelineCurrentProcessorStress: Equatable, Sendable {
@@ -422,6 +458,35 @@ public enum TimelineSemantics {
             memoryCriticalIntervals: sustainedMemoryConstraints(
                 in: constrainedMemoryIntervals
             )
+        )
+    }
+
+    public static func thermalContext(
+        from samples: [SystemSample],
+        within window: DateInterval
+    ) -> TimelineThermalContext {
+        var managed: [DateInterval] = []
+        var serious: [DateInterval] = []
+        var critical: [DateInterval] = []
+
+        for sample in samples.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard let interval = observedInterval(for: sample, within: window) else { continue }
+            switch sample.thermalLevel {
+            case .fair:
+                managed.append(interval)
+            case .serious:
+                serious.append(interval)
+            case .critical:
+                critical.append(interval)
+            case .nominal, .unknown:
+                break
+            }
+        }
+
+        return TimelineThermalContext(
+            managedIntervals: mergeMeasuredIntervals(managed),
+            seriousIntervals: mergeMeasuredIntervals(serious),
+            criticalIntervals: mergeMeasuredIntervals(critical)
         )
     }
 
