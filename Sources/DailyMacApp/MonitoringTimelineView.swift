@@ -278,13 +278,13 @@ struct MonitoringTimelineView: View, Equatable {
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(visibleStress.memoryCriticalIntervals.isEmpty
-                            ? TimelineColors.memory
+                            ? TimelineColors.memoryElevated
                             : TimelineColors.critical)
                         .frame(width: 10, height: 4)
                     Text(processorMemoryKey)
                         .font(.caption2)
                         .foregroundStyle(visibleStress.memoryCriticalIntervals.isEmpty
-                            ? Color.secondary
+                            ? TimelineColors.memoryElevated
                             : TimelineColors.critical)
                         .lineLimit(1)
                 }
@@ -1311,6 +1311,7 @@ private enum TimelineColors {
     static let graphics = Color(nsColor: .systemTeal)
     static let battery = Color(nsColor: .systemGreen)
     static let memory = Color(nsColor: .systemGray)
+    static let memoryElevated = Color(nsColor: .systemOrange)
     static let normal = Color(nsColor: .systemGreen)
     static let critical = Color(nsColor: .systemRed)
 }
@@ -1937,18 +1938,20 @@ private struct UnifiedDataCanvas: View, Equatable {
         let sustained = visibleStress.memoryCriticalIntervals
         let brief = memoryConditions.constrained.filter { !sustained.contains($0) }
         drawProcessorMemoryRuns(
-            brief,
+            memoryConditions.elevated + brief,
             in: &context,
             plot: plot,
-            color: TimelineColors.memory,
-            bandOpacity: 0.055
+            color: TimelineColors.memoryElevated,
+            bandOpacity: 0.075,
+            lineOpacity: 0.34
         )
         drawProcessorMemoryRuns(
             sustained,
             in: &context,
             plot: plot,
             color: TimelineColors.critical,
-            bandOpacity: 0.085
+            bandOpacity: 0.085,
+            lineOpacity: 0.30
         )
     }
 
@@ -1957,7 +1960,8 @@ private struct UnifiedDataCanvas: View, Equatable {
         in context: inout GraphicsContext,
         plot: CGRect,
         color: Color,
-        bandOpacity: Double
+        bandOpacity: Double,
+        lineOpacity: Double
     ) {
         let rawSpans = runs.map { run in
             (
@@ -1994,6 +1998,14 @@ private struct UnifiedDataCanvas: View, Equatable {
                     startPoint: CGPoint(x: band.minX, y: band.midY),
                     endPoint: CGPoint(x: band.maxX, y: band.midY)
                 )
+            )
+            var marker = Path()
+            marker.move(to: CGPoint(x: band.midX, y: band.minY))
+            marker.addLine(to: CGPoint(x: band.midX, y: band.maxY))
+            context.stroke(
+                marker,
+                with: .color(color.opacity(lineOpacity)),
+                style: StrokeStyle(lineWidth: 1, lineCap: .round)
             )
         }
     }
@@ -2196,7 +2208,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         let sustainedMemory = visibleStress.memoryCriticalIntervals
         let briefMemory = memoryConditions.constrained.filter { !sustainedMemory.contains($0) }
         if !memoryConditions.elevated.isEmpty || !briefMemory.isEmpty {
-            summary += " Neutral gray bands show elevated or brief memory pressure that is worth watching but not constrained."
+            summary += " Amber markers show elevated or brief memory pressure that is worth watching but not constrained."
         }
         if !sustainedMemory.isEmpty {
             summary += " Red bands indicate memory constrained for at least two minutes, when slowdown is more likely."
