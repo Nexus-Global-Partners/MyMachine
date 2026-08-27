@@ -254,7 +254,19 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private func calmProcessorLegend(_ reading: TimelineLiveProcessorReading) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: calmStatusSignal.symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(calmStatusSignal.label)
+                    .font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(calmStatusSignal.color)
+
+            Divider()
+                .frame(height: 12)
+                .opacity(0.45)
+
             calmProcessorLegendMetric(
                 title: "CPU",
                 value: reading.cpuPercent,
@@ -282,8 +294,45 @@ struct MonitoringTimelineView: View, Equatable {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(processorAccessibilityLabel(
             reading,
-            label: selectedTime == nil ? "Live two minute average" : "Selected reading"
+            label: "\(calmStatusSignal.label). \(selectedTime == nil ? "Live two minute average" : "Selected reading")"
         ))
+        .help(calmStatusSignal.help)
+    }
+
+    private var calmStatusSignal: (symbol: String, label: String, color: Color, help: String) {
+        if selectedTime != nil {
+            switch selectedState {
+            case .sleep:
+                return ("moon.fill", "Asleep", .secondary, "The Mac was asleep at the selected time.")
+            case .unrecorded:
+                return ("clock.badge.questionmark", "No data", .secondary, "No reading was recorded at the selected time.")
+            case .observed(let sample):
+                if sample.thermalLevel == .serious || sample.thermalLevel == .critical {
+                    return ("thermometer.high", "Heat", TimelineColors.critical, "Heat may have limited speed at the selected time.")
+                }
+                if sample.memoryPressure == .high {
+                    return ("memorychip", "Memory", TimelineColors.memoryStatus, "Memory pressure was high at the selected time.")
+                }
+                let processor = max(sample.cpuPercent, sample.gpuPercent ?? 0)
+                if processor >= TimelineSemantics.criticalProcessorThreshold {
+                    return ("exclamationmark.triangle.fill", "Near limit", TimelineColors.critical, "Processor demand was near capacity at the selected time.")
+                }
+                if sample.memoryPressure == .elevated || sample.thermalLevel == .fair || processor >= 60 {
+                    return ("waveform.path.ecg", "Busy", TimelineColors.active, "Demand was elevated but manageable at the selected time.")
+                }
+                return ("checkmark.circle", "Comfortable", TimelineColors.normal, "The Mac had comfortable headroom at the selected time.")
+            }
+        }
+
+        let label: String
+        switch currentStatus.tone {
+        case .safe: label = "Comfortable"
+        case .active: label = "Busy"
+        case .memory: label = "Memory"
+        case .pressure: label = "Near limit"
+        case .unavailable: label = "Waiting"
+        }
+        return (currentStatus.symbol, label, currentStatus.color, currentStatus.message)
     }
 
     private func calmProcessorLegendMetric(
