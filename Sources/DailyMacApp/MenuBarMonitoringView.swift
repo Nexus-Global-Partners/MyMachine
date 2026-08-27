@@ -1,4 +1,5 @@
 import AppKit
+import DailyMacCore
 import SwiftUI
 
 struct MenuBarMonitoringView: View {
@@ -55,7 +56,7 @@ struct MenuBarMonitoringView: View {
                 Text("Monitoring")
                     .font(.headline)
                 HStack(spacing: 5) {
-                    Text("Last hour")
+                    Text(menuBarRangeTitle)
                     Text("·")
                     if let dataThrough = model.menuBarMonitoringContent?.dataThrough {
                         Text("Data through \(dataThrough.formatted(date: .omitted, time: .shortened))")
@@ -68,6 +69,24 @@ struct MenuBarMonitoringView: View {
             }
 
             Spacer(minLength: 12)
+
+            Picker(
+                "History range",
+                selection: Binding(
+                    get: { model.menuBarMonitoringRange },
+                    set: { model.selectMenuBarMonitoringRange($0) }
+                )
+            ) {
+                Text("1h").tag(MonitoringRange.oneHour)
+                Text("6h").tag(MonitoringRange.sixHours)
+                Text("12h").tag(MonitoringRange.twelveHours)
+                Text("24h").tag(MonitoringRange.twentyFourHours)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .frame(width: 174)
+            .help("Choose how much history to show")
 
             VStack(alignment: .trailing, spacing: 6) {
                 ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
@@ -106,6 +125,17 @@ struct MenuBarMonitoringView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    private var menuBarRangeTitle: String {
+        let displayedRange = model.menuBarMonitoringContent?.snapshot.range
+            ?? model.menuBarMonitoringRange
+        switch displayedRange {
+        case .oneHour: return "Last hour"
+        case .sixHours: return "Last 6 hours"
+        case .twelveHours: return "Last 12 hours"
+        case .twentyFourHours: return "Last 24 hours"
+        }
     }
 
     private var emptyState: some View {

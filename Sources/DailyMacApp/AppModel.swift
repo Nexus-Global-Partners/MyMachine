@@ -111,6 +111,7 @@ final class AppModel: ObservableObject {
     @Published var monitoringRange: MonitoringRange = .twentyFourHours
     @Published private(set) var monitoringContent: MonitoringDisplayState?
     @Published var monitoringIsRefreshing = false
+    @Published private(set) var menuBarMonitoringRange: MonitoringRange = .oneHour
     @Published private(set) var menuBarMonitoringContent: MonitoringDisplayState?
     @Published private(set) var menuBarIsRefreshing = false
     @Published private(set) var menuBarRefreshMessage: String?
@@ -430,13 +431,27 @@ final class AppModel: ObservableObject {
     }
 
     /// Called for every menu-bar presentation. Existing content stays visible
-    /// while one coalesced, database-only refresh prepares the latest hour.
+    /// while one coalesced, database-only refresh prepares the selected range.
     func menuBarDidOpen() {
         beginMenuBarRefreshIfNeeded(endingAt: Date())
     }
 
     func refreshMenuBarNow() {
-        beginMenuBarRefreshIfNeeded(endingAt: Date())
+        restartMenuBarRefresh(endingAt: Date())
+    }
+
+    func selectMenuBarMonitoringRange(_ range: MonitoringRange) {
+        guard menuBarMonitoringRange != range else { return }
+        menuBarMonitoringRange = range
+        restartMenuBarRefresh(endingAt: Date())
+    }
+
+    private func restartMenuBarRefresh(endingAt now: Date) {
+        menuBarRefreshGeneration &+= 1
+        menuBarRefreshTask?.cancel()
+        menuBarRefreshTask = nil
+        menuBarIsRefreshing = false
+        beginMenuBarRefreshIfNeeded(endingAt: now)
     }
 
     func setBriefingNotifications(_ enabled: Bool) {
@@ -764,6 +779,7 @@ final class AppModel: ObservableObject {
         menuBarRefreshGeneration &+= 1
         let generation = menuBarRefreshGeneration
         let refreshEpoch = dataEpoch
+        let range = menuBarMonitoringRange
         menuBarIsRefreshing = true
         menuBarRefreshMessage = nil
 
@@ -771,14 +787,15 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             do {
                 let content = try await self.makeMonitoringContent(
-                    range: .oneHour,
+                    range: range,
                     endingAt: now,
-                    limit: 480
+                    limit: 720
                 )
                 guard !Task.isCancelled,
                       generation == self.menuBarRefreshGeneration,
                       refreshEpoch == self.dataEpoch,
-                      !self.dataEraseInProgress else { return }
+                      !self.dataEraseInProgress,
+                      range == self.menuBarMonitoringRange else { return }
                 self.menuBarMonitoringContent = content
             } catch {
                 guard generation == self.menuBarRefreshGeneration else { return }
