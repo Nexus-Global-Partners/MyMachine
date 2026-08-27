@@ -91,6 +91,38 @@ struct MonitoringRangePickerControl: View {
     }
 }
 
+/// A deliberately compact mode switch: it stays discoverable without adding a
+/// second segmented control beside the history range.
+struct TimelineDisplayModeControl: View {
+    @AppStorage(TimelineDisplayMode.storageKey)
+    private var storedMode = TimelineDisplayMode.precise.rawValue
+
+    var body: some View {
+        Menu {
+            ForEach(TimelineDisplayMode.allCases) { option in
+                Button {
+                    storedMode = option.rawValue
+                } label: {
+                    Label(option.label, systemImage: option == mode ? "checkmark" : option.symbol)
+                }
+            }
+        } label: {
+            Label(mode.label, systemImage: mode.symbol)
+                .lineLimit(1)
+        }
+        .buttonStyle(GlassySecondaryButtonStyle())
+        .fixedSize()
+        .help(mode == .calm
+            ? "Calm shows the longer trend with fewer short-lived movements"
+            : "Precise keeps interval-level detail for close inspection")
+        .accessibilityLabel("Graph mode, \(mode.label)")
+    }
+
+    private var mode: TimelineDisplayMode {
+        TimelineDisplayMode(rawValue: storedMode) ?? .precise
+    }
+}
+
 private struct GlassySecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

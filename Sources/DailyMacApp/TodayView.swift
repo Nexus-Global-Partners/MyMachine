@@ -4,6 +4,8 @@ import SwiftUI
 struct MonitoringView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openWindow) private var openWindow
+    @AppStorage(TimelineDisplayMode.storageKey)
+    private var timelineDisplayMode = TimelineDisplayMode.precise.rawValue
 
     var body: some View {
         ScrollView {
@@ -21,7 +23,8 @@ struct MonitoringView: View {
                                     samples: model.monitoringSamples,
                                     backgroundPoints: model.monitoringBackgroundPoints,
                                     events: model.monitoringEvents,
-                                    appContributors: model.monitoringAppContributors
+                                    appContributors: model.monitoringAppContributors,
+                                    displayMode: selectedTimelineDisplayMode
                                 )
                                 .equatable()
                             }
@@ -108,6 +111,8 @@ struct MonitoringView: View {
 
     private var rangeRefreshControls: some View {
         HStack(alignment: .center, spacing: 18) {
+            TimelineDisplayModeControl()
+
             MonitoringRangePickerControl(
                 selection: model.monitoringRange,
                 itemWidth: 48,
@@ -140,6 +145,10 @@ struct MonitoringView: View {
             .help("Open full-screen dashboard")
             .accessibilityLabel("Open full-screen dashboard")
         }
+    }
+
+    private var selectedTimelineDisplayMode: TimelineDisplayMode {
+        TimelineDisplayMode(rawValue: timelineDisplayMode) ?? .precise
     }
 
     private func backgroundWork(_ snapshot: MonitoringSnapshot) -> some View {

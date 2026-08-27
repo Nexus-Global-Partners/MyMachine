@@ -49,6 +49,32 @@ public enum TimelineSelection: Equatable, Sendable {
     case unrecorded
 }
 
+/// Controls how much short-lived movement the shared machine graph exposes.
+/// Precise keeps interval-level evidence for inspection; Calm uses longer
+/// time-weighted windows so the overall shape is readable at a glance.
+public enum TimelineDisplayMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case calm
+    case precise
+
+    public static let storageKey = "monitoringTimelineDisplayMode"
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .calm: return "Calm"
+        case .precise: return "Precise"
+        }
+    }
+
+    public var symbol: String {
+        switch self {
+        case .calm: return "water.waves"
+        case .precise: return "waveform.path.ecg"
+        }
+    }
+}
+
 /// A compact, evidence-bounded reading of the currently visible timeline.
 /// Durations include only intervals that were actually recorded; missing time is
 /// never relabeled as quiet use, heavy work, or hands-on activity.
@@ -249,6 +275,25 @@ public struct TimelineActivityLane: Identifiable, Equatable, Sendable {
 /// Pure rules shared by the native timeline and validation executable. They keep
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
+    /// A stable, range-aware averaging window for the processor plot. Calm mode
+    /// intentionally targets roughly 20–30 meaningful movements per range;
+    /// Precise mode retains the existing close-inspection density.
+    public static func processorTrendBucketDuration(
+        for range: MonitoringRange,
+        displayMode: TimelineDisplayMode
+    ) -> TimeInterval {
+        switch (displayMode, range) {
+        case (.precise, .oneHour): return 30
+        case (.precise, .sixHours): return 120
+        case (.precise, .twelveHours): return 300
+        case (.precise, .twentyFourHours): return 600
+        case (.calm, .oneHour): return 3 * 60
+        case (.calm, .sixHours): return 12 * 60
+        case (.calm, .twelveHours): return 24 * 60
+        case (.calm, .twentyFourHours): return 45 * 60
+        }
+    }
+
     public static let sustainedMemoryConstraintMinimum: TimeInterval = 2 * 60
     public static let heavyProcessorThreshold = 60.0
     public static let criticalProcessorThreshold = 85.0

@@ -19,6 +19,7 @@ struct MonitoringTimelineView: View, Equatable {
     let appContributors: [AppComputeContribution]
     let presentation: TimelinePresentation
     let expandedProcessorHeight: CGFloat?
+    let displayMode: TimelineDisplayMode
 
     @State private var selectedTime: Date?
 
@@ -45,7 +46,8 @@ struct MonitoringTimelineView: View, Equatable {
         events: [ActivityEvent],
         appContributors: [AppComputeContribution] = [],
         presentation: TimelinePresentation = .full,
-        expandedProcessorHeight: CGFloat? = nil
+        expandedProcessorHeight: CGFloat? = nil,
+        displayMode: TimelineDisplayMode = .precise
     ) {
         self.snapshot = snapshot
         let orderedSamples = samples.sorted(by: { $0.timestamp < $1.timestamp })
@@ -55,11 +57,13 @@ struct MonitoringTimelineView: View, Equatable {
         self.appContributors = appContributors
         self.presentation = presentation
         self.expandedProcessorHeight = expandedProcessorHeight
+        self.displayMode = displayMode
         self.interval = snapshot.interval
         let processorTrend = Self.makeProcessorTrend(
             from: orderedSamples,
             within: snapshot.interval,
-            range: snapshot.range
+            range: snapshot.range,
+            displayMode: displayMode
         )
         self.processorTrend = processorTrend
         let memoryConditions = Self.makeMemoryConditions(
@@ -84,7 +88,17 @@ struct MonitoringTimelineView: View, Equatable {
             from: orderedSamples,
             relativeTo: snapshot.interval.end
         )
-        self.processorScaleMaximum = Self.processorScaleMaximum(for: processorTrend)
+        if displayMode == .precise {
+            self.processorScaleMaximum = Self.processorScaleMaximum(for: processorTrend)
+        } else {
+            let preciseTrend = Self.makeProcessorTrend(
+                from: orderedSamples,
+                within: snapshot.interval,
+                range: snapshot.range,
+                displayMode: .precise
+            )
+            self.processorScaleMaximum = Self.processorScaleMaximum(for: preciseTrend)
+        }
         self.windowUsageSummary = TimelineSemantics.windowUsageSummary(
             from: orderedSamples,
             within: snapshot.interval
@@ -135,6 +149,7 @@ struct MonitoringTimelineView: View, Equatable {
             && lhs.appContributors == rhs.appContributors
             && lhs.presentation == rhs.presentation
             && lhs.expandedProcessorHeight == rhs.expandedProcessorHeight
+            && lhs.displayMode == rhs.displayMode
     }
 
     var body: some View {
@@ -167,7 +182,8 @@ struct MonitoringTimelineView: View, Equatable {
                         sleepIntervals: sleepIntervals,
                         interval: interval,
                         processorScaleMaximum: processorScaleMaximum,
-                        layout: layout
+                        layout: layout,
+                        displayMode: displayMode
                     )
                     .equatable()
 
@@ -1242,15 +1258,13 @@ struct MonitoringTimelineView: View, Equatable {
     private static func makeProcessorTrend(
         from samples: [SystemSample],
         within interval: DateInterval,
-        range: MonitoringRange
+        range: MonitoringRange,
+        displayMode: TimelineDisplayMode
     ) -> [ProcessorTrendPoint] {
-        let bucketDuration: TimeInterval
-        switch range {
-        case .oneHour: bucketDuration = 30
-        case .sixHours: bucketDuration = 120
-        case .twelveHours: bucketDuration = 300
-        case .twentyFourHours: bucketDuration = 600
-        }
+        let bucketDuration = TimelineSemantics.processorTrendBucketDuration(
+            for: range,
+            displayMode: displayMode
+        )
 
         var buckets: [ProcessorBucketKey: [SystemSample]] = [:]
         var segment = 0
@@ -1739,6 +1753,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     let interval: DateInterval
     let processorScaleMaximum: Double
     let layout: UnifiedTimelineLayout
+    let displayMode: TimelineDisplayMode
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.samples == rhs.samples
@@ -1752,6 +1767,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             && lhs.interval == rhs.interval
             && lhs.processorScaleMaximum == rhs.processorScaleMaximum
             && lhs.layout == rhs.layout
+            && lhs.displayMode == rhs.displayMode
     }
 
     var body: some View {
@@ -1868,16 +1884,16 @@ private struct UnifiedDataCanvas: View, Equatable {
             in: &context,
             plot: plot,
             color: TimelineColors.thermal,
-            bandOpacity: 0.028,
-            rayOpacity: 0.34
+            bandOpacity: displayMode == .calm ? 0.016 : 0.028,
+            rayOpacity: displayMode == .calm ? 0.20 : 0.34
         )
         drawThermalRuns(
             thermalContext.seriousIntervals + thermalContext.criticalIntervals,
             in: &context,
             plot: plot,
             color: TimelineColors.critical,
-            bandOpacity: 0.045,
-            rayOpacity: 0.66
+            bandOpacity: displayMode == .calm ? 0.028 : 0.045,
+            rayOpacity: displayMode == .calm ? 0.46 : 0.66
         )
     }
 
@@ -2073,34 +2089,38 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawProcessorArea(
                 cpuDisplayPoints,
                 color: TimelineColors.processor,
-                topOpacity: coreSplitRuns.isEmpty ? 0.095 : 0.048,
+                topOpacity: displayMode == .calm
+                    ? 0.070
+                    : (coreSplitRuns.isEmpty ? 0.095 : 0.048),
                 in: &context,
                 plot: plot
             )
-            for run in coreSplitRuns {
-                // One blue language, two quiet densities: the lower wash is the
-                // efficiency-core share; the stronger upper wash is performance-core work.
-                drawProcessorArea(
-                    run.efficiencyBoundary,
-                    color: TimelineColors.processor,
-                    topOpacity: 0.038,
-                    in: &context,
-                    plot: plot
-                )
-                drawProcessorBand(
-                    upper: run.cpu,
-                    lower: run.efficiencyBoundary,
-                    color: TimelineColors.processor,
-                    opacity: 0.072,
-                    in: &context,
-                    plot: plot
-                )
+            if displayMode == .precise {
+                for run in coreSplitRuns {
+                    // One blue language, two quiet densities: the lower wash is the
+                    // efficiency-core share; the stronger upper wash is performance-core work.
+                    drawProcessorArea(
+                        run.efficiencyBoundary,
+                        color: TimelineColors.processor,
+                        topOpacity: 0.038,
+                        in: &context,
+                        plot: plot
+                    )
+                    drawProcessorBand(
+                        upper: run.cpu,
+                        lower: run.efficiencyBoundary,
+                        color: TimelineColors.processor,
+                        opacity: 0.072,
+                        in: &context,
+                        plot: plot
+                    )
+                }
             }
             for run in graphicsDisplayRuns {
                 drawProcessorArea(
                     run,
                     color: TimelineColors.graphics,
-                    topOpacity: 0.08,
+                    topOpacity: displayMode == .calm ? 0.060 : 0.08,
                     in: &context,
                     plot: plot
                 )
@@ -2109,13 +2129,14 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawProcessorLine(
                 cpuDisplayPoints,
                 color: TimelineColors.processor,
-                lineWidth: 1.9,
+                lineWidth: displayMode == .calm ? 2.15 : 1.9,
                 in: &context,
                 plot: plot
             )
             drawProcessorUrgency(
                 cpuDisplayPoints,
                 criticalIntervals: visibleStress.cpuCriticalIntervals,
+                subdued: displayMode == .calm,
                 in: &context,
                 plot: plot
             )
@@ -2123,13 +2144,14 @@ private struct UnifiedDataCanvas: View, Equatable {
                 drawProcessorLine(
                     run,
                     color: TimelineColors.graphics,
-                    lineWidth: 1.8,
+                    lineWidth: displayMode == .calm ? 2.05 : 1.8,
                     in: &context,
                     plot: plot
                 )
                 drawProcessorUrgency(
                     run,
                     criticalIntervals: visibleStress.gpuCriticalIntervals,
+                    subdued: displayMode == .calm,
                     in: &context,
                     plot: plot
                 )
@@ -2160,7 +2182,8 @@ private struct UnifiedDataCanvas: View, Equatable {
             result.append(last)
             return result
         }
-        return cornerCut(cornerCut(points))
+        let twice = cornerCut(cornerCut(points))
+        return displayMode == .calm ? cornerCut(twice) : twice
     }
 
     private func drawProcessorArea(
@@ -2266,6 +2289,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     private func drawProcessorUrgency(
         _ points: [CGPoint],
         criticalIntervals: [DateInterval],
+        subdued: Bool,
         in context: inout GraphicsContext,
         plot: CGRect
     ) {
@@ -2276,8 +2300,17 @@ private struct UnifiedDataCanvas: View, Equatable {
             let range = startX...endX
             let run = clippedPolyline(points, to: range)
             if run.count == 1, let point = run.first {
-                let marker = CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6)
-                context.fill(Path(ellipseIn: marker), with: .color(TimelineColors.critical.opacity(0.96)))
+                let radius: CGFloat = subdued ? 2 : 3
+                let marker = CGRect(
+                    x: point.x - radius,
+                    y: point.y - radius,
+                    width: radius * 2,
+                    height: radius * 2
+                )
+                context.fill(
+                    Path(ellipseIn: marker),
+                    with: .color(TimelineColors.critical.opacity(subdued ? 0.78 : 0.96))
+                )
                 continue
             }
             guard run.count >= 2 else { continue }
@@ -2286,13 +2319,21 @@ private struct UnifiedDataCanvas: View, Equatable {
             for point in run.dropFirst() { segment.addLine(to: point) }
             context.stroke(
                 segment,
-                with: .color(TimelineColors.critical.opacity(0.16)),
-                style: StrokeStyle(lineWidth: 5.2, lineCap: .round, lineJoin: .round)
+                with: .color(TimelineColors.critical.opacity(subdued ? 0.07 : 0.16)),
+                style: StrokeStyle(
+                    lineWidth: subdued ? 3.4 : 5.2,
+                    lineCap: .round,
+                    lineJoin: .round
+                )
             )
             context.stroke(
                 segment,
-                with: .color(TimelineColors.critical.opacity(0.96)),
-                style: StrokeStyle(lineWidth: 2.3, lineCap: .round, lineJoin: .round)
+                with: .color(TimelineColors.critical.opacity(subdued ? 0.80 : 0.96)),
+                style: StrokeStyle(
+                    lineWidth: subdued ? 1.55 : 2.3,
+                    lineCap: .round,
+                    lineJoin: .round
+                )
             )
         }
     }
@@ -2336,16 +2377,16 @@ private struct UnifiedDataCanvas: View, Equatable {
             in: &context,
             plot: plot,
             color: TimelineColors.memoryElevated,
-            bandOpacity: 0.075,
-            lineOpacity: 0.34
+            bandOpacity: displayMode == .calm ? 0.038 : 0.075,
+            lineOpacity: displayMode == .calm ? 0.16 : 0.34
         )
         drawProcessorMemoryRuns(
             sustained,
             in: &context,
             plot: plot,
             color: TimelineColors.critical,
-            bandOpacity: 0.085,
-            lineOpacity: 0.30
+            bandOpacity: displayMode == .calm ? 0.052 : 0.085,
+            lineOpacity: displayMode == .calm ? 0.18 : 0.30
         )
     }
 

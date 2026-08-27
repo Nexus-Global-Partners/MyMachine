@@ -7,6 +7,8 @@ import SwiftUI
 struct ExpandedMonitoringView: View {
     @EnvironmentObject private var model: AppModel
     @StateObject private var fullscreenController = FullscreenWindowController()
+    @AppStorage(TimelineDisplayMode.storageKey)
+    private var timelineDisplayMode = TimelineDisplayMode.precise.rawValue
 
     var body: some View {
         ZStack {
@@ -47,7 +49,8 @@ struct ExpandedMonitoringView: View {
                         events: model.monitoringEvents,
                         appContributors: model.monitoringAppContributors,
                         presentation: layout.timelinePresentation,
-                        expandedProcessorHeight: layout.expandedProcessorHeight
+                        expandedProcessorHeight: layout.expandedProcessorHeight,
+                        displayMode: selectedTimelineDisplayMode
                     )
                     .equatable()
                     .layoutPriority(1)
@@ -107,6 +110,8 @@ struct ExpandedMonitoringView: View {
                 ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
                     .foregroundStyle(Color.white.opacity(0.72))
             }
+
+            TimelineDisplayModeControl()
 
             MonitoringRangePickerControl(
                 selection: model.monitoringRange,
@@ -188,6 +193,10 @@ struct ExpandedMonitoringView: View {
 
     private var latestSample: SystemSample? {
         TimelineSemantics.latestSample(from: model.monitoringSamples)
+    }
+
+    private var selectedTimelineDisplayMode: TimelineDisplayMode {
+        TimelineDisplayMode(rawValue: timelineDisplayMode) ?? .precise
     }
 
     private var statusColor: Color {

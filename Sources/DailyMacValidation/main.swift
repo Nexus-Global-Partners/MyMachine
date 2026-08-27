@@ -68,6 +68,32 @@ struct DailyMacValidation {
             }
         }
 
+        await harness.run("calm graph uses longer stable trend windows") {
+            let expected: [(MonitoringRange, TimeInterval, TimeInterval)] = [
+                (.oneHour, 30, 3 * 60),
+                (.sixHours, 2 * 60, 12 * 60),
+                (.twelveHours, 5 * 60, 24 * 60),
+                (.twentyFourHours, 10 * 60, 45 * 60)
+            ]
+            for (range, precise, calm) in expected {
+                let preciseDuration = TimelineSemantics.processorTrendBucketDuration(
+                    for: range,
+                    displayMode: .precise
+                )
+                let calmDuration = TimelineSemantics.processorTrendBucketDuration(
+                    for: range,
+                    displayMode: .calm
+                )
+                try harness.check(preciseDuration == precise, "precise \(range.label) density changed")
+                try harness.check(calmDuration == calm, "calm \(range.label) averaging was inaccurate")
+                try harness.check(calmDuration > preciseDuration, "calm mode did not reduce short-lived movement")
+                try harness.check(
+                    range.duration / calmDuration >= 20,
+                    "calm \(range.label) trend became too coarse to explain the window"
+                )
+            }
+        }
+
         await harness.run("permission-free manual activity counters use safe deltas") {
             try harness.check(
                 TelemetrySemantics.eventCounterDelta(current: 105, previous: 100) == 5,

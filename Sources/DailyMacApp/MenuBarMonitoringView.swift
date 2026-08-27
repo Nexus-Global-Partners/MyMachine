@@ -8,6 +8,8 @@ struct MenuBarMonitoringView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var route = AppRoute.shared
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(TimelineDisplayMode.storageKey)
+    private var timelineDisplayMode = TimelineDisplayMode.precise.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,7 +26,8 @@ struct MenuBarMonitoringView: View {
                                 backgroundPoints: content.backgroundPoints,
                                 events: content.events,
                                 appContributors: content.appContributors,
-                                presentation: .menuBar
+                                presentation: .menuBar,
+                                displayMode: selectedTimelineDisplayMode
                             )
                             .equatable()
                         } else {
@@ -165,6 +168,8 @@ struct MenuBarMonitoringView: View {
 
             Spacer(minLength: 12)
 
+            TimelineDisplayModeControl()
+
             Button {
                 route.requestMonitoring()
                 openWindow(id: "main")
@@ -222,6 +227,10 @@ struct MenuBarMonitoringView: View {
         case .failed: return .red
         default: return .secondary
         }
+    }
+
+    private var selectedTimelineDisplayMode: TimelineDisplayMode {
+        TimelineDisplayMode(rawValue: timelineDisplayMode) ?? .precise
     }
 
     private var emptyStateSymbol: String {
