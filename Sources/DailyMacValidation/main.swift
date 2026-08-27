@@ -1256,6 +1256,44 @@ struct DailyMacValidation {
             try harness.check(insufficient.handsOnShare == nil, "less than two minutes of input evidence produced a confident share")
         }
 
+        await harness.run("presence baseline separates hands-on, awake, and unrecorded time") {
+            let start = Date(timeIntervalSince1970: 1_800_275_000)
+            let interval = DateInterval(start: start, duration: 6 * 60)
+            let active = ManualActivityCounts(
+                keyboardEvents: 20,
+                pointerEvents: 120,
+                clickEvents: 2,
+                scrollEvents: 10
+            )
+            let quiet = ManualActivityCounts(
+                keyboardEvents: 0,
+                pointerEvents: 0,
+                clickEvents: 0,
+                scrollEvents: 0
+            )
+            let presence = TimelineSemantics.presenceContext(
+                from: [
+                    sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, manualActivity: active),
+                    sample(at: start.addingTimeInterval(120), duration: 60, interval: 60, manualActivity: quiet),
+                    // Legacy records have no physical-input counters; their
+                    // content-free idle bit remains the honest fallback.
+                    sample(at: start.addingTimeInterval(300), duration: 60, interval: 60, idle: false)
+                ],
+                within: interval
+            )
+
+            try harness.check(presence.awakeIntervals.count == 2, "an unrecorded gap was incorrectly painted as awake")
+            try harness.check(
+                abs(presence.awakeIntervals.reduce(0) { $0 + $1.duration } - 180) < 0.001,
+                "awake duration did not match measured coverage"
+            )
+            try harness.check(presence.handsOnIntervals.count == 2, "quiet awake time was painted as hands-on")
+            try harness.check(
+                abs(presence.handsOnIntervals.reduce(0) { $0 + $1.duration } - 120) < 0.001,
+                "hands-on duration did not preserve measured and legacy evidence"
+            )
+        }
+
         await harness.run("battery timeline never bridges power changes, gaps, or sleep") {
             let start = Date(timeIntervalSince1970: 1_800_300_000)
             let interval = DateInterval(start: start, end: start.addingTimeInterval(400))

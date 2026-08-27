@@ -30,6 +30,7 @@ struct MonitoringTimelineView: View, Equatable {
     private let processorTrend: [ProcessorTrendPoint]
     private let memoryConditions: MemoryConditionTimeline
     private let thermalContext: TimelineThermalContext
+    private let presenceContext: TimelinePresenceContext
     private let visibleStress: TimelineVisibleStress
     private let currentProcessorStress: TimelineCurrentProcessorStress
     private let processorScaleMaximum: Double
@@ -67,6 +68,10 @@ struct MonitoringTimelineView: View, Equatable {
         )
         self.memoryConditions = memoryConditions
         self.thermalContext = TimelineSemantics.thermalContext(
+            from: orderedSamples,
+            within: snapshot.interval
+        )
+        self.presenceContext = TimelineSemantics.presenceContext(
             from: orderedSamples,
             within: snapshot.interval
         )
@@ -156,6 +161,7 @@ struct MonitoringTimelineView: View, Equatable {
                         processorTrend: processorTrend,
                         memoryConditions: memoryConditions,
                         thermalContext: thermalContext,
+                        presenceContext: presenceContext,
                         visibleStress: visibleStress,
                         batteryRuns: batteryRuns,
                         sleepIntervals: sleepIntervals,
@@ -886,22 +892,25 @@ struct MonitoringTimelineView: View, Equatable {
                 let plotWidth = max(1, geometry.size.width - UnifiedTimelineLayout.rightAxisWidth)
                 ZStack(alignment: .topLeading) {
                     ForEach(timeMarks) { mark in
-                        let tickLabelWidth: CGFloat = mark.label.contains(" ") ? 58 : 38
+                        let tickLabelWidth: CGFloat = mark.kind == .clock
+                            ? (mark.label.contains(" ") ? 58 : 46)
+                            : 78
                         let fraction = min(1, max(
                             0,
                             mark.date.timeIntervalSince(interval.start) / max(1, interval.duration)
                         ))
                         let clockX = plotWidth * CGFloat(fraction)
-                        let positionX = mark.label == "Now"
+                        let isTerminal = abs(mark.date.timeIntervalSince(interval.end)) < 1
+                        let positionX = isTerminal
                             ? plotWidth + UnifiedTimelineLayout.rightAxisWidth / 2
                             : max(tickLabelWidth / 2, clockX)
                         VStack(spacing: 1) {
                             Capsule()
-                                .fill(.secondary.opacity(0.38))
+                                .fill(mark.kind.color.opacity(mark.kind == .wake ? 0.72 : 0.38))
                                 .frame(width: 1, height: 3)
                             Text(mark.label)
                                 .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(mark.kind.color)
                                 .frame(width: tickLabelWidth)
                         }
                         .position(x: positionX, y: 8)
@@ -986,6 +995,10 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var timeMarks: [TimelineAxisMark] {
+        if snapshot.range == .twentyFourHours {
+            return twentyFourHourTimeMarks
+        }
+
         let marks: [(TimeInterval, String)]
         switch snapshot.range {
         case .oneHour:
@@ -995,7 +1008,7 @@ struct MonitoringTimelineView: View, Equatable {
         case .twelveHours:
             marks = [(-43_200, "−12h"), (-21_600, "−6h"), (-10_800, "−3h"), (-3_600, "−1h"), (0, "Now")]
         case .twentyFourHours:
-            marks = [(-86_400, "−24h"), (-43_200, "−12h"), (-21_600, "−6h"), (-7_200, "−2h"), (0, "Now")]
+            marks = []
         }
         var resolved = marks.map { offset, label in
             TimelineAxisMark(
@@ -1023,6 +1036,59 @@ struct MonitoringTimelineView: View, Equatable {
             resolved.append(TimelineAxisMark(date: wake, label: relativeAxisLabel(for: wake)))
         }
         return resolved.sorted { $0.date < $1.date }
+    }
+
+    /// A day view should read like a day, not a countdown. Real clock labels
+    /// provide orientation while the longest confirmed sleep contributes the
+    /// two session boundaries people actually care about: when the Mac went to
+    /// sleep and when the next observed session could begin.
+    private var twentyFourHourTimeMarks: [TimelineAxisMark] {
+        let clockMarks = [0.0, 0.25, 0.5, 0.75].map { fraction in
+            let date = interval.start.addingTimeInterval(interval.duration * fraction)
+            return TimelineAxisMark(date: date, label: clockAxisLabel(for: date))
+        } + [TimelineAxisMark(date: interval.end, label: "Now")]
+
+        let boundaries = dominantSleepBoundaryMarks
+        guard !boundaries.isEmpty else { return clockMarks }
+
+        // Reserve enough horizontal room for the more useful event labels.
+        let minimumClockSeparation: TimeInterval = 90 * 60
+        let unclutteredClocks = clockMarks.filter { clock in
+            clock.date == interval.end || !boundaries.contains {
+                abs($0.date.timeIntervalSince(clock.date)) < minimumClockSeparation
+            }
+        }
+        return (unclutteredClocks + boundaries).sorted { $0.date < $1.date }
+    }
+
+    private var dominantSleepBoundaryMarks: [TimelineAxisMark] {
+        guard let sleep = sleepIntervals
+            .filter({ $0.duration >= 90 * 60 })
+            .max(by: { $0.duration < $1.duration }) else { return [] }
+
+        let safeEdgeInset: TimeInterval = 12 * 60
+        var marks: [TimelineAxisMark] = []
+        if sleep.start > interval.start.addingTimeInterval(safeEdgeInset),
+           sleep.start < interval.end.addingTimeInterval(-safeEdgeInset) {
+            marks.append(TimelineAxisMark(
+                date: sleep.start,
+                label: "Sleep \(clockAxisLabel(for: sleep.start))",
+                kind: .sleep
+            ))
+        }
+        if sleep.end > interval.start.addingTimeInterval(safeEdgeInset),
+           sleep.end < interval.end.addingTimeInterval(-safeEdgeInset) {
+            marks.append(TimelineAxisMark(
+                date: sleep.end,
+                label: "Awake \(clockAxisLabel(for: sleep.end))",
+                kind: .wake
+            ))
+        }
+        return marks
+    }
+
+    private func clockAxisLabel(for date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
     }
 
     private var leadingWakeBoundary: Date? {
@@ -1453,6 +1519,7 @@ private enum TimelineColors {
     static let memoryElevated = Color(nsColor: .systemOrange)
     static let memoryStatus = Color(nsColor: .systemYellow)
     static let thermal = Color(nsColor: .systemOrange)
+    static let presence = Color(nsColor: .systemGreen)
     static let active = Color(nsColor: .systemCyan)
     static let normal = Color(nsColor: .systemGreen)
     static let critical = Color(nsColor: .systemRed)
@@ -1515,11 +1582,32 @@ private struct TimelineCurrentStatus {
     }
 }
 
+private enum TimelineAxisMarkKind: String {
+    case clock
+    case wake
+    case sleep
+
+    var color: Color {
+        switch self {
+        case .clock: return .secondary
+        case .wake: return TimelineColors.presence
+        case .sleep: return .secondary
+        }
+    }
+}
+
 private struct TimelineAxisMark: Identifiable {
     let date: Date
     let label: String
+    let kind: TimelineAxisMarkKind
 
-    var id: String { label }
+    init(date: Date, label: String, kind: TimelineAxisMarkKind = .clock) {
+        self.date = date
+        self.label = label
+        self.kind = kind
+    }
+
+    var id: String { "\(date.timeIntervalSinceReferenceDate)-\(kind.rawValue)" }
 }
 
 private struct UnifiedTimelineLayout: Equatable {
@@ -1644,6 +1732,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     let processorTrend: [ProcessorTrendPoint]
     let memoryConditions: MemoryConditionTimeline
     let thermalContext: TimelineThermalContext
+    let presenceContext: TimelinePresenceContext
     let visibleStress: TimelineVisibleStress
     let batteryRuns: [BatteryTimelineRun]
     let sleepIntervals: [DateInterval]
@@ -1656,6 +1745,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             && lhs.processorTrend == rhs.processorTrend
             && lhs.memoryConditions == rhs.memoryConditions
             && lhs.thermalContext == rhs.thermalContext
+            && lhs.presenceContext == rhs.presenceContext
             && lhs.visibleStress == rhs.visibleStress
             && lhs.batteryRuns == rhs.batteryRuns
             && lhs.sleepIntervals == rhs.sleepIntervals
@@ -1673,6 +1763,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawThermalAtmosphere(in: &context, rect: rects.cpu)
             drawProcessorMemory(in: &context, rect: rects.cpu)
             drawProcessor(in: &context, rect: rects.cpu)
+            drawPresenceBaseline(in: &context, rect: rects.cpu)
             if let battery = rects.battery {
                 drawBattery(in: &context, rect: battery, rightAxisX: rects.plotWidth)
             }
@@ -1833,6 +1924,74 @@ private struct UnifiedDataCanvas: View, Equatable {
                 ray,
                 with: .color(color.opacity(rayOpacity)),
                 style: StrokeStyle(lineWidth: 1.15, lineCap: .round)
+            )
+        }
+    }
+
+    /// One quiet baseline separates human presence from machine availability
+    /// without introducing another chart. Bright green is measured hands-on
+    /// input, pale green is observed awake time, gray is confirmed sleep, and
+    /// unrecorded time remains blank.
+    private func drawPresenceBaseline(in context: inout GraphicsContext, rect: CGRect) {
+        let y = rect.maxY - 2.5
+        drawPresenceIntervals(
+            sleepIntervals,
+            y: y,
+            color: .secondary,
+            opacity: 0.30,
+            lineWidth: 2.2,
+            in: &context,
+            plotWidth: rect.width
+        )
+        drawPresenceIntervals(
+            presenceContext.awakeIntervals,
+            y: y,
+            color: TimelineColors.presence,
+            opacity: 0.20,
+            lineWidth: 2.2,
+            in: &context,
+            plotWidth: rect.width
+        )
+        drawPresenceIntervals(
+            presenceContext.handsOnIntervals,
+            y: y,
+            color: TimelineColors.presence,
+            opacity: 0.82,
+            lineWidth: 2.7,
+            glowOpacity: 0.10,
+            in: &context,
+            plotWidth: rect.width
+        )
+    }
+
+    private func drawPresenceIntervals(
+        _ intervals: [DateInterval],
+        y: CGFloat,
+        color: Color,
+        opacity: Double,
+        lineWidth: CGFloat,
+        glowOpacity: Double = 0,
+        in context: inout GraphicsContext,
+        plotWidth: CGFloat
+    ) {
+        for interval in intervals {
+            let start = xPosition(interval.start, plotWidth: plotWidth)
+            let end = xPosition(interval.end, plotWidth: plotWidth)
+            guard end > start else { continue }
+            var line = Path()
+            line.move(to: CGPoint(x: start, y: y))
+            line.addLine(to: CGPoint(x: max(start + 1, end), y: y))
+            if glowOpacity > 0 {
+                context.stroke(
+                    line,
+                    with: .color(color.opacity(glowOpacity)),
+                    style: StrokeStyle(lineWidth: lineWidth + 4, lineCap: .round)
+                )
+            }
+            context.stroke(
+                line,
+                with: .color(color.opacity(opacity)),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
             )
         }
     }
@@ -2450,6 +2609,9 @@ private struct UnifiedDataCanvas: View, Equatable {
         }
         if thermalContext.hasElevatedHeat {
             summary += " A quiet warm ribbon at the top of the processor plot marks periods when macOS reported reduced thermal headroom; it is not an exact temperature or fan-speed reading."
+        }
+        if !presenceContext.awakeIntervals.isEmpty || !sleepIntervals.isEmpty {
+            summary += " A thin baseline below the processor plot is bright green for measured physical input, pale green while the Mac was observed awake, gray for confirmed sleep, and blank where no state was recorded."
         }
         return summary
     }

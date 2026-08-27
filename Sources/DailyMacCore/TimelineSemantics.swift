@@ -148,6 +148,20 @@ public struct TimelineThermalContext: Equatable, Sendable {
     }
 }
 
+/// A content-free presence baseline for the core graph. `awakeIntervals` mean
+/// the Mac was observed running; `handsOnIntervals` are the subset with measured
+/// physical input (or the legacy non-idle signal when input counts are absent).
+/// Confirmed sleep remains event-backed and is supplied separately by the view.
+public struct TimelinePresenceContext: Equatable, Sendable {
+    public let awakeIntervals: [DateInterval]
+    public let handsOnIntervals: [DateInterval]
+
+    public init(awakeIntervals: [DateInterval], handsOnIntervals: [DateInterval]) {
+        self.awakeIntervals = awakeIntervals
+        self.handsOnIntervals = handsOnIntervals
+    }
+}
+
 /// The red identity shown beside the graph must describe the newest trustworthy
 /// reading, never an earlier red interval that remains visible in history.
 public struct TimelineCurrentProcessorStress: Equatable, Sendable {
@@ -487,6 +501,32 @@ public enum TimelineSemantics {
             managedIntervals: mergeMeasuredIntervals(managed),
             seriousIntervals: mergeMeasuredIntervals(serious),
             criticalIntervals: mergeMeasuredIntervals(critical)
+        )
+    }
+
+    public static func presenceContext(
+        from samples: [SystemSample],
+        within window: DateInterval
+    ) -> TimelinePresenceContext {
+        var awake: [DateInterval] = []
+        var handsOn: [DateInterval] = []
+
+        for sample in samples.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard let interval = observedInterval(for: sample, within: window) else { continue }
+            awake.append(interval)
+
+            let hasPhysicalInput: Bool
+            if let activity = sample.manualActivity {
+                hasPhysicalInput = activity.intensity(over: sample.duration) >= handsOnIntensityThreshold
+            } else {
+                hasPhysicalInput = !sample.isIdle
+            }
+            if hasPhysicalInput { handsOn.append(interval) }
+        }
+
+        return TimelinePresenceContext(
+            awakeIntervals: mergeMeasuredIntervals(awake),
+            handsOnIntervals: mergeMeasuredIntervals(handsOn)
         )
     }
 
