@@ -34,6 +34,7 @@ struct MonitoringTimelineView: View, Equatable {
     private let processorScaleMaximum: Double
     private let windowUsageSummary: TimelineWindowUsageSummary
     private let activityLanes: [TimelineActivityLane]
+    private let liveProcessorReading: TimelineLiveProcessorReading?
 
     init(
         snapshot: MonitoringSnapshot,
@@ -77,6 +78,10 @@ struct MonitoringTimelineView: View, Equatable {
         self.windowUsageSummary = TimelineSemantics.windowUsageSummary(
             from: orderedSamples,
             within: snapshot.interval
+        )
+        self.liveProcessorReading = Self.makeLiveProcessorReading(
+            from: orderedSamples,
+            endingAt: snapshot.interval.end
         )
         self.activityLanes = TimelineSemantics.activityLanes(
             from: orderedSamples,
@@ -134,7 +139,7 @@ struct MonitoringTimelineView: View, Equatable {
                     .contentShape(Rectangle())
                     .onTapGesture { selectedTime = nil }
 
-                ZStack {
+                ZStack(alignment: .topTrailing) {
                     UnifiedDataCanvas(
                         samples: samples,
                         processorTrend: processorTrend,
@@ -154,6 +159,13 @@ struct MonitoringTimelineView: View, Equatable {
                         interval: interval,
                         rightAxisWidth: layout.rightAxisWidth
                     )
+
+                    if selectedTime == nil, let liveProcessorReading {
+                        liveProcessorReadout(liveProcessorReading)
+                            .padding(.top, 12)
+                            .padding(.trailing, layout.rightAxisWidth + 12)
+                            .allowsHitTesting(false)
+                    }
                 }
                 .frame(height: layout.totalHeight)
             }
@@ -375,6 +387,61 @@ struct MonitoringTimelineView: View, Equatable {
             .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private func liveProcessorReadout(_ reading: TimelineLiveProcessorReading) -> some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Text("LIVE · 2 MIN")
+                .font(.system(size: 9, weight: .semibold))
+                .tracking(0.45)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: presentation == .menuBar ? 12 : 16) {
+                liveProcessorMetric(
+                    title: "CPU",
+                    value: reading.cpuPercent,
+                    color: TimelineColors.processor
+                )
+                if let gpuPercent = reading.gpuPercent {
+                    liveProcessorMetric(
+                        title: "GPU",
+                        value: gpuPercent,
+                        color: TimelineColors.graphics
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, presentation == .menuBar ? 9 : 11)
+        .padding(.vertical, presentation == .menuBar ? 6 : 8)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(Color.white.opacity(0.50), lineWidth: 0.7)
+                }
+        }
+        .shadow(color: Color.black.opacity(0.055), radius: 7, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(liveProcessorAccessibilityLabel(reading))
+    }
+
+    private func liveProcessorMetric(title: String, value: Double, color: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(title)
+                .font(.caption2.weight(.bold))
+            Text(Formatters.percent(value))
+                .font((presentation == .menuBar ? Font.title3 : Font.title2).monospacedDigit().weight(.semibold))
+        }
+        .foregroundStyle(color)
+    }
+
+    private func liveProcessorAccessibilityLabel(_ reading: TimelineLiveProcessorReading) -> String {
+        var label = "Two-minute average CPU \(Formatters.percent(reading.cpuPercent))"
+        if let gpuPercent = reading.gpuPercent {
+            label += ", estimated GPU \(Formatters.percent(gpuPercent))"
+        }
+        return label
     }
 
     private var processorMemoryKey: String? {
@@ -1168,6 +1235,41 @@ struct MonitoringTimelineView: View, Equatable {
         return max(cpuHigh, gpuHigh) <= 50 ? 50 : 100
     }
 
+    private static func makeLiveProcessorReading(
+        from samples: [SystemSample],
+        endingAt end: Date,
+        duration: TimeInterval = 2 * 60
+    ) -> TimelineLiveProcessorReading? {
+        guard let latest = samples.last(where: { $0.duration > 0 }) else { return nil }
+        let freshness = max(120, latest.samplingInterval * 4)
+        guard end.timeIntervalSince(latest.timestamp) <= freshness else { return nil }
+
+        let start = end.addingTimeInterval(-duration)
+        var cpuTotal = 0.0
+        var cpuWeight = 0.0
+        var gpuTotal = 0.0
+        var gpuWeight = 0.0
+
+        for sample in samples where sample.duration > 0 {
+            let observedEnd = min(end, sample.timestamp)
+            let observedStart = max(start, sample.timestamp.addingTimeInterval(-sample.duration))
+            let overlap = observedEnd.timeIntervalSince(observedStart)
+            guard overlap > 0, sample.cpuPercent.isFinite else { continue }
+            cpuTotal += sample.cpuPercent * overlap
+            cpuWeight += overlap
+            if let gpu = sample.gpuPercent, gpu.isFinite {
+                gpuTotal += gpu * overlap
+                gpuWeight += overlap
+            }
+        }
+
+        guard cpuWeight > 0 else { return nil }
+        return TimelineLiveProcessorReading(
+            cpuPercent: cpuTotal / cpuWeight,
+            gpuPercent: gpuWeight > 0 ? gpuTotal / gpuWeight : nil
+        )
+    }
+
 }
 
 private struct ContributorAppIcon: View {
@@ -1357,6 +1459,11 @@ private struct ProcessorTrendPoint: Equatable {
     let performanceCorePercent: Double?
     let efficiencyCorePercent: Double?
     let performanceCoreContributionPercent: Double?
+    let gpuPercent: Double?
+}
+
+private struct TimelineLiveProcessorReading: Equatable {
+    let cpuPercent: Double
     let gpuPercent: Double?
 }
 
