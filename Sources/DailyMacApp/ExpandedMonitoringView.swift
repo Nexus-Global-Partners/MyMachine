@@ -108,19 +108,11 @@ struct ExpandedMonitoringView: View {
                     .foregroundStyle(Color.white.opacity(0.72))
             }
 
-            Picker("Time range", selection: Binding(
-                get: { model.monitoringRange },
-                set: { model.selectMonitoringRange($0) }
-            )) {
-                Text("1 hr").tag(MonitoringRange.oneHour)
-                Text("6 hr").tag(MonitoringRange.sixHours)
-                Text("12 hr").tag(MonitoringRange.twelveHours)
-                Text("24 hr").tag(MonitoringRange.twentyFourHours)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: layout.isCompact ? 260 : 300)
-            .controlSize(layout.isCompact ? .regular : .large)
+            MonitoringRangePickerControl(
+                selection: model.monitoringRange,
+                itemWidth: layout.isCompact ? 46 : 52,
+                onSelect: model.selectMonitoringRange
+            )
 
             Button {
                 model.refreshNow()

@@ -108,18 +108,11 @@ struct MonitoringView: View {
 
     private var rangeRefreshControls: some View {
         HStack(alignment: .center, spacing: 18) {
-            Picker("Time range", selection: Binding(
-                get: { model.monitoringRange },
-                set: { model.selectMonitoringRange($0) }
-            )) {
-                Text("1 hr").tag(MonitoringRange.oneHour)
-                Text("6 hr").tag(MonitoringRange.sixHours)
-                Text("12 hr").tag(MonitoringRange.twelveHours)
-                Text("24 hr").tag(MonitoringRange.twentyFourHours)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 276)
+            MonitoringRangePickerControl(
+                selection: model.monitoringRange,
+                itemWidth: 48,
+                onSelect: model.selectMonitoringRange
+            )
 
             Button {
                 model.refreshNow()

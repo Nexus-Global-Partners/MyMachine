@@ -70,22 +70,11 @@ struct MenuBarMonitoringView: View {
 
             Spacer(minLength: 12)
 
-            Picker(
-                "History range",
-                selection: Binding(
-                    get: { model.menuBarMonitoringRange },
-                    set: { model.selectMenuBarMonitoringRange($0) }
-                )
-            ) {
-                Text("1h").tag(MonitoringRange.oneHour)
-                Text("6h").tag(MonitoringRange.sixHours)
-                Text("12h").tag(MonitoringRange.twelveHours)
-                Text("24h").tag(MonitoringRange.twentyFourHours)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .frame(width: 174)
+            MonitoringRangePickerControl(
+                selection: model.menuBarMonitoringRange,
+                itemWidth: 34,
+                onSelect: model.selectMenuBarMonitoringRange
+            )
             .help("Choose how much history to show")
 
             VStack(alignment: .trailing, spacing: 6) {
