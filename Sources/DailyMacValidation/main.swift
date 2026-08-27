@@ -70,10 +70,10 @@ struct DailyMacValidation {
 
         await harness.run("calm graph uses longer stable trend windows") {
             let expected: [(MonitoringRange, TimeInterval, TimeInterval)] = [
-                (.oneHour, 30, 3 * 60),
-                (.sixHours, 2 * 60, 12 * 60),
-                (.twelveHours, 5 * 60, 24 * 60),
-                (.twentyFourHours, 10 * 60, 45 * 60)
+                (.oneHour, 30, 2 * 60),
+                (.sixHours, 2 * 60, 8 * 60),
+                (.twelveHours, 5 * 60, 16 * 60),
+                (.twentyFourHours, 10 * 60, 30 * 60)
             ]
             for (range, precise, calm) in expected {
                 let preciseDuration = TimelineSemantics.processorTrendBucketDuration(

@@ -276,7 +276,7 @@ public struct TimelineActivityLane: Identifiable, Equatable, Sendable {
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
     /// A stable, range-aware averaging window for the processor plot. Calm mode
-    /// intentionally targets roughly 20–30 meaningful movements per range;
+    /// intentionally targets roughly 30–48 meaningful movements per range;
     /// Precise mode retains the existing close-inspection density.
     public static func processorTrendBucketDuration(
         for range: MonitoringRange,
@@ -287,10 +287,10 @@ public enum TimelineSemantics {
         case (.precise, .sixHours): return 120
         case (.precise, .twelveHours): return 300
         case (.precise, .twentyFourHours): return 600
-        case (.calm, .oneHour): return 3 * 60
-        case (.calm, .sixHours): return 12 * 60
-        case (.calm, .twelveHours): return 24 * 60
-        case (.calm, .twentyFourHours): return 45 * 60
+        case (.calm, .oneHour): return 2 * 60
+        case (.calm, .sixHours): return 8 * 60
+        case (.calm, .twelveHours): return 16 * 60
+        case (.calm, .twentyFourHours): return 30 * 60
         }
     }
 

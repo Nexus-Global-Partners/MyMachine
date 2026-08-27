@@ -160,45 +160,29 @@ struct MonitoringTimelineView: View, Equatable {
             expandedProcessorHeight: expandedProcessorHeight
         )
 
-        VStack(alignment: .leading, spacing: contentSpacing) {
-            inspector
-                .frame(height: inspectorHeight, alignment: .center)
+        Group {
+            if usesCalmGraphOnlyLayout {
+                calmGraphOnlyBody(layout: layout)
+            } else {
+                VStack(alignment: .leading, spacing: contentSpacing) {
+                    inspector
+                        .frame(height: inspectorHeight, alignment: .center)
 
-            HStack(alignment: .top, spacing: contentSpacing) {
-                labelRail(layout: layout)
-                    .frame(width: labelWidth, height: layout.totalHeight, alignment: .topLeading)
-                    .contentShape(Rectangle())
-                    .onTapGesture { selectedTime = nil }
+                    HStack(alignment: .top, spacing: contentSpacing) {
+                        labelRail(layout: layout)
+                            .frame(width: labelWidth, height: layout.totalHeight, alignment: .topLeading)
+                            .contentShape(Rectangle())
+                            .onTapGesture { selectedTime = nil }
 
-                ZStack {
-                    UnifiedDataCanvas(
-                        samples: samples,
-                        processorTrend: processorTrend,
-                        memoryConditions: memoryConditions,
-                        thermalContext: thermalContext,
-                        presenceContext: presenceContext,
-                        visibleStress: visibleStress,
-                        batteryRuns: batteryRuns,
-                        sleepIntervals: sleepIntervals,
-                        interval: interval,
-                        processorScaleMaximum: processorScaleMaximum,
-                        layout: layout,
-                        displayMode: displayMode
-                    )
-                    .equatable()
+                        dataCanvas(layout: layout)
+                            .frame(height: layout.totalHeight)
+                    }
 
-                    TimelineSelectionOverlay(
-                        selectedTime: $selectedTime,
-                        interval: interval,
-                        rightAxisWidth: layout.rightAxisWidth
-                    )
+                    timeAxis
+                        .contentShape(Rectangle())
+                        .onTapGesture { selectedTime = nil }
                 }
-                .frame(height: layout.totalHeight)
             }
-
-            timeAxis
-                .contentShape(Rectangle())
-                .onTapGesture { selectedTime = nil }
         }
         .onChange(of: snapshot.interval) {
             guard let selectedTime else { return }
@@ -211,6 +195,110 @@ struct MonitoringTimelineView: View, Equatable {
             selectedTime = nil
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private var usesCalmGraphOnlyLayout: Bool {
+        presentation == .menuBar && displayMode == .calm
+    }
+
+    private func calmGraphOnlyBody(layout: UnifiedTimelineLayout) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            dataCanvas(layout: layout) {
+                if let reading = contextProcessorReading {
+                    calmProcessorLegend(reading)
+                        .padding(.top, 8)
+                        .padding(.leading, 10)
+                }
+            }
+            .frame(height: layout.totalHeight)
+
+            timeAxis
+                .contentShape(Rectangle())
+                .onTapGesture { selectedTime = nil }
+        }
+    }
+
+    private func dataCanvas<Overlay: View>(
+        layout: UnifiedTimelineLayout,
+        @ViewBuilder overlay: () -> Overlay
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            UnifiedDataCanvas(
+                samples: samples,
+                processorTrend: processorTrend,
+                memoryConditions: memoryConditions,
+                thermalContext: thermalContext,
+                presenceContext: presenceContext,
+                visibleStress: visibleStress,
+                batteryRuns: batteryRuns,
+                sleepIntervals: sleepIntervals,
+                interval: interval,
+                processorScaleMaximum: processorScaleMaximum,
+                layout: layout,
+                displayMode: displayMode
+            )
+            .equatable()
+
+            TimelineSelectionOverlay(
+                selectedTime: $selectedTime,
+                interval: interval,
+                rightAxisWidth: layout.rightAxisWidth
+            )
+
+            overlay()
+        }
+    }
+
+    private func dataCanvas(layout: UnifiedTimelineLayout) -> some View {
+        dataCanvas(layout: layout) { EmptyView() }
+    }
+
+    private func calmProcessorLegend(_ reading: TimelineLiveProcessorReading) -> some View {
+        HStack(spacing: 10) {
+            calmProcessorLegendMetric(
+                title: "CPU",
+                value: reading.cpuPercent,
+                color: TimelineColors.processor
+            )
+            if let gpuPercent = reading.gpuPercent {
+                calmProcessorLegendMetric(
+                    title: "GPU",
+                    value: gpuPercent,
+                    color: TimelineColors.graphics
+                )
+            }
+            Text(selectedTime == nil ? "2 min" : "selected")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 24)
+        .background(.thinMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.primary.opacity(0.10), lineWidth: 0.7)
+        }
+        .shadow(color: .black.opacity(0.05), radius: 5, y: 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(processorAccessibilityLabel(
+            reading,
+            label: selectedTime == nil ? "Live two minute average" : "Selected reading"
+        ))
+    }
+
+    private func calmProcessorLegendMetric(
+        title: String,
+        value: Double,
+        color: Color
+    ) -> some View {
+        HStack(spacing: 4) {
+            Capsule()
+                .fill(color)
+                .frame(width: 10, height: 2)
+            Text("\(title) \(Formatters.percent(value))")
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(color)
+        }
     }
 
     private var labelWidth: CGFloat {
@@ -903,7 +991,7 @@ struct MonitoringTimelineView: View, Equatable {
 
     private var timeAxis: some View {
         HStack(spacing: contentSpacing) {
-            Color.clear.frame(width: labelWidth, height: 1)
+            Color.clear.frame(width: usesCalmGraphOnlyLayout ? 0 : labelWidth, height: 1)
             GeometryReader { geometry in
                 let plotWidth = max(1, geometry.size.width - UnifiedTimelineLayout.rightAxisWidth)
                 ZStack(alignment: .topLeading) {
@@ -2182,8 +2270,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             result.append(last)
             return result
         }
-        let twice = cornerCut(cornerCut(points))
-        return displayMode == .calm ? cornerCut(twice) : twice
+        return cornerCut(cornerCut(points))
     }
 
     private func drawProcessorArea(
