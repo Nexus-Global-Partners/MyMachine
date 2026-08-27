@@ -145,7 +145,7 @@ struct MonitoringTimelineView: View, Equatable {
                     .contentShape(Rectangle())
                     .onTapGesture { selectedTime = nil }
 
-                ZStack(alignment: .topTrailing) {
+                ZStack {
                     UnifiedDataCanvas(
                         samples: samples,
                         processorTrend: processorTrend,
@@ -164,13 +164,6 @@ struct MonitoringTimelineView: View, Equatable {
                         interval: interval,
                         rightAxisWidth: layout.rightAxisWidth
                     )
-
-                    if selectedTime == nil, let liveProcessorReading {
-                        liveProcessorReadout(liveProcessorReading)
-                            .padding(.top, 12)
-                            .padding(.trailing, layout.rightAxisWidth + 12)
-                            .allowsHitTesting(false)
-                    }
                 }
                 .frame(height: layout.totalHeight)
             }
@@ -427,9 +420,12 @@ struct MonitoringTimelineView: View, Equatable {
         .accessibilityElement(children: .combine)
     }
 
-    private func liveProcessorReadout(_ reading: TimelineLiveProcessorReading) -> some View {
+    private func inlineProcessorReadout(
+        _ reading: TimelineLiveProcessorReading,
+        label: String
+    ) -> some View {
         VStack(alignment: .trailing, spacing: 4) {
-            Text("LIVE · 2 MIN")
+            Text(label)
                 .font(.system(size: 9, weight: .semibold))
                 .tracking(0.45)
                 .foregroundStyle(.secondary)
@@ -449,19 +445,9 @@ struct MonitoringTimelineView: View, Equatable {
                 }
             }
         }
-        .padding(.horizontal, presentation == .menuBar ? 9 : 11)
-        .padding(.vertical, presentation == .menuBar ? 6 : 8)
-        .background {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(Color.white.opacity(0.50), lineWidth: 0.7)
-                }
-        }
-        .shadow(color: Color.black.opacity(0.055), radius: 7, y: 2)
+        .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(liveProcessorAccessibilityLabel(reading))
+        .accessibilityLabel(processorAccessibilityLabel(reading, label: label))
     }
 
     private func liveProcessorMetric(title: String, value: Double, color: Color) -> some View {
@@ -469,17 +455,20 @@ struct MonitoringTimelineView: View, Equatable {
             Text(title)
                 .font(.caption2.weight(.bold))
             Text(Formatters.percent(value))
-                .font((presentation == .menuBar ? Font.title3 : Font.title2).monospacedDigit().weight(.semibold))
+                .font((presentation == .menuBar ? Font.subheadline : Font.body).monospacedDigit().weight(.semibold))
         }
         .foregroundStyle(color)
     }
 
-    private func liveProcessorAccessibilityLabel(_ reading: TimelineLiveProcessorReading) -> String {
-        var label = "Two-minute average CPU \(Formatters.percent(reading.cpuPercent))"
+    private func processorAccessibilityLabel(
+        _ reading: TimelineLiveProcessorReading,
+        label: String
+    ) -> String {
+        var description = "\(label), CPU \(Formatters.percent(reading.cpuPercent))"
         if let gpuPercent = reading.gpuPercent {
-            label += ", estimated GPU \(Formatters.percent(gpuPercent))"
+            description += ", estimated GPU \(Formatters.percent(gpuPercent))"
         }
-        return label
+        return description
     }
 
     private var processorMemoryKey: String? {
@@ -524,6 +513,9 @@ struct MonitoringTimelineView: View, Equatable {
                         .lineLimit(2)
                 }
                 Spacer(minLength: 12)
+                if let liveProcessorReading {
+                    inlineProcessorReadout(liveProcessorReading, label: "LIVE · 2 MIN")
+                }
                 Text("Drag the timeline for exact context")
                     .foregroundStyle(.secondary)
             }
@@ -540,6 +532,16 @@ struct MonitoringTimelineView: View, Equatable {
                 .frame(width: 15)
             compactContextCopy
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if let contextProcessorReading {
+                Divider()
+                    .frame(height: 26)
+                    .opacity(0.55)
+                inlineProcessorReadout(
+                    contextProcessorReading,
+                    label: contextProcessorLabel
+                )
+                .layoutPriority(1)
+            }
             if selectedTime != nil {
                 Button {
                     selectedTime = nil
@@ -621,12 +623,26 @@ struct MonitoringTimelineView: View, Equatable {
         case .unrecorded:
             return "The gap stays blank instead of being guessed."
         case .observed(let sample):
-            var processor = "CPU \(Formatters.percent(sample.cpuPercent))"
-            if let gpu = sample.gpuPercent {
-                processor += " · GPU \(Formatters.percent(gpu)) est."
-            }
-            return "\(processor) · memory \(compactMemoryMeaning(sample)) · \(compactPowerMeaning(sample))"
+            return "Memory \(compactMemoryMeaning(sample)) · \(compactPowerMeaning(sample))"
         }
+    }
+
+    private var contextProcessorReading: TimelineLiveProcessorReading? {
+        guard selectedTime != nil else { return liveProcessorReading }
+        guard case .observed(let sample) = selectedState else { return nil }
+        return TimelineLiveProcessorReading(
+            cpuPercent: sample.cpuPercent.isFinite
+                ? min(100, max(0, sample.cpuPercent))
+                : 0,
+            gpuPercent: sample.gpuPercent.flatMap {
+                $0.isFinite ? min(100, max(0, $0)) : nil
+            }
+        )
+    }
+
+    private var contextProcessorLabel: String {
+        guard selectedTime != nil else { return "LIVE · 2 MIN" }
+        return "SELECTED"
     }
 
     private var compactContextSymbol: String {
