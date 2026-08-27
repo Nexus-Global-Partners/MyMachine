@@ -50,11 +50,17 @@ struct MonitoringRangePickerControl: View {
                 } label: {
                     Text(shortLabel(for: range))
                         .font(.caption.weight(range == selection ? .semibold : .medium))
-                        .foregroundStyle(range == selection ? Color.primary : Color.secondary)
+                        .foregroundStyle(range == selection ? Color.accentColor : Color.secondary.opacity(0.90))
                         .frame(width: itemWidth, height: 23)
                         .background {
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(range == selection ? Color.primary.opacity(0.085) : .clear)
+                                .fill(range == selection ? Color.accentColor.opacity(0.16) : .clear)
+                                .overlay {
+                                    if range == selection {
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .stroke(Color.accentColor.opacity(0.24), lineWidth: 0.7)
+                                    }
+                                }
                         }
                         .contentShape(Rectangle())
                 }
@@ -64,12 +70,12 @@ struct MonitoringRangePickerControl: View {
             }
         }
         .padding(2)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.7)
+                .stroke(Color.primary.opacity(0.15), lineWidth: 0.8)
         }
-        .shadow(color: Color.black.opacity(0.035), radius: 4, y: 1)
+        .shadow(color: Color.black.opacity(0.055), radius: 5, y: 1)
         .fixedSize()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("History range")
@@ -89,18 +95,22 @@ private struct GlassySecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.caption.weight(.medium))
-            .foregroundStyle(.primary.opacity(configuration.isPressed ? 0.62 : 0.82))
+            .foregroundStyle(.primary.opacity(configuration.isPressed ? 0.72 : 0.92))
             .padding(.horizontal, 9)
             .frame(height: 27)
             .background(
-                .ultraThinMaterial,
+                .thinMaterial,
                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.075 : 0.045))
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.primary.opacity(configuration.isPressed ? 0.13 : 0.07), lineWidth: 0.7)
+                    .stroke(Color.primary.opacity(configuration.isPressed ? 0.22 : 0.14), lineWidth: 0.8)
             }
-            .shadow(color: Color.black.opacity(0.03), radius: 4, y: 1)
+            .shadow(color: Color.black.opacity(0.055), radius: 5, y: 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
     }
