@@ -813,9 +813,9 @@ struct MonitoringTimelineView: View, Equatable {
             Color.clear.frame(width: labelWidth, height: 1)
             GeometryReader { geometry in
                 let plotWidth = max(1, geometry.size.width - UnifiedTimelineLayout.rightAxisWidth)
-                let tickLabelWidth: CGFloat = 38
                 ZStack(alignment: .topLeading) {
                     ForEach(timeMarks) { mark in
+                        let tickLabelWidth: CGFloat = mark.label.contains(" ") ? 58 : 38
                         let fraction = min(1, max(
                             0,
                             mark.date.timeIntervalSince(interval.start) / max(1, interval.duration)
@@ -926,12 +926,51 @@ struct MonitoringTimelineView: View, Equatable {
         case .twentyFourHours:
             marks = [(-86_400, "−24h"), (-43_200, "−12h"), (-21_600, "−6h"), (-7_200, "−2h"), (0, "Now")]
         }
-        return marks.map { offset, label in
+        var resolved = marks.map { offset, label in
             TimelineAxisMark(
                 date: interval.end.addingTimeInterval(offset),
                 label: label
             )
         }
+        guard let wake = leadingWakeBoundary else { return resolved }
+
+        if let closeIndex = resolved.indices.min(by: {
+            abs(resolved[$0].date.timeIntervalSince(wake))
+                < abs(resolved[$1].date.timeIntervalSince(wake))
+        }), abs(resolved[closeIndex].date.timeIntervalSince(wake)) <= 5 * 60 {
+            resolved[closeIndex] = TimelineAxisMark(
+                date: wake,
+                label: relativeAxisLabel(for: wake)
+            )
+        } else if let precedingIndex = resolved.indices
+            .filter({ $0 > resolved.startIndex && $0 < resolved.index(before: resolved.endIndex) })
+            .filter({ resolved[$0].date < wake })
+            .max(by: { resolved[$0].date < resolved[$1].date }) {
+            resolved.remove(at: precedingIndex)
+            resolved.append(TimelineAxisMark(date: wake, label: relativeAxisLabel(for: wake)))
+        } else {
+            resolved.append(TimelineAxisMark(date: wake, label: relativeAxisLabel(for: wake)))
+        }
+        return resolved.sorted { $0.date < $1.date }
+    }
+
+    private var leadingWakeBoundary: Date? {
+        guard let leadingSleep = sleepIntervals.first(where: {
+            $0.start <= interval.start.addingTimeInterval(60)
+                && $0.end > interval.start.addingTimeInterval(15 * 60)
+        }) else { return nil }
+        let wake = min(interval.end, leadingSleep.end)
+        guard wake < interval.end.addingTimeInterval(-2 * 60) else { return nil }
+        return wake
+    }
+
+    private func relativeAxisLabel(for date: Date) -> String {
+        let totalMinutes = max(1, Int((interval.end.timeIntervalSince(date) / 60).rounded()))
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours == 0 { return "−\(minutes)m" }
+        if minutes == 0 { return "−\(hours)h" }
+        return "−\(hours)h \(minutes)m"
     }
 
     private var graphicsAverage: Double? {
