@@ -73,47 +73,48 @@ struct MenuBarMonitoringView: View {
 
             Spacer(minLength: 12)
 
-            MonitoringRangePickerControl(
-                selection: model.menuBarMonitoringRange,
-                itemWidth: 34,
-                onSelect: model.selectMenuBarMonitoringRange
-            )
-            .help("Choose how much history to show")
-
             VStack(alignment: .trailing, spacing: 6) {
-                ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
-                DiagnosisActionButton()
-            }
-
-            if model.menuBarIsRefreshing {
-                HStack(spacing: 7) {
-                    Text("Updating")
+                HStack(spacing: 8) {
+                    if model.menuBarIsRefreshing {
+                        Text("Updating")
+                            .foregroundStyle(.secondary)
+                    } else if model.menuBarRefreshMessage != nil {
+                        Label("Cached", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                            .foregroundStyle(.secondary)
+                            .help(model.menuBarRefreshMessage ?? "")
+                    }
+                    ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityElement(children: .combine)
-            } else if model.menuBarRefreshMessage != nil {
-                Label("Cached", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help(model.menuBarRefreshMessage ?? "")
-            }
 
-            Button {
-                model.refreshMenuBarNow()
-            } label: {
-                if model.menuBarIsRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 14, height: 14)
-                } else {
-                    Image(systemName: "arrow.clockwise")
+                HStack(alignment: .center, spacing: 9) {
+                    MonitoringRangePickerControl(
+                        selection: model.menuBarMonitoringRange,
+                        itemWidth: 34,
+                        onSelect: model.selectMenuBarMonitoringRange
+                    )
+                    .help("Choose how much history to show")
+
+                    DiagnosisActionButton()
+
+                    Button {
+                        model.refreshMenuBarNow()
+                    } label: {
+                        if model.menuBarIsRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .frame(width: 14, height: 14)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Refresh monitoring")
+                    .accessibilityLabel("Refresh monitoring")
+                    .disabled(model.menuBarIsRefreshing)
                 }
             }
-            .buttonStyle(.borderless)
-            .help("Refresh monitoring")
-            .accessibilityLabel("Refresh monitoring")
-            .disabled(model.menuBarIsRefreshing)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
