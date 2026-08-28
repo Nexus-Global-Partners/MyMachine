@@ -1678,8 +1678,10 @@ private struct ContributorAppIcon: View {
 }
 
 private enum TimelineColors {
+    private static let electricPink = Color(.displayP3, red: 1.0, green: 0.17, blue: 0.84)
+
     static let processor = Color(nsColor: .systemBlue)
-    static let handsOn = Color(nsColor: .systemPink)
+    static let handsOn = electricPink
     static let automatic = Color(nsColor: .secondaryLabelColor)
     static let graphics = Color(nsColor: .systemTeal)
     static let battery = Color(nsColor: .systemGreen)
@@ -1687,7 +1689,7 @@ private enum TimelineColors {
     static let memoryElevated = Color(nsColor: .systemOrange)
     static let memoryStatus = Color(nsColor: .systemYellow)
     static let thermal = Color(nsColor: .systemOrange)
-    static let presence = Color(nsColor: .systemPink)
+    static let presence = electricPink
     static let sleepState = Color(nsColor: .tertiaryLabelColor)
     static let active = Color(nsColor: .systemCyan)
     static let normal = Color(nsColor: .systemGreen)
