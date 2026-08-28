@@ -1679,15 +1679,16 @@ private struct ContributorAppIcon: View {
 
 private enum TimelineColors {
     static let processor = Color(nsColor: .systemBlue)
-    static let handsOn = Color.indigo
-    static let automatic = Color(nsColor: .systemPurple)
+    static let handsOn = Color(nsColor: .labelColor)
+    static let automatic = Color(nsColor: .secondaryLabelColor)
     static let graphics = Color(nsColor: .systemTeal)
     static let battery = Color(nsColor: .systemGreen)
     static let memory = Color(nsColor: .systemGray)
     static let memoryElevated = Color(nsColor: .systemOrange)
     static let memoryStatus = Color(nsColor: .systemYellow)
     static let thermal = Color(nsColor: .systemOrange)
-    static let presence = Color(nsColor: .systemGreen)
+    static let presence = Color(nsColor: .labelColor)
+    static let sleepState = Color(nsColor: .tertiaryLabelColor)
     static let active = Color(nsColor: .systemCyan)
     static let normal = Color(nsColor: .systemGreen)
     static let critical = Color(nsColor: .systemRed)
@@ -2404,7 +2405,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         drawStateRailSegments(
             sleep,
             label: "Sleep",
-            color: .secondary,
+            color: TimelineColors.sleepState,
             lineWidth: 1.7,
             glowOpacity: 0.08,
             in: &context,
@@ -2972,11 +2973,10 @@ private struct UnifiedDataCanvas: View, Equatable {
         if thermalContext.hasElevatedHeat {
             summary += " A quiet warm ribbon at the top of the processor plot marks periods when macOS reported reduced thermal headroom; it is not an exact temperature or fan-speed reading."
         }
-        if !presenceContext.handsOnIntervals.isEmpty {
-            summary += " A green baseline marks measured physical input."
-        }
-        if !automaticWorkIntervals.isEmpty {
-            summary += " The same baseline turns violet during observed automatic or background work without physical input, and gray during confirmed sleep. Awake time without evidence of either state and unrecorded gaps remain blank."
+        if !presenceContext.handsOnIntervals.isEmpty ||
+            !automaticWorkIntervals.isEmpty ||
+            !sleepIntervals.isEmpty {
+            summary += " A quiet labeled baseline distinguishes measured hands-on use, observed background work without physical input, and confirmed sleep. Awake time without evidence of either state and unrecorded gaps remain blank."
         }
         return summary
     }
