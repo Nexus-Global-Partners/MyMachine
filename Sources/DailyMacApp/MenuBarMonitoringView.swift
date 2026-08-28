@@ -95,7 +95,7 @@ struct MenuBarMonitoringView: View {
                     )
                     .help("Choose how much history to show")
 
-                    DiagnosisActionButton()
+                    TimelineDisplayModeControl()
 
                     Button {
                         model.refreshMenuBarNow()
@@ -155,21 +155,9 @@ struct MenuBarMonitoringView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(model.collectionState.label)
-                    .font(.caption.weight(.medium))
-                Text("Local only")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
             Spacer(minLength: 12)
 
-            TimelineDisplayModeControl()
+            DiagnosisActionButton()
 
             Button {
                 route.requestMonitoring()
@@ -183,12 +171,16 @@ struct MenuBarMonitoringView: View {
             .help("Open monitoring window")
             .accessibilityLabel("Open monitoring window")
 
-            Button("Open Full-Screen Dashboard") {
+            Button {
                 openWindow(id: "expanded-monitoring")
                 dismiss()
                 NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderless)
+            .help("Open full-screen dashboard")
+            .accessibilityLabel("Open full-screen dashboard")
 
             Menu {
                 if model.collectionState == .paused {
@@ -220,14 +212,6 @@ struct MenuBarMonitoringView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-    }
-
-    private var statusColor: Color {
-        switch model.collectionState {
-        case .monitoring: return .accentColor
-        case .failed: return .red
-        default: return .secondary
-        }
     }
 
     private var selectedTimelineDisplayMode: TimelineDisplayMode {
