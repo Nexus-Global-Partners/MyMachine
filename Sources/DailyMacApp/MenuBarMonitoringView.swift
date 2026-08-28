@@ -314,6 +314,13 @@ private final class PresentationProbeView: NSView {
         ) { [weak self] _ in
             self?.updatePresentationState()
         })
+        observers.append(center.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.restorePresentationAnchor()
+        })
 
         DispatchQueue.main.async { [weak self] in
             self?.reportOpeningIfNeeded()
@@ -323,6 +330,9 @@ private final class PresentationProbeView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     func stopObserving() {
+        if let observedWindow {
+            MenuBarPanelAnchorLease.shared.releaseSoon(afterClosing: observedWindow)
+        }
         deferredCloseCheck?.cancel()
         deferredCloseCheck = nil
         deferredPositioning?.cancel()
@@ -340,13 +350,22 @@ private final class PresentationProbeView: NSView {
               window.isVisible,
               window.isKeyWindow,
               !presentationReported else { return }
-        let anchor = NSEvent.mouseLocation
+        let anchor = MenuBarPanelAnchorLease.shared.acquire(for: window)
         presentationReported = true
         didOpen()
         positionWindow(window, under: anchor)
     }
 
-    private func positionWindow(_ window: NSWindow, under anchor: NSPoint) {
+    private func restorePresentationAnchor() {
+        guard presentationReported,
+              let window = observedWindow,
+              window.isVisible,
+              window.isKeyWindow,
+              let anchor = MenuBarPanelAnchorLease.shared.current else { return }
+        positionWindow(window, under: anchor)
+    }
+
+    private func positionWindow(_ window: NSWindow, under anchor: MenuBarPanelAnchor) {
         deferredPositioning?.cancel()
         let item = DispatchWorkItem { [weak self, weak window] in
             guard let self,
@@ -357,19 +376,24 @@ private final class PresentationProbeView: NSView {
                   window.isKeyWindow else { return }
 
             let screen = NSScreen.screens.first {
-                NSMouseInRect(anchor, $0.frame, false)
+                NSMouseInRect(anchor.pointer, $0.frame, false)
             } ?? window.screen ?? NSScreen.main
             guard let screen else { return }
 
             let bounds = screen.visibleFrame.insetBy(dx: 8, dy: 0)
             var frame = window.frame
-            let desiredX = anchor.x - frame.width / 2
+            let desiredX = anchor.pointer.x - frame.width / 2
             if frame.width <= bounds.width {
                 frame.origin.x = min(max(desiredX, bounds.minX), bounds.maxX - frame.width)
             } else {
                 frame.origin.x = bounds.midX - frame.width / 2
             }
-            guard abs(frame.origin.x - window.frame.origin.x) >= 0.5 else { return }
+            let desiredY = anchor.topEdge - frame.height
+            if frame.height <= bounds.height {
+                frame.origin.y = min(max(desiredY, bounds.minY), bounds.maxY - frame.height)
+            }
+            guard abs(frame.origin.x - window.frame.origin.x) >= 0.5
+                    || abs(frame.origin.y - window.frame.origin.y) >= 0.5 else { return }
             window.setFrameOrigin(frame.origin)
         }
         deferredPositioning = item
@@ -382,6 +406,7 @@ private final class PresentationProbeView: NSView {
             deferredPositioning?.cancel()
             deferredPositioning = nil
             presentationReported = false
+            MenuBarPanelAnchorLease.shared.releaseSoon(afterClosing: window)
         } else if window.isKeyWindow {
             reportOpeningIfNeeded()
         }
@@ -395,9 +420,61 @@ private final class PresentationProbeView: NSView {
                 self.deferredPositioning?.cancel()
                 self.deferredPositioning = nil
                 self.presentationReported = false
+                MenuBarPanelAnchorLease.shared.releaseSoon(afterClosing: window)
             }
         }
         deferredCloseCheck = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
+    }
+}
+
+/// SwiftUI can replace the private `MenuBarExtra` window when its intrinsic
+/// height changes. Treating that replacement as a fresh opening would capture
+/// the mode button's pointer position and make the whole panel jump. This short
+/// lease carries the genuine opening anchor across an immediate replacement,
+/// while clearing it after the panel has actually closed.
+private struct MenuBarPanelAnchor {
+    let pointer: NSPoint
+    let topEdge: CGFloat
+}
+
+private final class MenuBarPanelAnchorLease {
+    static let shared = MenuBarPanelAnchorLease()
+
+    private(set) var current: MenuBarPanelAnchor?
+    private weak var activeWindow: NSWindow?
+    private var deferredRelease: DispatchWorkItem?
+
+    private init() {}
+
+    func acquire(for window: NSWindow) -> MenuBarPanelAnchor {
+        deferredRelease?.cancel()
+        deferredRelease = nil
+        activeWindow = window
+        if let current { return current }
+
+        let anchor = MenuBarPanelAnchor(
+            pointer: NSEvent.mouseLocation,
+            topEdge: window.frame.maxY
+        )
+        current = anchor
+        return anchor
+    }
+
+    func releaseSoon(afterClosing window: NSWindow) {
+        deferredRelease?.cancel()
+        let item = DispatchWorkItem { [weak self, weak window] in
+            guard let self else { return }
+            if let activeWindow = self.activeWindow,
+               activeWindow !== window,
+               activeWindow.isVisible {
+                return
+            }
+            self.activeWindow = nil
+            self.current = nil
+            self.deferredRelease = nil
+        }
+        deferredRelease = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: item)
     }
 }

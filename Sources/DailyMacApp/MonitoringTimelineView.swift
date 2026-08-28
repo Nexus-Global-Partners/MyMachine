@@ -1941,6 +1941,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawThermalAtmosphere(in: &context, rect: rects.cpu)
             drawProcessorMemory(in: &context, rect: rects.cpu)
             drawProcessor(in: &context, rect: rects.cpu)
+            drawMachineStateRail(in: &context, rect: rects.cpu)
             if let battery = rects.battery {
                 drawBattery(in: &context, rect: battery, rightAxisX: rects.plotWidth)
             }
@@ -2181,17 +2182,6 @@ private struct UnifiedDataCanvas: View, Equatable {
                     plot: plot
                 )
             }
-            drawAutomaticWorkProcessorArea(
-                cpuDisplayPoints,
-                in: &context,
-                plot: plot
-            )
-            drawHandsOnProcessorArea(
-                cpuDisplayPoints,
-                in: &context,
-                plot: plot
-            )
-
             drawProcessorLine(
                 cpuDisplayPoints,
                 color: TimelineColors.processor,
@@ -2391,107 +2381,75 @@ private struct UnifiedDataCanvas: View, Equatable {
         )
     }
 
-    /// Human activity belongs to the same timeline as machine demand. A soft
-    /// green wash appears only below measured CPU points that overlap hands-on
-    /// input, so an awake unattended Mac stays visually quiet. The CPU line
-    /// remains blue and dominant in both Calm and Precise.
-    private func drawHandsOnProcessorArea(
-        _ points: [CGPoint],
+    /// One quiet baseline carries the three states that matter when reading
+    /// machine demand: green for measured hands-on input, violet for an awake
+    /// Mac working without physical input, and gray for confirmed sleep.
+    /// Missing telemetry stays blank rather than being assigned a state.
+    private func drawMachineStateRail(
         in context: inout GraphicsContext,
-        plot: CGRect
+        rect: CGRect
     ) {
-        guard points.count >= 2 else { return }
-        drawProcessorContextAreas(
-            points,
-            intervals: presenceContext.handsOnIntervals,
-            color: TimelineColors.presence,
-            opacity: displayMode == .calm ? 0.17 : 0.20,
-            in: &context,
-            plot: plot
-        )
-    }
-
-    /// Automatic work is useful precisely when the person is not touching the
-    /// Mac. A restrained violet wash distinguishes that observed off-screen
-    /// work from both green hands-on intervals and confirmed gray sleep.
-    private func drawAutomaticWorkProcessorArea(
-        _ points: [CGPoint],
-        in context: inout GraphicsContext,
-        plot: CGRect
-    ) {
-        let offScreenIntervals = subtracting(
-            presenceContext.handsOnIntervals + sleepIntervals,
+        let plot = rect.insetBy(dx: 0, dy: 6)
+        let handsOn = subtracting(sleepIntervals, from: presenceContext.handsOnIntervals)
+        let backgroundAutomatic = mergedStateIntervals(subtracting(
+            handsOn + sleepIntervals,
             from: automaticWorkIntervals
+        ))
+
+        drawStateRailSegments(
+            sleepIntervals,
+            color: .secondary,
+            lineWidth: 1.7,
+            glowOpacity: 0.08,
+            in: &context,
+            plot: plot
         )
-        drawProcessorContextAreas(
-            points,
-            intervals: offScreenIntervals,
+        drawStateRailSegments(
+            backgroundAutomatic,
             color: TimelineColors.automatic,
-            opacity: displayMode == .calm ? 0.075 : 0.095,
+            lineWidth: 2.0,
+            glowOpacity: 0.12,
+            in: &context,
+            plot: plot
+        )
+        drawStateRailSegments(
+            handsOn,
+            color: TimelineColors.presence,
+            lineWidth: 2.25,
+            glowOpacity: 0.16,
             in: &context,
             plot: plot
         )
     }
 
-    private func drawProcessorContextAreas(
-        _ points: [CGPoint],
-        intervals: [DateInterval],
+    private func drawStateRailSegments(
+        _ intervals: [DateInterval],
         color: Color,
-        opacity: Double,
+        lineWidth: CGFloat,
+        glowOpacity: Double,
         in context: inout GraphicsContext,
         plot: CGRect
     ) {
-        guard points.count >= 2 else { return }
+        let y = plot.maxY - 1.5
         for interval in intervals {
             let startX = xPosition(interval.start, plotWidth: plot.width)
             let endX = xPosition(interval.end, plotWidth: plot.width)
             guard endX > startX else { continue }
-            let activeRun = clippedPolyline(points, to: startX...endX)
-            drawProcessorContextAreaFill(
-                activeRun,
-                color: color,
-                topOpacity: opacity,
-                in: &context,
-                plot: plot
+
+            var segment = Path()
+            segment.move(to: CGPoint(x: startX, y: y))
+            segment.addLine(to: CGPoint(x: endX, y: y))
+            context.stroke(
+                segment,
+                with: .color(color.opacity(glowOpacity)),
+                style: StrokeStyle(lineWidth: lineWidth + 4, lineCap: .round)
+            )
+            context.stroke(
+                segment,
+                with: .color(color.opacity(0.86)),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
             )
         }
-    }
-
-    /// Unlike the processor fill, the hands-on wash begins at the local CPU
-    /// envelope instead of the top of the entire plot. This keeps the green
-    /// context legible at long ranges without tinting the CPU line itself.
-    private func drawProcessorContextAreaFill(
-        _ points: [CGPoint],
-        color: Color,
-        topOpacity: Double,
-        in context: inout GraphicsContext,
-        plot: CGRect
-    ) {
-        guard points.count >= 2,
-              let first = points.first,
-              let last = points.last,
-              let localTopY = points.map(\.y).min() else { return }
-
-        var area = Path()
-        area.move(to: first)
-        for point in points.dropFirst() { area.addLine(to: point) }
-        area.addLine(to: CGPoint(x: last.x, y: plot.maxY))
-        area.addLine(to: CGPoint(x: first.x, y: plot.maxY))
-        area.closeSubpath()
-
-        context.fill(
-            area,
-            with: .linearGradient(
-                Gradient(stops: [
-                    .init(color: color.opacity(topOpacity), location: 0),
-                    .init(color: color.opacity(topOpacity * 0.78), location: 0.42),
-                    .init(color: color.opacity(topOpacity * 0.34), location: 0.82),
-                    .init(color: color.opacity(topOpacity * 0.10), location: 1)
-                ]),
-                startPoint: CGPoint(x: plot.midX, y: max(plot.minY, localTopY)),
-                endPoint: CGPoint(x: plot.midX, y: plot.maxY)
-            )
-        )
     }
 
     /// Produces mutually exclusive state intervals without inventing activity.
@@ -2520,6 +2478,25 @@ private struct UnifiedDataCanvas: View, Equatable {
                 return pieces.filter { $0.duration > 0 }
             }
         }
+    }
+
+    private func mergedStateIntervals(_ intervals: [DateInterval]) -> [DateInterval] {
+        let ordered = intervals
+            .filter { $0.duration > 0 }
+            .sorted { $0.start < $1.start }
+        guard var current = ordered.first else { return [] }
+
+        var result: [DateInterval] = []
+        for next in ordered.dropFirst() {
+            if next.start <= current.end {
+                current = DateInterval(start: current.start, end: max(current.end, next.end))
+            } else {
+                result.append(current)
+                current = next
+            }
+        }
+        result.append(current)
+        return result
     }
 
     private func drawProcessorLine(
@@ -2930,10 +2907,10 @@ private struct UnifiedDataCanvas: View, Equatable {
             summary += " A quiet warm ribbon at the top of the processor plot marks periods when macOS reported reduced thermal headroom; it is not an exact temperature or fan-speed reading."
         }
         if !presenceContext.handsOnIntervals.isEmpty {
-            summary += " A green wash below the CPU line marks measured physical input."
+            summary += " A green baseline marks measured physical input."
         }
         if !automaticWorkIntervals.isEmpty {
-            summary += " A quiet violet wash marks observed off-screen app or agent work when no physical input was measured. Gray remains reserved for confirmed sleep, and unrecorded gaps receive no activity fill."
+            summary += " The same baseline turns violet during observed automatic or background work without physical input, and gray during confirmed sleep. Awake time without evidence of either state and unrecorded gaps remain blank."
         }
         return summary
     }
