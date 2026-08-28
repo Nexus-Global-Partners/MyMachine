@@ -279,9 +279,10 @@ struct MonitoringTimelineView: View, Equatable {
                     color: TimelineColors.graphics
                 )
             }
-            Text(selectedTime == nil ? "2 min" : "selected")
+            Text(calmProcessorContextLabel)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
         .padding(.horizontal, 8)
         .frame(height: 24)
@@ -294,9 +295,20 @@ struct MonitoringTimelineView: View, Equatable {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(processorAccessibilityLabel(
             reading,
-            label: "\(calmStatusSignal.label). \(selectedTime == nil ? "Live two minute average" : "Selected reading")"
+            label: "\(calmStatusSignal.label). \(calmProcessorAccessibilityContext)"
         ))
         .help(calmStatusSignal.help)
+    }
+
+    private var calmProcessorContextLabel: String {
+        guard let selectedTime else { return "2 min" }
+        return selectedTime.formatted(date: .omitted, time: .shortened)
+    }
+
+    private var calmProcessorAccessibilityContext: String {
+        guard let selectedTime else { return "Live two minute average" }
+        let clock = selectedTime.formatted(date: .omitted, time: .shortened)
+        return "Selected at \(clock)"
     }
 
     private var calmStatusSignal: (symbol: String, label: String, color: Color, help: String) {
