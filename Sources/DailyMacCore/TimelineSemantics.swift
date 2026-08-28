@@ -174,10 +174,10 @@ public struct TimelineThermalContext: Equatable, Sendable {
     }
 }
 
-/// A content-free presence baseline for the core graph. `awakeIntervals` mean
-/// the Mac was observed running; `handsOnIntervals` are the subset with measured
+/// Content-free presence context for the core graph. `awakeIntervals` mean the
+/// Mac was observed running; `handsOnIntervals` are the subset with measured
 /// physical input (or the legacy non-idle signal when input counts are absent).
-/// Confirmed sleep remains event-backed and is supplied separately by the view.
+/// The view decides how to distinguish unattended time and confirmed sleep.
 public struct TimelinePresenceContext: Equatable, Sendable {
     public let awakeIntervals: [DateInterval]
     public let handsOnIntervals: [DateInterval]

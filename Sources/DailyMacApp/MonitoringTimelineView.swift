@@ -1934,7 +1934,6 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawThermalAtmosphere(in: &context, rect: rects.cpu)
             drawProcessorMemory(in: &context, rect: rects.cpu)
             drawProcessor(in: &context, rect: rects.cpu)
-            drawPresenceBaseline(in: &context, rect: rects.cpu)
             if let battery = rects.battery {
                 drawBattery(in: &context, rect: battery, rightAxisX: rects.plotWidth)
             }
@@ -2099,74 +2098,6 @@ private struct UnifiedDataCanvas: View, Equatable {
         }
     }
 
-    /// One quiet baseline separates human presence from machine availability
-    /// without introducing another chart. Bright green is measured hands-on
-    /// input, pale green is observed awake time, gray is confirmed sleep, and
-    /// unrecorded time remains blank.
-    private func drawPresenceBaseline(in context: inout GraphicsContext, rect: CGRect) {
-        let y = rect.maxY - 2.5
-        drawPresenceIntervals(
-            sleepIntervals,
-            y: y,
-            color: .secondary,
-            opacity: 0.30,
-            lineWidth: 2.2,
-            in: &context,
-            plotWidth: rect.width
-        )
-        drawPresenceIntervals(
-            presenceContext.awakeIntervals,
-            y: y,
-            color: TimelineColors.presence,
-            opacity: 0.20,
-            lineWidth: 2.2,
-            in: &context,
-            plotWidth: rect.width
-        )
-        drawPresenceIntervals(
-            presenceContext.handsOnIntervals,
-            y: y,
-            color: TimelineColors.presence,
-            opacity: 0.82,
-            lineWidth: 2.7,
-            glowOpacity: 0.10,
-            in: &context,
-            plotWidth: rect.width
-        )
-    }
-
-    private func drawPresenceIntervals(
-        _ intervals: [DateInterval],
-        y: CGFloat,
-        color: Color,
-        opacity: Double,
-        lineWidth: CGFloat,
-        glowOpacity: Double = 0,
-        in context: inout GraphicsContext,
-        plotWidth: CGFloat
-    ) {
-        for interval in intervals {
-            let start = xPosition(interval.start, plotWidth: plotWidth)
-            let end = xPosition(interval.end, plotWidth: plotWidth)
-            guard end > start else { continue }
-            var line = Path()
-            line.move(to: CGPoint(x: start, y: y))
-            line.addLine(to: CGPoint(x: max(start + 1, end), y: y))
-            if glowOpacity > 0 {
-                context.stroke(
-                    line,
-                    with: .color(color.opacity(glowOpacity)),
-                    style: StrokeStyle(lineWidth: lineWidth + 4, lineCap: .round)
-                )
-            }
-            context.stroke(
-                line,
-                with: .color(color.opacity(opacity)),
-                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-            )
-        }
-    }
-
     private func drawProcessor(in context: inout GraphicsContext, rect: CGRect) {
         let plot = rect.insetBy(dx: 0, dy: 6)
         let grouped = Dictionary(
@@ -2234,71 +2165,6 @@ private struct UnifiedDataCanvas: View, Equatable {
             let cpuDisplayPoints = smoothedProcessorPoints(cpuPoints)
             let graphicsDisplayRuns = graphicsRuns.map(smoothedProcessorPoints)
 
-            var coreSplitRuns: [(cpu: [CGPoint], efficiencyBoundary: [CGPoint])] = []
-            var currentCoreCPU: [CGPoint] = []
-            var currentEfficiencyBoundary: [CGPoint] = []
-            func finishCoreRun() {
-                guard currentCoreCPU.count >= 2 else {
-                    currentCoreCPU.removeAll(keepingCapacity: true)
-                    currentEfficiencyBoundary.removeAll(keepingCapacity: true)
-                    return
-                }
-                coreSplitRuns.append((
-                    smoothedProcessorPoints(currentCoreCPU),
-                    smoothedProcessorPoints(currentEfficiencyBoundary)
-                ))
-                currentCoreCPU = []
-                currentEfficiencyBoundary = []
-            }
-            for point in values {
-                guard let performanceContribution = point.performanceCoreContributionPercent else {
-                    finishCoreRun()
-                    continue
-                }
-                let x = xPosition(point.timestamp, plotWidth: plot.width)
-                let boundedPerformance = min(point.cpuPercent, max(0, performanceContribution))
-                let efficiencyContribution = max(0, point.cpuPercent - boundedPerformance)
-                currentCoreCPU.append(CGPoint(
-                    x: x,
-                    y: processorYPosition(point.cpuPercent, in: plot)
-                ))
-                currentEfficiencyBoundary.append(CGPoint(
-                    x: x,
-                    y: processorYPosition(efficiencyContribution, in: plot)
-                ))
-            }
-            finishCoreRun()
-
-            drawProcessorArea(
-                cpuDisplayPoints,
-                color: TimelineColors.processor,
-                topOpacity: displayMode == .calm
-                    ? 0.070
-                    : (coreSplitRuns.isEmpty ? 0.095 : 0.048),
-                in: &context,
-                plot: plot
-            )
-            if displayMode == .precise {
-                for run in coreSplitRuns {
-                    // One blue language, two quiet densities: the lower wash is the
-                    // efficiency-core share; the stronger upper wash is performance-core work.
-                    drawProcessorArea(
-                        run.efficiencyBoundary,
-                        color: TimelineColors.processor,
-                        topOpacity: 0.038,
-                        in: &context,
-                        plot: plot
-                    )
-                    drawProcessorBand(
-                        upper: run.cpu,
-                        lower: run.efficiencyBoundary,
-                        color: TimelineColors.processor,
-                        opacity: 0.072,
-                        in: &context,
-                        plot: plot
-                    )
-                }
-            }
             for run in graphicsDisplayRuns {
                 drawProcessorArea(
                     run,
@@ -2308,6 +2174,11 @@ private struct UnifiedDataCanvas: View, Equatable {
                     plot: plot
                 )
             }
+            drawHandsOnProcessorArea(
+                cpuDisplayPoints,
+                in: &context,
+                plot: plot
+            )
 
             drawProcessorLine(
                 cpuDisplayPoints,
@@ -2508,33 +2379,30 @@ private struct UnifiedDataCanvas: View, Equatable {
         )
     }
 
-    private func drawProcessorBand(
-        upper: [CGPoint],
-        lower: [CGPoint],
-        color: Color,
-        opacity: Double,
+    /// Human activity belongs to the same timeline as machine demand. A soft
+    /// green wash appears only below measured CPU points that overlap hands-on
+    /// input, so an awake unattended Mac stays visually quiet. The CPU line
+    /// remains blue and dominant in both Calm and Precise.
+    private func drawHandsOnProcessorArea(
+        _ points: [CGPoint],
         in context: inout GraphicsContext,
         plot: CGRect
     ) {
-        guard upper.count >= 2, upper.count == lower.count,
-              let first = upper.first, let last = upper.last else { return }
-        var band = Path()
-        band.move(to: first)
-        for point in upper.dropFirst() { band.addLine(to: point) }
-        for point in lower.reversed() { band.addLine(to: point) }
-        band.closeSubpath()
-        context.fill(
-            band,
-            with: .linearGradient(
-                Gradient(stops: [
-                    .init(color: color.opacity(opacity), location: 0),
-                    .init(color: color.opacity(opacity * 0.68), location: 0.58),
-                    .init(color: color.opacity(opacity * 0.22), location: 1)
-                ]),
-                startPoint: CGPoint(x: (first.x + last.x) / 2, y: plot.minY),
-                endPoint: CGPoint(x: (first.x + last.x) / 2, y: plot.maxY)
+        guard points.count >= 2 else { return }
+        let opacity = displayMode == .calm ? 0.085 : 0.072
+        for interval in presenceContext.handsOnIntervals {
+            let startX = xPosition(interval.start, plotWidth: plot.width)
+            let endX = xPosition(interval.end, plotWidth: plot.width)
+            guard endX > startX else { continue }
+            let activeRun = clippedPolyline(points, to: startX...endX)
+            drawProcessorArea(
+                activeRun,
+                color: TimelineColors.presence,
+                topOpacity: opacity,
+                in: &context,
+                plot: plot
             )
-        )
+        }
     }
 
     private func drawProcessorLine(
@@ -2924,7 +2792,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             summary += " A second solid line shows the optional graphics-driver activity estimate on the same scale."
         }
         if processorTrend.contains(where: { $0.performanceCoreContributionPercent != nil }) {
-            summary += " Two subtle blue densities inside the CPU fill divide performance-core and efficiency-core contributions; exact cluster utilization appears only when inspecting a moment."
+            summary += " Exact performance-core and efficiency-core utilization is available when inspecting a moment."
         }
         if processorScaleMaximum == 50 {
             summary += " The processor plot uses a zero-to-fifty-percent scale; rarer higher peaks touch the fifty-percent-plus cap."
@@ -2944,8 +2812,8 @@ private struct UnifiedDataCanvas: View, Equatable {
         if thermalContext.hasElevatedHeat {
             summary += " A quiet warm ribbon at the top of the processor plot marks periods when macOS reported reduced thermal headroom; it is not an exact temperature or fan-speed reading."
         }
-        if !presenceContext.awakeIntervals.isEmpty || !sleepIntervals.isEmpty {
-            summary += " A thin baseline below the processor plot is bright green for measured physical input, pale green while the Mac was observed awake, gray for confirmed sleep, and blank where no state was recorded."
+        if !presenceContext.handsOnIntervals.isEmpty {
+            summary += " A soft green wash below the CPU line appears only during measured physical input; unattended awake time and unrecorded gaps receive no activity fill."
         }
         return summary
     }
