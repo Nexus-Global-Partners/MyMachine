@@ -91,21 +91,15 @@ struct MonitoringRangePickerControl: View {
     }
 }
 
-/// A deliberately compact mode switch: it stays discoverable without adding a
-/// second segmented control beside the history range.
+/// A deliberately compact two-state switch. One click changes the graph
+/// immediately; a menu would add a second choice for a binary decision.
 struct TimelineDisplayModeControl: View {
     @AppStorage(TimelineDisplayMode.storageKey)
     private var storedMode = TimelineDisplayMode.precise.rawValue
 
     var body: some View {
-        Menu {
-            ForEach(TimelineDisplayMode.allCases) { option in
-                Button {
-                    storedMode = option.rawValue
-                } label: {
-                    Label(option.label, systemImage: option == mode ? "checkmark" : option.symbol)
-                }
-            }
+        Button {
+            storedMode = alternateMode.rawValue
         } label: {
             Label(mode.label, systemImage: mode.symbol)
                 .lineLimit(1)
@@ -113,13 +107,18 @@ struct TimelineDisplayModeControl: View {
         .buttonStyle(GlassySecondaryButtonStyle())
         .fixedSize()
         .help(mode == .calm
-            ? "Calm shows the longer trend with fewer short-lived movements"
-            : "Precise keeps interval-level detail for close inspection")
+            ? "Switch to Precise interval detail"
+            : "Switch to a calmer longer trend")
         .accessibilityLabel("Graph mode, \(mode.label)")
+        .accessibilityHint("Switches to \(alternateMode.label)")
     }
 
     private var mode: TimelineDisplayMode {
         TimelineDisplayMode(rawValue: storedMode) ?? .precise
+    }
+
+    private var alternateMode: TimelineDisplayMode {
+        mode == .calm ? .precise : .calm
     }
 }
 
