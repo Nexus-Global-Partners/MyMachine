@@ -1866,6 +1866,12 @@ private struct ProcessorTrendPoint: Equatable {
     let gpuPercent: Double?
 }
 
+private struct ProcessorRenderRun {
+    let startTime: Date
+    let endTime: Date
+    let points: [CGPoint]
+}
+
 private struct TimelineLiveProcessorReading: Equatable {
     let cpuPercent: Double
     let gpuPercent: Double?
@@ -2167,6 +2173,34 @@ private struct UnifiedDataCanvas: View, Equatable {
             grouping: processorTrend.filter { $0.timestamp >= interval.start && $0.timestamp <= interval.end },
             by: \.segment
         )
+
+        let orderedSegments = grouped.keys.sorted().compactMap { segment -> [ProcessorTrendPoint]? in
+            guard let values = grouped[segment]?.sorted(by: { $0.timestamp < $1.timestamp }),
+                  !values.isEmpty else { return nil }
+            return values
+        }
+        let cpuRuns = orderedSegments.compactMap { values -> ProcessorRenderRun? in
+            guard let first = values.first, let last = values.last else { return nil }
+            return ProcessorRenderRun(
+                startTime: first.timestamp,
+                endTime: last.timestamp,
+                points: smoothedProcessorPoints(values.map { point in
+                    CGPoint(
+                        x: xPosition(point.timestamp, plotWidth: plot.width),
+                        y: processorYPosition(point.cpuPercent, in: plot)
+                    )
+                })
+            )
+        }
+        let graphicsRuns = orderedSegments.flatMap { graphicsRenderRuns(from: $0, in: plot) }
+
+        // Missing telemetry is not measured work. A neutral connector keeps the
+        // visual thread intact without carrying CPU/GPU color or area through it.
+        // Confirmed sleep is the one known absence: ease to zero, stay there,
+        // then ease back after wake rather than drawing a hard vertical cut.
+        drawProcessorGapBridges(cpuRuns, in: &context, plot: plot)
+        drawProcessorGapBridges(graphicsRuns, in: &context, plot: plot)
+
         for segment in grouped.keys.sorted() {
             guard let values = grouped[segment]?.sorted(by: { $0.timestamp < $1.timestamp }),
                   !values.isEmpty else { continue }
@@ -2306,6 +2340,117 @@ private struct UnifiedDataCanvas: View, Equatable {
                 )
             }
         }
+    }
+
+    private func graphicsRenderRuns(
+        from values: [ProcessorTrendPoint],
+        in plot: CGRect
+    ) -> [ProcessorRenderRun] {
+        var result: [ProcessorRenderRun] = []
+        var current: [(timestamp: Date, point: CGPoint)] = []
+
+        func finishRun() {
+            guard let first = current.first, let last = current.last else { return }
+            result.append(ProcessorRenderRun(
+                startTime: first.timestamp,
+                endTime: last.timestamp,
+                points: smoothedProcessorPoints(current.map(\.point))
+            ))
+            current.removeAll(keepingCapacity: true)
+        }
+
+        for value in values {
+            guard let gpu = value.gpuPercent else {
+                finishRun()
+                continue
+            }
+            current.append((
+                timestamp: value.timestamp,
+                point: CGPoint(
+                    x: xPosition(value.timestamp, plotWidth: plot.width),
+                    y: processorYPosition(gpu, in: plot)
+                )
+            ))
+        }
+        finishRun()
+        return result
+    }
+
+    private func drawProcessorGapBridges(
+        _ runs: [ProcessorRenderRun],
+        in context: inout GraphicsContext,
+        plot: CGRect
+    ) {
+        let ordered = runs.sorted { $0.startTime < $1.startTime }
+        guard ordered.count >= 2 else { return }
+
+        for index in 1..<ordered.count {
+            let previous = ordered[index - 1]
+            let next = ordered[index]
+            guard next.startTime > previous.endTime,
+                  let start = previous.points.last,
+                  let end = next.points.first,
+                  end.x - start.x > 1.5 else { continue }
+
+            let containsConfirmedSleep = sleepIntervals.contains { sleep in
+                sleep.end > previous.endTime && sleep.start < next.startTime
+            }
+            let path = containsConfirmedSleep
+                ? processorSleepBridge(from: start, to: end, baselineY: plot.maxY)
+                : processorCaptureBridge(from: start, to: end)
+            let glowOpacity = displayMode == .calm ? 0.045 : 0.060
+            let lineOpacity = displayMode == .calm ? 0.24 : 0.31
+            let lineWidth: CGFloat = displayMode == .calm ? 1.15 : 1.05
+
+            context.stroke(
+                path,
+                with: .color(.secondary.opacity(glowOpacity)),
+                style: StrokeStyle(lineWidth: lineWidth + 3.2, lineCap: .round, lineJoin: .round)
+            )
+            context.stroke(
+                path,
+                with: .color(.secondary.opacity(lineOpacity)),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+            )
+        }
+    }
+
+    private func processorCaptureBridge(from start: CGPoint, to end: CGPoint) -> Path {
+        let distance = max(1, end.x - start.x)
+        var path = Path()
+        path.move(to: start)
+        path.addCurve(
+            to: end,
+            control1: CGPoint(x: start.x + distance * 0.34, y: start.y),
+            control2: CGPoint(x: end.x - distance * 0.34, y: end.y)
+        )
+        return path
+    }
+
+    private func processorSleepBridge(
+        from start: CGPoint,
+        to end: CGPoint,
+        baselineY: CGFloat
+    ) -> Path {
+        let distance = max(1, end.x - start.x)
+        let ramp = min(18, max(5, distance * 0.16))
+        let downX = min(start.x + ramp, start.x + distance * 0.48)
+        let upX = max(end.x - ramp, start.x + distance * 0.52)
+
+        var path = Path()
+        path.move(to: start)
+        path.addCurve(
+            to: CGPoint(x: downX, y: baselineY),
+            control1: CGPoint(x: start.x + (downX - start.x) * 0.48, y: start.y),
+            control2: CGPoint(x: downX - (downX - start.x) * 0.28, y: baselineY)
+        )
+        path.addLine(to: CGPoint(x: upX, y: baselineY))
+        path.addCurve(
+            to: end,
+            control1: CGPoint(x: upX + (end.x - upX) * 0.28, y: baselineY),
+            control2: CGPoint(x: end.x - (end.x - upX) * 0.48, y: end.y)
+        )
+        return path
     }
 
     /// Two bounded corner-cutting passes make interval averages easier to scan
