@@ -2382,22 +2382,28 @@ private struct UnifiedDataCanvas: View, Equatable {
     }
 
     /// One quiet baseline carries the three states that matter when reading
-    /// machine demand: green for measured hands-on input, violet for an awake
-    /// Mac working without physical input, and gray for confirmed sleep.
-    /// Missing telemetry stays blank rather than being assigned a state.
+    /// machine demand. Rendering merges gaps too small to read at the selected
+    /// scale and labels the longest run of each visible state, so the rail stays
+    /// calm without asking the user to memorize color meanings. Missing telemetry
+    /// remains blank rather than being assigned a state.
     private func drawMachineStateRail(
         in context: inout GraphicsContext,
         rect: CGRect
     ) {
         let plot = rect.insetBy(dx: 0, dy: 6)
-        let handsOn = subtracting(sleepIntervals, from: presenceContext.handsOnIntervals)
-        let backgroundAutomatic = mergedStateIntervals(subtracting(
-            handsOn + sleepIntervals,
+        let sleep = mergedStateIntervals(sleepIntervals)
+        let handsOn = compactStateRailIntervals(
+            subtracting(sleep, from: presenceContext.handsOnIntervals),
+            in: plot
+        )
+        let backgroundAutomatic = compactStateRailIntervals(subtracting(
+            handsOn + sleep,
             from: automaticWorkIntervals
-        ))
+        ), in: plot)
 
         drawStateRailSegments(
-            sleepIntervals,
+            sleep,
+            label: "Sleep",
             color: .secondary,
             lineWidth: 1.7,
             glowOpacity: 0.08,
@@ -2406,6 +2412,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         )
         drawStateRailSegments(
             backgroundAutomatic,
+            label: "Background",
             color: TimelineColors.automatic,
             lineWidth: 2.0,
             glowOpacity: 0.12,
@@ -2414,6 +2421,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         )
         drawStateRailSegments(
             handsOn,
+            label: "You",
             color: TimelineColors.presence,
             lineWidth: 2.25,
             glowOpacity: 0.16,
@@ -2424,6 +2432,7 @@ private struct UnifiedDataCanvas: View, Equatable {
 
     private func drawStateRailSegments(
         _ intervals: [DateInterval],
+        label: String,
         color: Color,
         lineWidth: CGFloat,
         glowOpacity: Double,
@@ -2450,6 +2459,60 @@ private struct UnifiedDataCanvas: View, Equatable {
                 style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
             )
         }
+
+        drawStateRailLabel(
+            label,
+            intervals: intervals,
+            color: color,
+            in: &context,
+            plot: plot
+        )
+    }
+
+    /// Coalesces only sub-pixel sampling seams. This is a display aggregation,
+    /// not a new telemetry claim: gaps large enough to inspect remain visible.
+    private func compactStateRailIntervals(
+        _ intervals: [DateInterval],
+        in plot: CGRect
+    ) -> [DateInterval] {
+        let secondsPerPixel = interval.duration / Double(max(1, plot.width))
+        let maximumGap = secondsPerPixel * 2.25
+        let minimumVisibleDuration = secondsPerPixel * 1.25
+        return mergedStateIntervals(intervals, maximumGap: maximumGap)
+            .filter { $0.duration >= minimumVisibleDuration }
+    }
+
+    /// Labels one representative run instead of adding a separate legend. The
+    /// rail explains itself where the state occurs and stays visually quiet.
+    private func drawStateRailLabel(
+        _ label: String,
+        intervals: [DateInterval],
+        color: Color,
+        in context: inout GraphicsContext,
+        plot: CGRect
+    ) {
+        let widest = intervals.max { lhs, rhs in
+            lhs.duration < rhs.duration
+        }
+        guard let widest else { return }
+
+        let startX = xPosition(widest.start, plotWidth: plot.width)
+        let endX = xPosition(widest.end, plotWidth: plot.width)
+        let requiredWidth: CGFloat
+        switch label {
+        case "Background": requiredWidth = 62
+        case "Sleep": requiredWidth = 36
+        default: requiredWidth = 24
+        }
+        guard endX - startX >= requiredWidth else { return }
+
+        context.draw(
+            Text(label)
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(color.opacity(0.78)),
+            at: CGPoint(x: (startX + endX) / 2, y: plot.maxY - 10),
+            anchor: .center
+        )
     }
 
     /// Produces mutually exclusive state intervals without inventing activity.
@@ -2480,7 +2543,10 @@ private struct UnifiedDataCanvas: View, Equatable {
         }
     }
 
-    private func mergedStateIntervals(_ intervals: [DateInterval]) -> [DateInterval] {
+    private func mergedStateIntervals(
+        _ intervals: [DateInterval],
+        maximumGap: TimeInterval = 0
+    ) -> [DateInterval] {
         let ordered = intervals
             .filter { $0.duration > 0 }
             .sorted { $0.start < $1.start }
@@ -2488,7 +2554,7 @@ private struct UnifiedDataCanvas: View, Equatable {
 
         var result: [DateInterval] = []
         for next in ordered.dropFirst() {
-            if next.start <= current.end {
+            if next.start.timeIntervalSince(current.end) <= maximumGap {
                 current = DateInterval(start: current.start, end: max(current.end, next.end))
             } else {
                 result.append(current)
