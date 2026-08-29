@@ -259,14 +259,17 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private func calmProcessorLegend(_ reading: TimelineLiveProcessorReading) -> some View {
-        HStack(spacing: 8) {
+        let signal = calmStatusSignal
+        let tint = calmStatusTint(for: signal.urgency)
+
+        return HStack(spacing: 8) {
             HStack(spacing: 5) {
-                Image(systemName: calmStatusSignal.symbol)
+                Image(systemName: signal.symbol)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(calmStatusSignal.color)
-                Text(calmStatusSignal.label)
+                    .foregroundStyle(tint)
+                Text(signal.label)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.primary.opacity(0.76))
+                    .foregroundStyle(tint)
             }
 
             Divider()
@@ -292,18 +295,37 @@ struct MonitoringTimelineView: View, Equatable {
         }
         .padding(.horizontal, 8)
         .frame(height: 24)
-        .background(.thinMaterial, in: Capsule())
+        .background {
+            Capsule()
+                .fill(.thinMaterial)
+                .overlay {
+                    Capsule()
+                        .fill(tint.opacity(calmStatusFillOpacity(for: signal.urgency)))
+                }
+        }
         .overlay {
             Capsule()
-                .stroke(Color.primary.opacity(0.10), lineWidth: 0.7)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.28),
+                            tint.opacity(calmStatusBorderOpacity(for: signal.urgency)),
+                            Color.primary.opacity(0.08)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.85
+                )
         }
+        .shadow(color: tint.opacity(calmStatusGlowOpacity(for: signal.urgency)), radius: 8, y: 1)
         .shadow(color: .black.opacity(0.05), radius: 5, y: 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(processorAccessibilityLabel(
             reading,
-            label: "\(calmStatusSignal.label). \(calmProcessorAccessibilityContext)"
+            label: "\(signal.label). \(calmProcessorAccessibilityContext)"
         ))
-        .help(calmStatusSignal.help)
+        .help(signal.help)
     }
 
     private var calmProcessorContextLabel: String {
@@ -317,28 +339,68 @@ struct MonitoringTimelineView: View, Equatable {
         return "Selected at \(clock)"
     }
 
-    private var calmStatusSignal: (symbol: String, label: String, color: Color, help: String) {
+    private var calmStatusSignal: (
+        symbol: String,
+        label: String,
+        help: String,
+        urgency: TimelineUrgency
+    ) {
         if selectedTime != nil {
             switch selectedState {
             case .sleep:
-                return ("moon.fill", "Asleep", .secondary, "The Mac was asleep at the selected time.")
+                return (
+                    "moon.fill",
+                    "Asleep",
+                    "The Mac was asleep at the selected time.",
+                    .unavailable
+                )
             case .unrecorded:
-                return ("clock.badge.questionmark", "No data", .secondary, "No reading was recorded at the selected time.")
+                return (
+                    "clock.badge.questionmark",
+                    "No data",
+                    "No reading was recorded at the selected time.",
+                    .unavailable
+                )
             case .observed(let sample):
                 if sample.thermalLevel == .serious || sample.thermalLevel == .critical {
-                    return ("thermometer.high", "Heat", TimelineColors.critical, "Heat may have limited speed at the selected time.")
+                    return (
+                        "thermometer.high",
+                        "Heat",
+                        "Heat may have limited speed at the selected time.",
+                        .critical
+                    )
                 }
                 if sample.memoryPressure == .high {
-                    return ("memorychip", "Memory", TimelineColors.memoryStatus, "Memory pressure was high at the selected time.")
+                    return (
+                        "memorychip",
+                        "Memory",
+                        "Memory pressure was high at the selected time.",
+                        urgency(for: sample)
+                    )
                 }
                 let processor = max(sample.cpuPercent, sample.gpuPercent ?? 0)
                 if processor >= TimelineSemantics.criticalProcessorThreshold {
-                    return ("exclamationmark.triangle.fill", "Near limit", TimelineColors.critical, "Processor demand was near capacity at the selected time.")
+                    return (
+                        "exclamationmark.triangle.fill",
+                        "Near limit",
+                        "Processor demand was near capacity at the selected time.",
+                        .critical
+                    )
                 }
                 if sample.memoryPressure == .elevated || sample.thermalLevel == .fair || processor >= 60 {
-                    return ("waveform.path.ecg", "Busy", TimelineColors.active, "Demand was elevated but manageable at the selected time.")
+                    return (
+                        "waveform.path.ecg",
+                        "Busy",
+                        "Demand was elevated but manageable at the selected time.",
+                        .elevated
+                    )
                 }
-                return ("checkmark.circle", "Comfortable", TimelineColors.normal, "The Mac had comfortable headroom at the selected time.")
+                return (
+                    "checkmark.circle",
+                    "Comfortable",
+                    "The Mac had comfortable headroom at the selected time.",
+                    .normal
+                )
             }
         }
 
@@ -350,7 +412,48 @@ struct MonitoringTimelineView: View, Equatable {
         case .pressure: label = "Near limit"
         case .unavailable: label = "Waiting"
         }
-        return (currentStatus.symbol, label, currentStatus.color, currentStatus.message)
+        return (
+            currentStatus.symbol,
+            label,
+            currentStatus.message,
+            currentStatus.urgency
+        )
+    }
+
+    private func calmStatusTint(for urgency: TimelineUrgency) -> Color {
+        switch urgency {
+        case .normal: TimelineColors.normal
+        case .elevated: TimelineColors.memoryStatus
+        case .critical: TimelineColors.critical
+        case .unavailable: .secondary
+        }
+    }
+
+    private func calmStatusFillOpacity(for urgency: TimelineUrgency) -> Double {
+        switch urgency {
+        case .normal: 0.09
+        case .elevated: 0.12
+        case .critical: 0.15
+        case .unavailable: 0.045
+        }
+    }
+
+    private func calmStatusBorderOpacity(for urgency: TimelineUrgency) -> Double {
+        switch urgency {
+        case .normal: 0.28
+        case .elevated: 0.38
+        case .critical: 0.50
+        case .unavailable: 0.16
+        }
+    }
+
+    private func calmStatusGlowOpacity(for urgency: TimelineUrgency) -> Double {
+        switch urgency {
+        case .normal: 0.08
+        case .elevated: 0.11
+        case .critical: 0.17
+        case .unavailable: 0.03
+        }
     }
 
     private func calmProcessorLegendMetric(
