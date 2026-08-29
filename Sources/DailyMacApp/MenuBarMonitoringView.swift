@@ -273,6 +273,7 @@ private final class PresentationProbeView: NSView {
     private var presentationReported = false
     private var deferredCloseCheck: DispatchWorkItem?
     private var deferredPositioning: DispatchWorkItem?
+    private var deferredVisibilityRecovery: DispatchWorkItem?
 
     init(didOpen: @escaping () -> Void) {
         self.didOpen = didOpen
@@ -288,6 +289,7 @@ private final class PresentationProbeView: NSView {
         stopObserving()
         guard let window else { return }
         observedWindow = window
+        concealWindowForAnchoredPlacement(window)
 
         let center = NotificationCenter.default
         observers.append(center.addObserver(
@@ -335,10 +337,13 @@ private final class PresentationProbeView: NSView {
         deferredCloseCheck = nil
         deferredPositioning?.cancel()
         deferredPositioning = nil
+        deferredVisibilityRecovery?.cancel()
+        deferredVisibilityRecovery = nil
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
         }
         observers.removeAll()
+        recoverVisibilityIfWindowSurvives(observedWindow)
         observedWindow = nil
         presentationReported = false
     }
@@ -365,6 +370,9 @@ private final class PresentationProbeView: NSView {
 
     private func positionWindow(_ window: NSWindow, under anchor: MenuBarPanelAnchor) {
         deferredPositioning?.cancel()
+        concealWindowForAnchoredPlacement(window)
+        positionWindowImmediately(window, under: anchor)
+
         let item = DispatchWorkItem { [weak self, weak window] in
             guard let self,
                   let window,
@@ -373,28 +381,52 @@ private final class PresentationProbeView: NSView {
                   window.isVisible,
                   window.isKeyWindow else { return }
 
-            let screen = NSScreen.screens.first {
-                NSMouseInRect(anchor.pointer, $0.frame, false)
-            } ?? window.screen ?? NSScreen.main
-            guard let screen else { return }
-
-            let bounds = screen.visibleFrame.insetBy(dx: 8, dy: 0)
-            var frame = window.frame
-            let desiredX = anchor.pointer.x - frame.width / 2
-            if frame.width <= bounds.width {
-                frame.origin.x = min(max(desiredX, bounds.minX), bounds.maxX - frame.width)
-            } else {
-                frame.origin.x = bounds.midX - frame.width / 2
-            }
-            let desiredY = anchor.topEdge - frame.height
-            if frame.height <= bounds.height {
-                frame.origin.y = min(max(desiredY, bounds.minY), bounds.maxY - frame.height)
-            }
-            guard abs(frame.origin.x - window.frame.origin.x) >= 0.5
-                    || abs(frame.origin.y - window.frame.origin.y) >= 0.5 else { return }
-            window.setFrameOrigin(frame.origin)
+            self.positionWindowImmediately(window, under: anchor)
+            window.alphaValue = 1
         }
         deferredPositioning = item
+        DispatchQueue.main.async(execute: item)
+    }
+
+    private func concealWindowForAnchoredPlacement(_ window: NSWindow) {
+        deferredVisibilityRecovery?.cancel()
+        deferredVisibilityRecovery = nil
+        window.alphaValue = 0
+    }
+
+    private func positionWindowImmediately(_ window: NSWindow, under anchor: MenuBarPanelAnchor) {
+        let screen = NSScreen.screens.first {
+            NSMouseInRect(anchor.pointer, $0.frame, false)
+        } ?? window.screen ?? NSScreen.main
+        guard let screen else { return }
+
+        let bounds = screen.visibleFrame.insetBy(dx: 8, dy: 0)
+        var frame = window.frame
+        let desiredX = anchor.pointer.x - frame.width / 2
+        if frame.width <= bounds.width {
+            frame.origin.x = min(max(desiredX, bounds.minX), bounds.maxX - frame.width)
+        } else {
+            frame.origin.x = bounds.midX - frame.width / 2
+        }
+        let desiredY = anchor.topEdge - frame.height
+        if frame.height <= bounds.height {
+            frame.origin.y = min(max(desiredY, bounds.minY), bounds.maxY - frame.height)
+        }
+        guard abs(frame.origin.x - window.frame.origin.x) >= 0.5
+                || abs(frame.origin.y - window.frame.origin.y) >= 0.5 else { return }
+        window.setFrameOrigin(frame.origin)
+    }
+
+    private func recoverVisibilityIfWindowSurvives(_ window: NSWindow?) {
+        guard let window, window.alphaValue < 1 else { return }
+        let item = DispatchWorkItem { [weak window] in
+            guard let window,
+                  window.isVisible,
+                  window.isKeyWindow,
+                  window.alphaValue < 1 else { return }
+            window.alphaValue = 1
+        }
+        deferredVisibilityRecovery = item
         DispatchQueue.main.async(execute: item)
     }
 
@@ -403,6 +435,7 @@ private final class PresentationProbeView: NSView {
         if !window.isVisible || !window.occlusionState.contains(.visible) {
             deferredPositioning?.cancel()
             deferredPositioning = nil
+            window.alphaValue = 1
             presentationReported = false
             MenuBarPanelAnchorLease.shared.releaseSoon(afterClosing: window)
         } else if window.isKeyWindow {
@@ -417,6 +450,7 @@ private final class PresentationProbeView: NSView {
             if !window.isVisible || !window.occlusionState.contains(.visible) {
                 self.deferredPositioning?.cancel()
                 self.deferredPositioning = nil
+                window.alphaValue = 1
                 self.presentationReported = false
                 MenuBarPanelAnchorLease.shared.releaseSoon(afterClosing: window)
             }

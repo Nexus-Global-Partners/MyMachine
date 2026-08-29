@@ -68,6 +68,36 @@ struct DailyMacValidation {
             }
         }
 
+        await harness.run("menu panel conceals its provisional frame until anchored") {
+            let validationFile = URL(fileURLWithPath: #filePath)
+            let repositoryRoot = validationFile
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            let sourceURL = repositoryRoot
+                .appendingPathComponent("Sources/DailyMacApp/MenuBarMonitoringView.swift")
+            let source = try String(contentsOf: sourceURL, encoding: .utf8)
+            let functionStart = try require(
+                source.range(of: "    private func positionWindow(_ window: NSWindow, under anchor: MenuBarPanelAnchor)"),
+                "menu-panel positioning function was unavailable"
+            )
+            let functionEnd = try require(
+                source.range(
+                    of: "    private func concealWindowForAnchoredPlacement",
+                    range: functionStart.upperBound..<source.endIndex
+                ),
+                "menu-panel concealment boundary was unavailable"
+            )
+            let body = String(source[functionStart.lowerBound..<functionEnd.lowerBound])
+            let conceal = try require(body.range(of: "concealWindowForAnchoredPlacement(window)"), "provisional panel frame was not concealed")
+            let immediatePlacement = try require(body.range(of: "positionWindowImmediately(window, under: anchor)"), "panel was not anchored before deferral")
+            let deferredPlacement = try require(body.range(of: "self.positionWindowImmediately(window, under: anchor)"), "final intrinsic-size placement was unavailable")
+            let reveal = try require(body.range(of: "window.alphaValue = 1"), "panel was not revealed after final placement")
+            try harness.check(conceal.lowerBound < immediatePlacement.lowerBound, "panel was positioned before its provisional frame was concealed")
+            try harness.check(immediatePlacement.lowerBound < deferredPlacement.lowerBound, "final-size stabilization did not follow immediate anchoring")
+            try harness.check(deferredPlacement.lowerBound < reveal.lowerBound, "panel became visible before its final anchored placement")
+        }
+
         await harness.run("calm graph uses longer stable trend windows") {
             let expected: [(MonitoringRange, TimeInterval, TimeInterval)] = [
                 (.oneHour, 30, 2 * 60),
