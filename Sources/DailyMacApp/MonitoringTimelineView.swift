@@ -263,10 +263,11 @@ struct MonitoringTimelineView: View, Equatable {
             HStack(spacing: 5) {
                 Image(systemName: calmStatusSignal.symbol)
                     .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(calmStatusSignal.color)
                 Text(calmStatusSignal.label)
                     .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary.opacity(0.76))
             }
-            .foregroundStyle(calmStatusSignal.color)
 
             Divider()
                 .frame(height: 12)
@@ -2049,8 +2050,8 @@ private struct UnifiedDataCanvas: View, Equatable {
             in: &context,
             plot: plot,
             color: TimelineColors.thermal,
-            bandOpacity: displayMode == .calm ? 0.016 : 0.028,
-            rayOpacity: displayMode == .calm ? 0.20 : 0.34
+            bandOpacity: displayMode == .calm ? 0.006 : 0.028,
+            rayOpacity: displayMode == .calm ? 0.08 : 0.34
         )
         drawThermalRuns(
             thermalContext.seriousIntervals + thermalContext.criticalIntervals,
@@ -2394,6 +2395,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         rect: CGRect
     ) {
         let plot = rect.insetBy(dx: 0, dy: 6)
+        let isCalm = displayMode == .calm
         let sleep = mergedStateIntervals(sleepIntervals)
         let handsOn = compactStateRailIntervals(
             subtracting(sleep, from: presenceContext.handsOnIntervals),
@@ -2408,8 +2410,10 @@ private struct UnifiedDataCanvas: View, Equatable {
             sleep,
             label: "Sleep",
             color: TimelineColors.sleepState,
-            lineWidth: 1.7,
-            glowOpacity: 0.08,
+            lineWidth: isCalm ? 1.25 : 1.5,
+            glowOpacity: isCalm ? 0.02 : 0.05,
+            lineOpacity: isCalm ? 0.34 : 0.46,
+            labelOpacity: isCalm ? 0.48 : 0.58,
             in: &context,
             plot: plot
         )
@@ -2417,8 +2421,10 @@ private struct UnifiedDataCanvas: View, Equatable {
             backgroundAutomatic,
             label: "Background",
             color: TimelineColors.automatic,
-            lineWidth: 2.0,
-            glowOpacity: 0.12,
+            lineWidth: isCalm ? 1.4 : 1.65,
+            glowOpacity: isCalm ? 0.025 : 0.06,
+            lineOpacity: isCalm ? 0.44 : 0.56,
+            labelOpacity: isCalm ? 0.55 : 0.66,
             in: &context,
             plot: plot
         )
@@ -2426,8 +2432,10 @@ private struct UnifiedDataCanvas: View, Equatable {
             handsOn,
             label: "You",
             color: TimelineColors.presence,
-            lineWidth: 2.25,
-            glowOpacity: 0.16,
+            lineWidth: isCalm ? 1.65 : 1.9,
+            glowOpacity: isCalm ? 0.045 : 0.08,
+            lineOpacity: isCalm ? 0.60 : 0.72,
+            labelOpacity: isCalm ? 0.74 : 0.82,
             in: &context,
             plot: plot
         )
@@ -2439,6 +2447,8 @@ private struct UnifiedDataCanvas: View, Equatable {
         color: Color,
         lineWidth: CGFloat,
         glowOpacity: Double,
+        lineOpacity: Double,
+        labelOpacity: Double,
         in context: inout GraphicsContext,
         plot: CGRect
     ) {
@@ -2458,7 +2468,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             )
             context.stroke(
                 segment,
-                with: .color(color.opacity(0.86)),
+                with: .color(color.opacity(lineOpacity)),
                 style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
             )
         }
@@ -2467,6 +2477,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             label,
             intervals: intervals,
             color: color,
+            opacity: labelOpacity,
             in: &context,
             plot: plot
         )
@@ -2491,6 +2502,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         _ label: String,
         intervals: [DateInterval],
         color: Color,
+        opacity: Double,
         in context: inout GraphicsContext,
         plot: CGRect
     ) {
@@ -2512,7 +2524,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         context.draw(
             Text(label)
                 .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(color.opacity(0.78)),
+                .foregroundStyle(color.opacity(opacity)),
             at: CGPoint(x: (startX + endX) / 2, y: plot.maxY - 10),
             anchor: .center
         )
@@ -2701,8 +2713,8 @@ private struct UnifiedDataCanvas: View, Equatable {
             in: &context,
             plot: plot,
             color: TimelineColors.memoryElevated,
-            bandOpacity: displayMode == .calm ? 0.038 : 0.075,
-            lineOpacity: displayMode == .calm ? 0.16 : 0.34
+            bandOpacity: displayMode == .calm ? 0.018 : 0.075,
+            lineOpacity: displayMode == .calm ? 0.075 : 0.34
         )
         drawProcessorMemoryRuns(
             sustained,
