@@ -19,7 +19,9 @@ trap cleanup EXIT
 cd "$PROJECT_DIR"
 swift build -c release --product DailyMac
 
-/bin/rm -rf "$APP_DIR"
+# `outputs/` is entirely generated. Replacing it on every package prevents stale
+# app bundles and old release archives from quietly consuming disk space.
+/bin/rm -rf "$OUTPUT_DIR"
 /bin/mkdir -p "$CONTENTS_DIR/MacOS" "$CONTENTS_DIR/Resources"
 /bin/cp ".build/release/DailyMac" "$CONTENTS_DIR/MacOS/DailyMac"
 /bin/cp "Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
@@ -37,6 +39,7 @@ swift build -c release --product DailyMac
 /bin/mkdir -p "$SOURCE_STAGE/MY-MACHINE-Source"
 /usr/bin/rsync -a \
   --exclude '.build' \
+  --exclude '.DS_Store' \
   --exclude 'outputs' \
   --exclude 'work' \
   --exclude '.git' \

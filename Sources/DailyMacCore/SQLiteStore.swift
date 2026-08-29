@@ -489,6 +489,7 @@ public actor SQLiteStore {
             try execute("DELETE FROM events WHERE timestamp < \(eventCutoff.timeIntervalSince1970);")
             try execute("DELETE FROM daily_reports WHERE generated_at < \(reportCutoff.timeIntervalSince1970);")
         }
+        try removeRecoveryArchives(olderThan: rawCutoff)
         try execute("PRAGMA wal_checkpoint(PASSIVE);")
     }
 
@@ -501,8 +502,35 @@ public actor SQLiteStore {
             try execute("DELETE FROM events;")
             try execute("DELETE FROM daily_reports;")
         }
-        try execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        try execute("VACUUM;")
+        // Recovery folders contain the same private telemetry as the active
+        // store. An explicit erase must cover them as well.
+        try removeRecoveryArchives(olderThan: nil)
+
+        // The logical deletion above is authoritative. Compaction only
+        // reclaims space and must not turn a completed erase into a stopped
+        // monitoring session if SQLite cannot compact at that moment.
+        try? execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        try? execute("VACUUM;")
+    }
+
+    private func removeRecoveryArchives(olderThan cutoff: Date?) throws {
+        let manager = FileManager.default
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .contentModificationDateKey]
+        let contents = try manager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        )
+        for url in contents where url.lastPathComponent.hasPrefix("Recovery-") {
+            let values = try url.resourceValues(forKeys: keys)
+            guard values.isDirectory == true else { continue }
+            if let cutoff,
+               let modified = values.contentModificationDate,
+               modified >= cutoff {
+                continue
+            }
+            try manager.removeItem(at: url)
+        }
     }
 
     private func insert(_ sample: SystemSample) throws {
@@ -887,7 +915,9 @@ public actor SQLiteStore {
         let recovery = directoryURL.appendingPathComponent("Recovery-\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         for source in [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal"), URL(fileURLWithPath: databaseURL.path + "-shm")] where FileManager.default.fileExists(atPath: source.path) {
-            try FileManager.default.moveItem(at: source, to: recovery.appendingPathComponent(source.lastPathComponent))
+            let destination = recovery.appendingPathComponent(source.lastPathComponent)
+            try FileManager.default.moveItem(at: source, to: destination)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
         }
     }
 

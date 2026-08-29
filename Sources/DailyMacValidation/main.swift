@@ -96,6 +96,27 @@ struct DailyMacValidation {
             try harness.check(conceal.lowerBound < immediatePlacement.lowerBound, "panel was positioned before its provisional frame was concealed")
             try harness.check(immediatePlacement.lowerBound < deferredPlacement.lowerBound, "final-size stabilization did not follow immediate anchoring")
             try harness.check(deferredPlacement.lowerBound < reveal.lowerBound, "panel became visible before its final anchored placement")
+
+            let resizeStart = try require(
+                source.range(of: "    private func restorePresentationAnchor()"),
+                "menu-panel resize anchoring function was unavailable"
+            )
+            let resizeEnd = try require(
+                source.range(
+                    of: "    private func positionWindow(_ window: NSWindow, under anchor: MenuBarPanelAnchor)",
+                    range: resizeStart.upperBound..<source.endIndex
+                ),
+                "menu-panel initial positioning boundary was unavailable"
+            )
+            let resizeBody = String(source[resizeStart.lowerBound..<resizeEnd.lowerBound])
+            try harness.check(
+                resizeBody.contains("positionWindowImmediately(window, under: anchor)"),
+                "panel resize did not preserve its anchor immediately"
+            )
+            try harness.check(
+                !resizeBody.contains("positionWindow(window, under: anchor)"),
+                "panel resize replayed the opening conceal/reveal cycle"
+            )
         }
 
         await harness.run("calm graph uses longer stable trend windows") {
@@ -1501,6 +1522,9 @@ struct DailyMacValidation {
             let retainedEvents = try await store.events(from: .distantPast, to: .distantFuture)
             try harness.check(!retainedEvents.contains { $0.id == oldAppEvent.id }, "exact app event outlived raw retention")
             try harness.check(retainedEvents.contains { $0.id == oldNotableEvent.id }, "notable performance event was deleted too early")
+            let recoveryDirectory = directory.appendingPathComponent("Recovery-explicit-erase", isDirectory: true)
+            try FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+            try Data("private telemetry fixture".utf8).write(to: recoveryDirectory.appendingPathComponent("DailyMac.sqlite"))
             try await store.eraseAllData()
             let erasedSamples = try await store.samples(from: .distantPast, to: .distantFuture)
             let erasedEvents = try await store.events(from: .distantPast, to: .distantFuture)
@@ -1508,6 +1532,7 @@ struct DailyMacValidation {
             try harness.check(erasedSamples.isEmpty, "erase left system samples")
             try harness.check(erasedEvents.isEmpty, "erase left events")
             try harness.check(erasedResources.isEmpty, "erase left app-family resource samples")
+            try harness.check(!FileManager.default.fileExists(atPath: recoveryDirectory.path), "erase left a recovery archive containing telemetry")
         }
 
         await harness.run("owner-only files and privacy-minimal schema") {
@@ -1552,6 +1577,20 @@ struct DailyMacValidation {
             try harness.check(recovery != nil, "corrupt database was not preserved")
             let recoveredSamples = try await store.samples(from: .distantPast, to: .distantFuture)
             try harness.check(recoveredSamples.count == 1, "fresh store was not usable after recovery")
+            if let recovery {
+                let recoveryURL = directory.appendingPathComponent(recovery, isDirectory: true)
+                try FileManager.default.setAttributes(
+                    [.modificationDate: Date(timeIntervalSince1970: 0)],
+                    ofItemAtPath: recoveryURL.path
+                )
+                var settings = MonitoringSettings.default
+                settings.rawRetentionDays = 1
+                try await store.performRetention(settings: settings, now: Date())
+                try harness.check(
+                    !FileManager.default.fileExists(atPath: recoveryURL.path),
+                    "expired recovery telemetry outlived raw retention"
+                )
+            }
         }
 
         await harness.run("busy database is never mistaken for corruption") {

@@ -31,7 +31,7 @@ MY MACHINE has no third-party packages. `Package.swift` defines the app, the cor
 - Interpret metrics in practical language. Explain what happened, whether it was unusual, why it matters, the likely cause, the likely effect, and whether any action is useful.
 - Do not infer focus, productivity, intent, or causation from input counts or app correlation.
 - Keep raw readings secondary. The default experience should be understandable in seconds.
-- Preserve recording gaps. Never draw a continuous line through missing data or invent values for sleep.
+- Preserve recording gaps. A neutral visual bridge may keep the timeline readable, but it must remain visibly distinct from measured CPU/GPU data and must never invent values for sleep.
 - Avoid new background work when existing sampled data can answer the question.
 
 ## Verify the change
@@ -44,9 +44,9 @@ swift run DailyMacValidation
 swift run -c release DailyMacValidation
 ./scripts/package.sh
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
-unzip -t "outputs/MY-MACHINE-1.1.1.zip"
-unzip -t "outputs/MY-MACHINE-Source-1.1.1.zip"
-shasum -a 256 -c "outputs/SHA256SUMS-1.1.1.txt"
+unzip -t "outputs/MY-MACHINE-1.2.0.zip"
+unzip -t "outputs/MY-MACHINE-Source-1.2.0.zip"
+(cd outputs && shasum -a 256 -c "SHA256SUMS-1.2.0.txt")
 ```
 
 The final validation check samples real hardware. It is intentionally a local release check rather than a guaranteed cloud-runner test. GitHub CI runs the deterministic validation suite in both debug and release configurations, then packages the app, verifies the signature and archives, checks the generated hashes, and audits the source archive boundary.

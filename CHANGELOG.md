@@ -4,6 +4,28 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-29
+
+### Added
+
+- Calm and Precise graph modes provide a quiet long-average overview or detailed interval readings without changing the panel anchor.
+- Monitoring now supports 1-hour, 6-hour, 12-hour, and 24-hour ranges in the menu, main window, and full-screen dashboard.
+- The unified graph distinguishes direct human use, autonomous/background work, confirmed sleep, thermal management, and memory pressure while keeping CPU and GPU visually primary.
+- Current activity, observed app contribution, live values, and selected-time context remain available through progressive disclosure.
+
+### Changed
+
+- Reworked the graph palette, smoothing, status pills, gap transitions, and severity rules so ordinary activity stays calm and red is reserved for genuine pressure.
+- The app now appears in the Dock when opened as a normal macOS application while retaining its menu-bar experience.
+- Packaging replaces the generated output directory on every run, preventing old app bundles and archives from accumulating locally.
+- Release workflows pin third-party GitHub Actions to reviewed commits while retaining automated signature, checksum, and source-boundary checks.
+
+### Fixed
+
+- Menu opening and Calm/Precise switching no longer reveal a provisional off-anchor panel before the final centered position is known.
+- Timeline selections clear automatically, show their selected clock time, and remain stable while fresh samples arrive.
+- Retention and **Delete All Data** now include private database recovery archives; a cleanup error no longer leaves monitoring stopped.
+
 ## [1.1.1] - 2026-08-26
 
 ### Fixed
@@ -47,7 +69,8 @@ All notable user-visible changes are recorded here.
 
 - Published the initial local-first macOS monitoring app, source handoff, privacy contract, and menu-bar experience.
 
-[Unreleased]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.2.0
 [1.1.1]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.1.0
 [1.0.1]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.0.1

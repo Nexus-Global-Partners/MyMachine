@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing immutable Git tag and draft release, for example v1.1.0
+        description: Existing immutable Git tag and draft release, for example v1.2.0
         required: true
-        default: v1.1.0
+        default: v1.2.0
 
 permissions:
   contents: write
@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.release_tag }}
           fetch-depth: 0
@@ -37,7 +37,7 @@ jobs:
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           test "$RELEASE_TAG" = "v$version"
           plutil -lint Resources/Info.plist
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "false"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)" = "15.0"
 
       - name: Compile local validation target

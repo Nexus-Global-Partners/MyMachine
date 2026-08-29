@@ -1,6 +1,6 @@
 # MY MACHINE maintainer handoff
 
-This is the continuation point for MY MACHINE 1.1.1. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
+This is the continuation point for MY MACHINE 1.2.0. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
 
 ## Current state
 
@@ -9,9 +9,9 @@ This is the continuation point for MY MACHINE 1.1.1. The repository is the compl
 - Internal Swift package/executable names: `MY-MACHINE` and `DailyMac`
 - Bundle identifier: `local.mymachine.app`
 - Minimum system: macOS 15
-- Current release: 1.1.1, build 5
+- Current release: 1.2.0, build 6
 - No third-party packages, server, account, analytics SDK, updater, or network client
-- Latest verification: 43/43 checks passed in both debug and release configurations
+- Latest verification: 47/47 checks passed in the release configuration, including live permission-free telemetry
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
 
 The internal `DailyMac` names are legacy implementation names. Renaming them is possible, but treat the bundle identifier, preferences domain, launch-at-login registration, data paths, and database migration behavior as one coordinated migration.
@@ -56,7 +56,7 @@ The default production database is `~/Library/Application Support/MY MACHINE/Dai
 6. Use semantic green, neutral black, and red for machine state. Reserve red for genuinely urgent evidence; manageable states remain neutral. Data-series colors may remain stable identifiers.
 7. Keep performance/efficiency-core detail subtle inside the CPU fill. Reveal exact P-core/E-core values only when the user inspects a point. Never guess a split for incomplete history.
 8. The menu panel must appear centered under its menu-bar item, load cached history immediately, refresh on opening, and remain smooth while scrolling.
-9. The app remains menu-bar-only. It should not appear in the Dock.
+9. The menu-bar panel remains the fastest entry point. When opened as a normal macOS application, MY MACHINE also appears in the Dock and can open its full window from there.
 10. Monitoring overhead must stay negligible relative to ordinary work.
 11. Diagnosis remains a user-controlled handoff: fixed 24-hour bounded evidence, current-Mac-only clipboard, no auto-paste/upload/send, and no provider API or account coupling.
 
@@ -78,7 +78,7 @@ DailyMacApp.swift
 - `AppAppearance.swift`: app-wide System, Light, and Dark appearance choice
 - `AppModel.swift`: orchestration, adaptive sampling, sleep/wake handling, refreshes, and report lifecycle
 - `TelemetrySampler.swift`: permission-free AppKit/CoreGraphics/IOKit/Darwin readings and best-effort process attribution
-- `SQLiteStore.swift`: actor-confined SQLite, schema migrations, WAL transactions, retention, and recovery
+- `SQLiteStore.swift`: actor-confined SQLite, schema migrations, WAL transactions, retention, and recovery; recovery archives share the raw-data retention boundary and are included in explicit data deletion
 - `InsightEngine.swift`, `EventDetector.swift`, `TimelineSemantics.swift`, `NetworkThroughputSemantics.swift`: deterministic interpretation, evidence gates, and measured-window preparation
 - `DiagnosisBriefRenderer.swift`: typed, deterministic, 32 KiB-capped external-assistant handoff with explicit untrusted-data boundaries
 - `MonitoringTimelineView.swift`: graph-first current interpretation, unified timeline, selection inspector, semantic urgency, scale rules, and progressive disclosure
@@ -95,9 +95,9 @@ swift run DailyMacValidation
 swift run -c release DailyMacValidation
 ./scripts/package.sh
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
-unzip -t "outputs/MY-MACHINE-1.1.1.zip"
-unzip -t "outputs/MY-MACHINE-Source-1.1.1.zip"
-shasum -a 256 -c "outputs/SHA256SUMS-1.1.1.txt"
+unzip -t "outputs/MY-MACHINE-1.2.0.zip"
+unzip -t "outputs/MY-MACHINE-Source-1.2.0.zip"
+(cd outputs && shasum -a 256 -c "SHA256SUMS-1.2.0.txt")
 ```
 
 The final validation check reads live hardware and timing, so it remains a local release gate. GitHub CI runs the deterministic portion in both debug and release configurations, then performs packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
@@ -113,6 +113,8 @@ Default retention:
 - Compact daily reports: 365 days
 
 GPU data is optional and driver-dependent. Process coverage is best effort. Memory footprint may include shared pages. Disk counters never identify files. Network totals never identify destinations.
+
+Corruption recovery archives contain the same private telemetry as the active database. They use owner-only permissions, expire with detailed raw history, and are removed by **Delete All Data**.
 
 Diagnosis handoff is intentionally not an integration layer. `AppModel` queries one fixed 24-hour window, `DiagnosisBriefRenderer` creates an allowlisted prompt/evidence bundle, and AppKit writes it to a current-host-only pasteboard. The optional destination choice only opens an official HTTPS page. The app cannot know whether the user later pasted or sent the brief and must never claim that it did.
 

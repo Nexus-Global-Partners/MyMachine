@@ -4,7 +4,7 @@ MY MACHINE records sensitive context about one person's Mac even though it delib
 
 ## Supported version
 
-Security fixes are made on the latest public 1.1.x release and `main`. Older releases may not receive backports.
+Security fixes are made on the latest public 1.2.x release and `main`. Older releases may not receive backports.
 
 ## Report a vulnerability privately
 

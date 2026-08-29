@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Show Swift toolchain
         run: swift --version
@@ -41,7 +41,7 @@ jobs:
       - name: Validate release metadata
         run: |
           plutil -lint Resources/Info.plist
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "false"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)" = "15.0"
 
       - name: Package release assets
@@ -72,7 +72,7 @@ jobs:
           printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/Sources/'
 
       - name: Upload inspected artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: MY-MACHINE-${{ github.sha }}
           path: |

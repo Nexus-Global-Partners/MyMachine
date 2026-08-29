@@ -365,7 +365,9 @@ private final class PresentationProbeView: NSView {
               window.isVisible,
               window.isKeyWindow,
               let anchor = MenuBarPanelAnchorLease.shared.current else { return }
-        positionWindow(window, under: anchor)
+        // Intrinsic-size changes (for example switching Calm/Precise) should
+        // stay anchored without replaying the first-presentation conceal/reveal.
+        positionWindowImmediately(window, under: anchor)
     }
 
     private func positionWindow(_ window: NSWindow, under anchor: MenuBarPanelAnchor) {

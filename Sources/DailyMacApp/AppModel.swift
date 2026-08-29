@@ -398,7 +398,12 @@ final class AppModel: ObservableObject {
                 shouldResumeAfterDataErase = false
                 if shouldResume { beginLoopIfNeeded() }
             } catch {
-                if eraseEpoch == dataEpoch { dataEraseInProgress = false }
+                if eraseEpoch == dataEpoch {
+                    dataEraseInProgress = false
+                    let shouldResume = shouldResumeAfterDataErase
+                    shouldResumeAfterDataErase = false
+                    if shouldResume { beginLoopIfNeeded() }
+                }
                 await show(error)
             }
         }
