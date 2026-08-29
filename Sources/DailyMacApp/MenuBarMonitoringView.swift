@@ -73,7 +73,7 @@ struct MenuBarMonitoringView: View {
 
             Spacer(minLength: 12)
 
-            VStack(alignment: .trailing, spacing: 6) {
+            HStack(alignment: .center, spacing: 9) {
                 HStack(spacing: 8) {
                     if model.menuBarIsRefreshing {
                         Text("Updating")
@@ -87,33 +87,31 @@ struct MenuBarMonitoringView: View {
                 }
                 .font(.caption)
 
-                HStack(alignment: .center, spacing: 9) {
-                    MonitoringRangePickerControl(
-                        selection: model.menuBarMonitoringRange,
-                        itemWidth: 34,
-                        onSelect: model.selectMenuBarMonitoringRange
-                    )
-                    .help("Choose how much history to show")
+                MonitoringRangePickerControl(
+                    selection: model.menuBarMonitoringRange,
+                    itemWidth: 34,
+                    onSelect: model.selectMenuBarMonitoringRange
+                )
+                .help("Choose how much history to show")
 
-                    TimelineDisplayModeControl()
+                TimelineDisplayModeControl()
 
-                    Button {
-                        model.refreshMenuBarNow()
-                    } label: {
-                        if model.menuBarIsRefreshing {
-                            ProgressView()
-                                .controlSize(.small)
-                                .frame(width: 14, height: 14)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .frame(width: 14, height: 14)
-                        }
+                Button {
+                    model.refreshMenuBarNow()
+                } label: {
+                    if model.menuBarIsRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .frame(width: 14, height: 14)
                     }
-                    .buttonStyle(.borderless)
-                    .help("Refresh monitoring")
-                    .accessibilityLabel("Refresh monitoring")
-                    .disabled(model.menuBarIsRefreshing)
                 }
+                .buttonStyle(.borderless)
+                .help("Refresh monitoring")
+                .accessibilityLabel("Refresh monitoring")
+                .disabled(model.menuBarIsRefreshing)
             }
         }
         .padding(.horizontal, 16)
