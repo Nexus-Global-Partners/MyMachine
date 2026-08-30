@@ -4,6 +4,17 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-30
+
+### Changed
+
+- The menu subtitle now gives the useful active-today and current-session context directly beneath **Monitoring**, instead of repeating the selected range and refresh time.
+- Removed the redundant open-window shortcut and overflow chevron so the compact header keeps only meaningful controls.
+
+### Fixed
+
+- Active-use context no longer collapses into unreadable truncated labels beside the six-option range picker.
+
 ## [1.3.0] - 2026-08-30
 
 ### Added
@@ -82,7 +93,8 @@ All notable user-visible changes are recorded here.
 
 - Published the initial local-first macOS monitoring app, source handoff, privacy contract, and menu-bar experience.
 
-[Unreleased]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.2.0
 [1.1.1]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.1.1

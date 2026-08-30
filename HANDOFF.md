@@ -1,6 +1,6 @@
 # MY MACHINE maintainer handoff
 
-This is the continuation point for MY MACHINE 1.3.0. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
+This is the continuation point for MY MACHINE 1.3.1. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
 
 ## Current state
 
@@ -9,7 +9,7 @@ This is the continuation point for MY MACHINE 1.3.0. The repository is the compl
 - Internal Swift package/executable names: `MY-MACHINE` and `DailyMac`
 - Bundle identifier: `local.mymachine.app`
 - Minimum system: macOS 15
-- Current release: 1.3.0, build 7
+- Current release: 1.3.1, build 8
 - No third-party packages, server, account, analytics SDK, updater, or network client
 - Latest verification: 47/47 checks passed in the release configuration, including live permission-free telemetry
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
@@ -95,9 +95,9 @@ swift run DailyMacValidation
 swift run -c release DailyMacValidation
 ./scripts/package.sh
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
-unzip -t "outputs/MY-MACHINE-1.3.0.zip"
-unzip -t "outputs/MY-MACHINE-Source-1.3.0.zip"
-(cd outputs && shasum -a 256 -c "SHA256SUMS-1.3.0.txt")
+unzip -t "outputs/MY-MACHINE-1.3.1.zip"
+unzip -t "outputs/MY-MACHINE-Source-1.3.1.zip"
+(cd outputs && shasum -a 256 -c "SHA256SUMS-1.3.1.txt")
 ```
 
 The final validation check reads live hardware and timing, so it remains a local release gate. GitHub CI runs the deterministic portion in both debug and release configurations, then performs packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
