@@ -33,18 +33,6 @@ struct DailyMacApp: App {
             }
         }
 
-        Window("MY MACHINE Monitoring", id: "expanded-monitoring") {
-            ExpandedMonitoringView()
-                .environmentObject(model)
-                .preferredColorScheme(.dark)
-                .frame(minWidth: 900, minHeight: 650)
-                .background(Color.black.ignoresSafeArea())
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1280, height: 800)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-
         MenuBarExtra {
             MenuBarMonitoringView()
                 .environmentObject(model)

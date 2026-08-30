@@ -40,9 +40,6 @@ struct MenuBarMonitoringView: View {
                     emptyState
                 }
             }
-
-            Divider()
-            footer
         }
         .frame(width: 760)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -83,18 +80,36 @@ struct MenuBarMonitoringView: View {
                             .foregroundStyle(.secondary)
                             .help(model.menuBarRefreshMessage ?? "")
                     }
-                    ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
+                    MenuBarActivitySummaryLabel(
+                        activeTodayDuration: model.todayReport?.activeDuration,
+                        currentSessionDuration: model.currentSessionDuration
+                    )
                 }
                 .font(.caption)
 
                 MonitoringRangePickerControl(
                     selection: model.menuBarMonitoringRange,
-                    itemWidth: 34,
+                    itemWidth: 27,
                     onSelect: model.selectMenuBarMonitoringRange
                 )
                 .help("Choose how much history to show")
 
                 TimelineDisplayModeControl()
+
+                DiagnosisIconButton()
+
+                Button {
+                    route.requestMonitoring()
+                    openWindow(id: "main")
+                    dismiss()
+                    NSApp.activate(ignoringOtherApps: true)
+                } label: {
+                    Image(systemName: "rectangle.split.2x1")
+                        .frame(width: 14, height: 14)
+                }
+                .buttonStyle(GlassyIconButtonStyle())
+                .help("Open monitoring window")
+                .accessibilityLabel("Open monitoring window")
 
                 Button {
                     model.refreshMenuBarNow()
@@ -112,6 +127,8 @@ struct MenuBarMonitoringView: View {
                 .help("Refresh monitoring")
                 .accessibilityLabel("Refresh monitoring")
                 .disabled(model.menuBarIsRefreshing)
+
+                moreOptionsMenu
             }
         }
         .padding(.horizontal, 16)
@@ -126,6 +143,8 @@ struct MenuBarMonitoringView: View {
         case .sixHours: return "Last 6 hours"
         case .twelveHours: return "Last 12 hours"
         case .twentyFourHours: return "Last 24 hours"
+        case .fortyEightHours: return "Last 48 hours"
+        case .oneWeek: return "Last 7 days"
         }
     }
 
@@ -151,65 +170,36 @@ struct MenuBarMonitoringView: View {
         .padding(20)
     }
 
-    private var footer: some View {
-        HStack(spacing: 10) {
-            Spacer(minLength: 12)
-
-            DiagnosisActionButton()
-
-            Button {
-                route.requestMonitoring()
-                openWindow(id: "main")
-                dismiss()
-                NSApp.activate(ignoringOtherApps: true)
-            } label: {
-                Image(systemName: "rectangle.split.2x1")
+    private var moreOptionsMenu: some View {
+        Menu {
+            if model.collectionState == .paused {
+                Button("Resume Monitoring") { model.startMonitoring() }
+            } else {
+                Button("Pause for One Hour") { model.pauseForOneHour() }
+                Button("Pause Until Tomorrow") { model.pauseUntilTomorrow() }
+                Button("Pause Until I Resume") { model.pauseIndefinitely() }
             }
-            .buttonStyle(.borderless)
-            .help("Open monitoring window")
-            .accessibilityLabel("Open monitoring window")
-
-            Button {
-                openWindow(id: "expanded-monitoring")
-                dismiss()
-                NSApp.activate(ignoringOtherApps: true)
-            } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-            }
-            .buttonStyle(.borderless)
-            .help("Open full-screen dashboard")
-            .accessibilityLabel("Open full-screen dashboard")
-
-            Menu {
-                if model.collectionState == .paused {
-                    Button("Resume Monitoring") { model.startMonitoring() }
-                } else {
-                    Button("Pause for One Hour") { model.pauseForOneHour() }
-                    Button("Pause Until Tomorrow") { model.pauseUntilTomorrow() }
-                    Button("Pause Until I Resume") { model.pauseIndefinitely() }
-                }
-                Divider()
-                Menu("Appearance") {
-                    ForEach(AppAppearance.allCases) { option in
-                        Button {
-                            appearance = option.rawValue
-                        } label: {
-                            Label(option.label, systemImage: appearance == option.rawValue ? "checkmark" : option.symbol)
-                        }
+            Divider()
+            Menu("Appearance") {
+                ForEach(AppAppearance.allCases) { option in
+                    Button {
+                        appearance = option.rawValue
+                    } label: {
+                        Label(option.label, systemImage: appearance == option.rawValue ? "checkmark" : option.symbol)
                     }
                 }
-                Divider()
-                Button("Quit MY MACHINE") { NSApp.terminate(nil) }
-            } label: {
-                Image(systemName: "ellipsis.circle")
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("More options")
-            .accessibilityLabel("More options")
+            Divider()
+            Button("Quit MY MACHINE") { NSApp.terminate(nil) }
+        } label: {
+            Image(systemName: "ellipsis")
+                .frame(width: 14, height: 14)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .menuStyle(.borderlessButton)
+        .buttonStyle(GlassyIconButtonStyle())
+        .fixedSize()
+        .help("More options")
+        .accessibilityLabel("More options")
     }
 
     private var selectedTimelineDisplayMode: TimelineDisplayMode {
@@ -225,11 +215,11 @@ struct MenuBarMonitoringView: View {
     }
 
     private var emptyStateTitle: String {
-        if model.menuBarIsRefreshing { return "Preparing the last hour" }
+        if model.menuBarIsRefreshing { return "Preparing \(menuBarRangeTitle.lowercased())" }
         switch model.collectionState {
         case .paused: return "Monitoring is paused"
         case .failed: return "Recent history is unavailable"
-        default: return "No readings in the last hour yet"
+        default: return "No readings in \(menuBarRangeTitle.lowercased()) yet"
         }
     }
 

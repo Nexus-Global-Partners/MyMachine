@@ -3,7 +3,6 @@ import SwiftUI
 
 struct MonitoringView: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.openWindow) private var openWindow
     @AppStorage(TimelineDisplayMode.storageKey)
     private var timelineDisplayMode = TimelineDisplayMode.precise.rawValue
 
@@ -77,7 +76,7 @@ struct MonitoringView: View {
                 HStack(alignment: .center, spacing: 12) {
                     ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
                     Spacer(minLength: 10)
-                    DiagnosisActionButton()
+                    DiagnosisIconButton()
                 }
             }
         }
@@ -103,9 +102,9 @@ struct MonitoringView: View {
     }
 
     private var activeDiagnosisControls: some View {
-        VStack(alignment: .trailing, spacing: 6) {
+        HStack(alignment: .center, spacing: 8) {
             ActiveUseSummaryLabel(duration: model.todayReport?.activeDuration)
-            DiagnosisActionButton()
+            DiagnosisIconButton()
         }
     }
 
@@ -135,15 +134,6 @@ struct MonitoringView: View {
             .accessibilityLabel("Refresh monitoring")
             .disabled(model.monitoringIsRefreshing)
 
-            Button {
-                openWindow(id: "expanded-monitoring")
-                NSApp.activate(ignoringOtherApps: true)
-            } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-            }
-            .buttonStyle(.borderless)
-            .help("Open full-screen dashboard")
-            .accessibilityLabel("Open full-screen dashboard")
         }
     }
 

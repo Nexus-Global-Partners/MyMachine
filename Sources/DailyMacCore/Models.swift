@@ -531,6 +531,8 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
     case sixHours
     case twelveHours
     case twentyFourHours
+    case fortyEightHours
+    case oneWeek
 
     public var id: String { rawValue }
 
@@ -540,6 +542,8 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
         case .sixHours: return 6 * 3_600
         case .twelveHours: return 12 * 3_600
         case .twentyFourHours: return 24 * 3_600
+        case .fortyEightHours: return 48 * 3_600
+        case .oneWeek: return 7 * 24 * 3_600
         }
     }
 
@@ -549,6 +553,8 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
         case .sixHours: return "6 hours"
         case .twelveHours: return "12 hours"
         case .twentyFourHours: return "24 hours"
+        case .fortyEightHours: return "48 hours"
+        case .oneWeek: return "1 week"
         }
     }
 
@@ -863,5 +869,11 @@ public enum Formatters {
     public static func activeUseToday(_ duration: TimeInterval) -> String {
         guard duration >= 60 else { return "No active use observed today" }
         return "Active today · \(self.duration(duration))"
+    }
+
+    public static func currentSession(_ duration: TimeInterval?) -> String {
+        guard let duration else { return "Current session · inactive" }
+        guard duration >= 60 else { return "Current session · just started" }
+        return "Current session · \(self.duration(duration))"
     }
 }

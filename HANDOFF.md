@@ -1,6 +1,6 @@
 # MY MACHINE maintainer handoff
 
-This is the continuation point for MY MACHINE 1.2.0. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
+This is the continuation point for MY MACHINE 1.3.0. The repository is the complete source of truth. Local recordings, build caches, old app copies, and private QA screenshots are deliberately excluded.
 
 ## Current state
 
@@ -9,7 +9,7 @@ This is the continuation point for MY MACHINE 1.2.0. The repository is the compl
 - Internal Swift package/executable names: `MY-MACHINE` and `DailyMac`
 - Bundle identifier: `local.mymachine.app`
 - Minimum system: macOS 15
-- Current release: 1.2.0, build 6
+- Current release: 1.3.0, build 7
 - No third-party packages, server, account, analytics SDK, updater, or network client
 - Latest verification: 47/47 checks passed in the release configuration, including live permission-free telemetry
 - Installed production copy on the original Mac: `/Applications/MY MACHINE.app`
@@ -82,8 +82,8 @@ DailyMacApp.swift
 - `InsightEngine.swift`, `EventDetector.swift`, `TimelineSemantics.swift`, `NetworkThroughputSemantics.swift`: deterministic interpretation, evidence gates, and measured-window preparation
 - `DiagnosisBriefRenderer.swift`: typed, deterministic, 32 KiB-capped external-assistant handoff with explicit untrusted-data boundaries
 - `MonitoringTimelineView.swift`: graph-first current interpretation, unified timeline, selection inspector, semantic urgency, scale rules, and progressive disclosure
-- `NetworkThroughputGraph.swift`: actual whole-Mac transfer history from the existing sampled receive/send totals, with an observed-window scale and no destination inspection
-- `ExpandedMonitoringView.swift`: dedicated black, native full-screen dashboard that closes cleanly when full screen ends
+- `MenuBarMonitoringView.swift`: centered cached menu surface, Calm/Precise switching, six history ranges, compact diagnosis handoff, and refresh lifecycle
+- `DiagnosisControls.swift`: compact glass controls plus active-today and current-session summaries
 - `DailyMacValidation/main.swift`: the project’s bespoke verification runner
 
 ## Validation and packaging
@@ -95,9 +95,9 @@ swift run DailyMacValidation
 swift run -c release DailyMacValidation
 ./scripts/package.sh
 codesign --verify --deep --strict --verbose=2 "outputs/MY MACHINE.app"
-unzip -t "outputs/MY-MACHINE-1.2.0.zip"
-unzip -t "outputs/MY-MACHINE-Source-1.2.0.zip"
-(cd outputs && shasum -a 256 -c "SHA256SUMS-1.2.0.txt")
+unzip -t "outputs/MY-MACHINE-1.3.0.zip"
+unzip -t "outputs/MY-MACHINE-Source-1.3.0.zip"
+(cd outputs && shasum -a 256 -c "SHA256SUMS-1.3.0.txt")
 ```
 
 The final validation check reads live hardware and timing, so it remains a local release gate. GitHub CI runs the deterministic portion in both debug and release configurations, then performs packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
@@ -128,6 +128,6 @@ These are the most useful next engineering tasks, in priority order:
 
 ## Repository hygiene
 
-Never commit `.build/`, `work/`, `outputs/`, SQLite/WAL/SHM files, app backups, full-screen QA captures, or local telemetry. The original development workspace contained private app history and identifiable screenshots in `work/`; those artifacts are intentionally absent from GitHub and the handoff ZIP.
+Never commit `.build/`, `work/`, `outputs/`, SQLite/WAL/SHM files, app backups, QA captures, or local telemetry. The original development workspace contained private app history and identifiable screenshots in `work/`; those artifacts are intentionally absent from GitHub and the handoff ZIP.
 
 Before publishing a release, verify the repository is clean, run both validation configurations, create the immutable release tag, package from that tagged commit, and attach the app ZIP, source ZIP, and generated SHA-256 file to the GitHub release. The manual release-assets workflow checks out that exact tag, verifies the draft and release metadata, repeats the source-boundary audit, and can replace those three assets without publishing the draft.

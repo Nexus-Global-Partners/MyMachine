@@ -106,6 +106,7 @@ final class AppModel: ObservableObject {
     @Published var collectionState: CollectionState = .starting
     @Published var settings: MonitoringSettings = .default
     @Published var todayReport: DailyReport?
+    @Published private(set) var currentActivitySession: CurrentActivitySession?
     @Published var todaySamples: [SystemSample] = []
     @Published var todayChartSamples: [SystemSample] = []
     @Published var monitoringRange: MonitoringRange = .twentyFourHours
@@ -128,6 +129,15 @@ final class AppModel: ObservableObject {
     @Published var loginItemNeedsApproval = false
     @Published var notificationDeliveryEnabled = false
     @Published var notificationNeedsApproval = false
+    var currentSessionDuration: TimeInterval? {
+        let now = Date()
+        guard let session = currentActivitySession,
+              now.timeIntervalSince(session.lastActiveAt) <= TimelineSemantics.currentSessionInterruptionTolerance else {
+            return nil
+        }
+        return session.duration(endingAt: now)
+    }
+
     @Published var notificationStatusDetail = "Preparing private report-ready notifications."
     @Published private(set) var diagnosisState: DiagnosisHandoffState = .idle
 
@@ -659,6 +669,10 @@ final class AppModel: ObservableObject {
             )
             guard saved, sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
             latestSystem = result.system
+            currentActivitySession = TimelineSemantics.updatingCurrentActivitySession(
+                currentActivitySession,
+                with: result.system
+            )
             lastSampleTimestamp = result.system.timestamp
             lastUpdated = result.system.timestamp
             if result.attemptedProcessCount > 0 {
@@ -779,7 +793,7 @@ final class AppModel: ObservableObject {
     @discardableResult
     private func beginMenuBarRefreshIfNeeded(endingAt now: Date) -> Task<Void, Never>? {
         if let menuBarRefreshTask { return menuBarRefreshTask }
-        guard store != nil, !dataEraseInProgress else { return nil }
+        guard let store, !dataEraseInProgress else { return nil }
 
         menuBarRefreshGeneration &+= 1
         let generation = menuBarRefreshGeneration
@@ -796,12 +810,20 @@ final class AppModel: ObservableObject {
                     endingAt: now,
                     limit: 720
                 )
+                let sessionSamples = try await store.samples(
+                    in: DateInterval(start: now.addingTimeInterval(-86_400), end: now)
+                )
+                let currentSession = TimelineSemantics.currentActivitySession(
+                    from: sessionSamples,
+                    endingAt: now
+                )
                 guard !Task.isCancelled,
                       generation == self.menuBarRefreshGeneration,
                       refreshEpoch == self.dataEpoch,
                       !self.dataEraseInProgress,
                       range == self.menuBarMonitoringRange else { return }
                 self.menuBarMonitoringContent = content
+                self.currentActivitySession = currentSession
             } catch {
                 guard generation == self.menuBarRefreshGeneration else { return }
                 self.menuBarRefreshMessage = self.menuBarMonitoringContent == nil
@@ -1052,6 +1074,7 @@ final class AppModel: ObservableObject {
         menuBarRefreshTask?.cancel()
         menuBarRefreshTask = nil
         todayReport = nil
+        currentActivitySession = nil
         todaySamples = []
         todayChartSamples = []
         monitoringContent = nil

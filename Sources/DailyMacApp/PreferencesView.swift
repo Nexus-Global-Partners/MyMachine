@@ -17,7 +17,7 @@ struct PreferencesView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    Text("System follows your Mac. Light and Dark apply to the menu and main window; the immersive full-screen dashboard stays black for clarity.")
+                    Text("System follows your Mac. Light and Dark apply consistently to the menu and main window.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

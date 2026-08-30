@@ -5,7 +5,6 @@ import SwiftUI
 
 enum TimelinePresentation: Equatable {
     case full
-    case expanded
     case menuBar
 }
 
@@ -18,7 +17,6 @@ struct MonitoringTimelineView: View, Equatable {
     let events: [ActivityEvent]
     let appContributors: [AppComputeContribution]
     let presentation: TimelinePresentation
-    let expandedProcessorHeight: CGFloat?
     let displayMode: TimelineDisplayMode
 
     @State private var selectedTime: Date?
@@ -47,7 +45,6 @@ struct MonitoringTimelineView: View, Equatable {
         events: [ActivityEvent],
         appContributors: [AppComputeContribution] = [],
         presentation: TimelinePresentation = .full,
-        expandedProcessorHeight: CGFloat? = nil,
         displayMode: TimelineDisplayMode = .precise
     ) {
         self.snapshot = snapshot
@@ -57,7 +54,6 @@ struct MonitoringTimelineView: View, Equatable {
         self.events = events
         self.appContributors = appContributors
         self.presentation = presentation
-        self.expandedProcessorHeight = expandedProcessorHeight
         self.displayMode = displayMode
         self.interval = snapshot.interval
         let processorTrend = Self.makeProcessorTrend(
@@ -152,7 +148,6 @@ struct MonitoringTimelineView: View, Equatable {
             && lhs.events == rhs.events
             && lhs.appContributors == rhs.appContributors
             && lhs.presentation == rhs.presentation
-            && lhs.expandedProcessorHeight == rhs.expandedProcessorHeight
             && lhs.displayMode == rhs.displayMode
     }
 
@@ -160,13 +155,12 @@ struct MonitoringTimelineView: View, Equatable {
         let layout = UnifiedTimelineLayout(
             showsBattery: showsBatteryTrack,
             showsMemory: presentation != .menuBar,
-            presentation: presentation,
-            expandedProcessorHeight: expandedProcessorHeight
+            presentation: presentation
         )
 
         Group {
-            if usesCalmGraphOnlyLayout {
-                calmGraphOnlyBody(layout: layout)
+            if usesMenuBarGraphOnlyLayout {
+                menuBarGraphOnlyBody(layout: layout)
             } else {
                 VStack(alignment: .leading, spacing: contentSpacing) {
                     inspector
@@ -201,17 +195,27 @@ struct MonitoringTimelineView: View, Equatable {
         .accessibilityElement(children: .contain)
     }
 
-    private var usesCalmGraphOnlyLayout: Bool {
-        presentation == .menuBar && displayMode == .calm
+    private var usesMenuBarGraphOnlyLayout: Bool {
+        presentation == .menuBar
     }
 
-    private func calmGraphOnlyBody(layout: UnifiedTimelineLayout) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private func menuBarGraphOnlyBody(layout: UnifiedTimelineLayout) -> some View {
+        VStack(alignment: .leading, spacing: displayMode == .calm ? 6 : 8) {
+            if displayMode == .precise {
+                compactContextStrip
+                    .frame(height: inspectorHeight, alignment: .center)
+            }
+
             dataCanvas(layout: layout) {
-                if let reading = contextProcessorReading {
+                if displayMode == .calm, let reading = contextProcessorReading {
                     calmProcessorLegend(reading)
                         .padding(.top, 8)
                         .padding(.leading, 10)
+                } else if displayMode == .precise, selectedTime == nil {
+                    preciseGraphEvidence
+                        .padding(.top, 8)
+                        .padding(.horizontal, 10)
+                        .padding(.trailing, layout.rightAxisWidth)
                 }
             }
             .frame(height: layout.totalHeight)
@@ -219,6 +223,153 @@ struct MonitoringTimelineView: View, Equatable {
             timeAxis
                 .contentShape(Rectangle())
                 .onTapGesture { selectedTime = nil }
+        }
+    }
+
+    private var preciseGraphEvidence: some View {
+        HStack(alignment: .top, spacing: 8) {
+            preciseWindowEvidence
+            Spacer(minLength: 8)
+            preciseActivityEvidence
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+    }
+
+    private var preciseWindowEvidence: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 7) {
+                Text(processorWindowPrimary)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary.opacity(0.82))
+                if let processorMemoryKey {
+                    evidenceDivider
+                    evidenceLabel(
+                        processorMemoryKey,
+                        symbol: "memorychip",
+                        color: visibleStress.memoryCriticalIntervals.isEmpty
+                            ? TimelineColors.memoryElevated
+                            : TimelineColors.critical
+                    )
+                }
+                if let processorThermalKey {
+                    evidenceDivider
+                    evidenceLabel(
+                        processorThermalKey.text,
+                        symbol: "thermometer.medium",
+                        color: processorThermalKey.color
+                    )
+                }
+            }
+            compactWindowEvidence
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 24)
+        .background(.thinMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.05), radius: 6, y: 1)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var compactWindowEvidence: some View {
+        HStack(spacing: 6) {
+            Text(processorWindowPrimary)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.primary.opacity(0.82))
+            if let processorMemoryKey {
+                evidenceDivider
+                evidenceLabel(
+                    processorMemoryKey,
+                    symbol: "memorychip",
+                    color: visibleStress.memoryCriticalIntervals.isEmpty
+                        ? TimelineColors.memoryElevated
+                        : TimelineColors.critical
+                )
+            } else if let processorThermalKey {
+                evidenceDivider
+                evidenceLabel(
+                    processorThermalKey.text,
+                    symbol: "thermometer.medium",
+                    color: processorThermalKey.color
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var preciseActivityEvidence: some View {
+        if currentActivity != nil || !visibleAppContributors.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 7) {
+                    if let currentActivity {
+                        compactActivityEvidence(currentActivity)
+                    }
+                    if currentActivity != nil, !visibleAppContributors.isEmpty {
+                        evidenceDivider
+                    }
+                    if let contributor = visibleAppContributors.first {
+                        compactAppEvidence(contributor)
+                    }
+                }
+                if let currentActivity {
+                    compactActivityEvidence(currentActivity)
+                } else if let contributor = visibleAppContributors.first {
+                    compactAppEvidence(contributor)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(.thinMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.05), radius: 6, y: 1)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var evidenceDivider: some View {
+        Divider()
+            .frame(height: 11)
+            .opacity(0.42)
+    }
+
+    private func evidenceLabel(_ text: String, symbol: String, color: Color) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(color)
+            .lineLimit(1)
+    }
+
+    private func compactActivityEvidence(_ activity: TimelineCurrentActivity) -> some View {
+        HStack(spacing: 5) {
+            ContributorAppIcon(
+                bundleIdentifier: activity.bundleIdentifier,
+                ownerName: activity.appName
+            )
+            .frame(width: 14, height: 14)
+            Text(activity.title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(activity.color)
+                .lineLimit(1)
+            Text(activity.detail)
+                .font(.system(size: 9, weight: .medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func compactAppEvidence(_ contributor: AppComputeContribution) -> some View {
+        HStack(spacing: 5) {
+            ContributorAppIcon(
+                bundleIdentifier: contributor.ownerBundleID,
+                ownerName: contributor.ownerName
+            )
+            .frame(width: 14, height: 14)
+            Text(contributor.ownerName)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.primary.opacity(0.82))
+                .lineLimit(1)
+            Text("\(Formatters.percent(contributor.observedCPUSharePercent)) app CPU")
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
     }
 
@@ -475,7 +626,6 @@ struct MonitoringTimelineView: View, Equatable {
         switch presentation {
         case .menuBar: return 164
         case .full: return 196
-        case .expanded: return 220
         }
     }
 
@@ -483,7 +633,6 @@ struct MonitoringTimelineView: View, Equatable {
         switch presentation {
         case .menuBar: return 8
         case .full: return 12
-        case .expanded: return 16
         }
     }
 
@@ -491,7 +640,6 @@ struct MonitoringTimelineView: View, Equatable {
         switch presentation {
         case .menuBar: return 44
         case .full: return 44
-        case .expanded: return 48
         }
     }
 
@@ -906,24 +1054,9 @@ struct MonitoringTimelineView: View, Equatable {
                             )
                         )
                 }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.82),
-                                    compactSurfaceTint.opacity(0.32),
-                                    Color.primary.opacity(0.10)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 0.9
-                        )
-                }
         }
-        .shadow(color: compactSurfaceTint.opacity(0.07), radius: 9, y: 2)
-        .shadow(color: Color.black.opacity(0.06), radius: 7, y: 2)
+        .shadow(color: compactSurfaceTint.opacity(0.08), radius: 12, y: 2)
+        .shadow(color: Color.black.opacity(0.05), radius: 8, y: 2)
         .accessibilityElement(children: .combine)
     }
 
@@ -1161,7 +1294,7 @@ struct MonitoringTimelineView: View, Equatable {
 
     private var timeAxis: some View {
         HStack(spacing: contentSpacing) {
-            Color.clear.frame(width: usesCalmGraphOnlyLayout ? 0 : labelWidth, height: 1)
+            Color.clear.frame(width: usesMenuBarGraphOnlyLayout ? 0 : labelWidth, height: 1)
             GeometryReader { geometry in
                 let plotWidth = max(1, geometry.size.width - UnifiedTimelineLayout.rightAxisWidth)
                 ZStack(alignment: .topLeading) {
@@ -1272,6 +1405,9 @@ struct MonitoringTimelineView: View, Equatable {
         if snapshot.range == .twentyFourHours {
             return twentyFourHourTimeMarks
         }
+        if snapshot.range == .fortyEightHours || snapshot.range == .oneWeek {
+            return multiDayTimeMarks
+        }
 
         let marks: [(TimeInterval, String)]
         switch snapshot.range {
@@ -1282,6 +1418,8 @@ struct MonitoringTimelineView: View, Equatable {
         case .twelveHours:
             marks = [(-43_200, "−12h"), (-21_600, "−6h"), (-10_800, "−3h"), (-3_600, "−1h"), (0, "Now")]
         case .twentyFourHours:
+            marks = []
+        case .fortyEightHours, .oneWeek:
             marks = []
         }
         var resolved = marks.map { offset, label in
@@ -1333,6 +1471,23 @@ struct MonitoringTimelineView: View, Equatable {
             }
         }
         return (unclutteredClocks + boundaries).sorted { $0.date < $1.date }
+    }
+
+    /// Longer views use calendar landmarks so the graph answers “which day?”
+    /// without filling the axis with countdown arithmetic.
+    private var multiDayTimeMarks: [TimelineAxisMark] {
+        let fractions = [0.0, 0.25, 0.5, 0.75]
+        let marks = fractions.map { fraction in
+            let date = interval.start.addingTimeInterval(interval.duration * fraction)
+            let label: String
+            if snapshot.range == .fortyEightHours {
+                label = date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+            } else {
+                label = date.formatted(.dateTime.weekday(.abbreviated).day())
+            }
+            return TimelineAxisMark(date: date, label: label)
+        }
+        return marks + [TimelineAxisMark(date: interval.end, label: "Now")]
     }
 
     private var dominantSleepBoundaryMarks: [TimelineAxisMark] {
@@ -1899,8 +2054,7 @@ private struct UnifiedTimelineLayout: Equatable {
     init(
         showsBattery: Bool,
         showsMemory: Bool,
-        presentation: TimelinePresentation,
-        expandedProcessorHeight: CGFloat?
+        presentation: TimelinePresentation
     ) {
         self.showsBattery = showsBattery
         self.showsMemory = showsMemory
@@ -1910,11 +2064,6 @@ private struct UnifiedTimelineLayout: Equatable {
             batteryHeight = 56
             memoryHeight = 36
             sectionGap = 12
-        case .expanded:
-            cpuHeight = min(520, max(320, expandedProcessorHeight ?? 320))
-            batteryHeight = 60
-            memoryHeight = 42
-            sectionGap = 14
         case .menuBar:
             cpuHeight = 164
             batteryHeight = 42

@@ -1,28 +1,27 @@
 import DailyMacCore
 import SwiftUI
 
-struct DiagnosisActionButton: View {
+struct DiagnosisIconButton: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         Button {
             model.diagnoseMachine()
         } label: {
-            HStack(spacing: 6) {
+            Group {
                 if model.diagnosisState.isPreparing {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: 13, height: 13)
                 } else {
                     Image(systemName: model.diagnosisState.symbol)
                 }
-                Text(model.diagnosisState.buttonTitle)
-                    .lineLimit(1)
             }
+            .frame(width: 15, height: 15)
         }
-        .buttonStyle(GlassySecondaryButtonStyle())
+        .buttonStyle(GlassyIconButtonStyle())
         .disabled(model.diagnosisState.isPreparing)
-        .help(model.diagnosisState.detail)
+        .help("Diagnose My Machine — \(model.diagnosisState.detail)")
+        .accessibilityLabel("Diagnose My Machine")
         .accessibilityHint(model.diagnosisState.detail)
     }
 }
@@ -87,6 +86,8 @@ struct MonitoringRangePickerControl: View {
         case .sixHours: return "6h"
         case .twelveHours: return "12h"
         case .twentyFourHours: return "24h"
+        case .fortyEightHours: return "48h"
+        case .oneWeek: return "7d"
         }
     }
 }
@@ -122,7 +123,7 @@ struct TimelineDisplayModeControl: View {
     }
 }
 
-private struct GlassySecondaryButtonStyle: ButtonStyle {
+struct GlassySecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.caption.weight(.medium))
@@ -147,6 +148,25 @@ private struct GlassySecondaryButtonStyle: ButtonStyle {
     }
 }
 
+struct GlassyIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.primary.opacity(configuration.isPressed ? 0.68 : 0.88))
+            .frame(width: 27, height: 27)
+            .background(.thinMaterial, in: Circle())
+            .background {
+                Circle().fill(Color.primary.opacity(configuration.isPressed ? 0.08 : 0.04))
+            }
+            .overlay {
+                Circle().stroke(Color.primary.opacity(configuration.isPressed ? 0.22 : 0.13), lineWidth: 0.8)
+            }
+            .shadow(color: .black.opacity(0.05), radius: 5, y: 1)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
+    }
+}
+
 struct ActiveUseSummaryLabel: View {
     let duration: TimeInterval?
 
@@ -162,6 +182,48 @@ struct ActiveUseSummaryLabel: View {
             .fixedSize(horizontal: true, vertical: false)
             .help("Observed non-idle use since the start of today. This is not a focus, attention, or productivity score.")
             .accessibilityHint("Observed non-idle use. This is not a focus or productivity score.")
+        }
+    }
+}
+
+struct MenuBarActivitySummaryLabel: View {
+    let activeTodayDuration: TimeInterval?
+    let currentSessionDuration: TimeInterval?
+
+    var body: some View {
+        if let activeTodayDuration {
+            ViewThatFits(in: .horizontal) {
+                summary(
+                    active: Formatters.activeUseToday(activeTodayDuration),
+                    session: Formatters.currentSession(currentSessionDuration)
+                )
+                summary(
+                    active: "Today \(Formatters.duration(activeTodayDuration))",
+                    session: compactSessionLabel
+                )
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .help("Active today is observed non-idle use. Current session continues across a brief pause and resets after a longer interruption. Neither is a focus or productivity score.")
+            .accessibilityHint("Observed non-idle use and the length of the current natural work session. Neither is a focus or productivity score.")
+        }
+    }
+
+    private var compactSessionLabel: String {
+        guard let currentSessionDuration else { return "Session inactive" }
+        guard currentSessionDuration >= 60 else { return "Session just started" }
+        return "Session \(Formatters.duration(currentSessionDuration))"
+    }
+
+    private func summary(active: String, session: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "person.fill")
+                .imageScale(.small)
+            Text(active)
+            Text("·")
+                .foregroundStyle(.tertiary)
+            Text(session)
         }
     }
 }

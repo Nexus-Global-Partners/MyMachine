@@ -4,6 +4,19 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-30
+
+### Added
+
+- The menu and Monitoring window now include 48-hour and 7-day ranges with range-aware smoothing and calendar labels.
+- The header shows both active time today and the current natural session, allowing brief pauses without resetting the session.
+
+### Changed
+
+- Diagnosis is now a compact icon in the menu header and the redundant bottom control strip is gone.
+- Precise mode follows Calm mode's graph-first, full-width hierarchy while keeping its detailed context available through compact overlays and selection.
+- Removed the separate full-screen dashboard and its network-only lane so MY MACHINE remains a focused two-mode menu-bar product.
+
 ## [1.2.0] - 2026-08-29
 
 ### Added
@@ -69,7 +82,8 @@ All notable user-visible changes are recorded here.
 
 - Published the initial local-first macOS monitoring app, source handoff, privacy contract, and menu-bar experience.
 
-[Unreleased]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Nexus-Global-Partners/MyMachine/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.2.0
 [1.1.1]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Nexus-Global-Partners/MyMachine/releases/tag/v1.1.0

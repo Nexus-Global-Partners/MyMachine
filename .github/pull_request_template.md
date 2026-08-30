@@ -14,7 +14,7 @@ Describe the visible outcome and why it matters.
 - [ ] `swift run DailyMacValidation`
 - [ ] `swift run -c release DailyMacValidation`
 - [ ] Menu panel checked at normal scale
-- [ ] Expanded/full-screen behavior checked when relevant
+- [ ] Menu positioning and Calm/Precise switching checked when relevant
 - [ ] No private database, process dump, environment dump, diagnosis brief, or generated release artifact is included
 - [ ] Screenshots use synthetic data or are cropped/redacted for app names, filenames, projects, notifications, messages, and background windows
 

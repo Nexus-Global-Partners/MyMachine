@@ -59,7 +59,9 @@ struct DailyMacValidation {
                 (.oneHour, 3_600),
                 (.sixHours, 21_600),
                 (.twelveHours, 43_200),
-                (.twentyFourHours, 86_400)
+                (.twentyFourHours, 86_400),
+                (.fortyEightHours, 172_800),
+                (.oneWeek, 604_800)
             ]
             for (range, duration) in expected {
                 let interval = range.interval(endingAt: end)
@@ -124,7 +126,9 @@ struct DailyMacValidation {
                 (.oneHour, 30, 2 * 60),
                 (.sixHours, 2 * 60, 8 * 60),
                 (.twelveHours, 5 * 60, 16 * 60),
-                (.twentyFourHours, 10 * 60, 30 * 60)
+                (.twentyFourHours, 10 * 60, 30 * 60),
+                (.fortyEightHours, 20 * 60, 60 * 60),
+                (.oneWeek, 60 * 60, 3 * 60 * 60)
             ]
             for (range, precise, calm) in expected {
                 let preciseDuration = TimelineSemantics.processorTrendBucketDuration(
@@ -538,6 +542,46 @@ struct DailyMacValidation {
             try harness.check(Formatters.duration(5_400) == "1 hr 30 min", "hour duration wording mismatch")
             try harness.check(Formatters.activeUseToday(2_700) == "Active today · 45 min", "active-use summary was unclear")
             try harness.check(Formatters.activeUseToday(0) == "No active use observed today", "zero active use was overstated")
+            try harness.check(Formatters.currentSession(5_400) == "Current session · 1 hr 30 min", "current-session summary was unclear")
+            try harness.check(Formatters.currentSession(nil) == "Current session · inactive", "inactive current-session wording was unclear")
+
+            let sessionEnd = Date(timeIntervalSince1970: 1_780_010_000)
+            let bridgedSessionSamples = [
+                sample(at: sessionEnd.addingTimeInterval(-1_800)),
+                sample(at: sessionEnd.addingTimeInterval(-1_250)),
+                sample(at: sessionEnd.addingTimeInterval(-650)),
+                sample(at: sessionEnd.addingTimeInterval(-60))
+            ]
+            let bridgedSession = try require(
+                TimelineSemantics.currentActivitySession(from: bridgedSessionSamples, endingAt: sessionEnd),
+                "brief pauses incorrectly ended the current session"
+            )
+            try harness.check(
+                abs(bridgedSession.duration(endingAt: sessionEnd) - 1_815) < 0.001,
+                "current-session duration did not include the natural session start"
+            )
+
+            let restartedSession = try require(
+                TimelineSemantics.currentActivitySession(
+                    from: [
+                        sample(at: sessionEnd.addingTimeInterval(-1_800)),
+                        sample(at: sessionEnd.addingTimeInterval(-500))
+                    ],
+                    endingAt: sessionEnd
+                ),
+                "recent activity did not form a current session"
+            )
+            try harness.check(
+                abs(restartedSession.duration(endingAt: sessionEnd) - 515) < 0.001,
+                "a long interruption did not start a new current session"
+            )
+            try harness.check(
+                TimelineSemantics.currentActivitySession(
+                    from: [sample(at: sessionEnd.addingTimeInterval(-601))],
+                    endingAt: sessionEnd
+                ) == nil,
+                "stale activity was presented as a current session"
+            )
             let earlier = sample(at: Date(timeIntervalSince1970: 1_780_000_000), cpu: 90)
             let later = sample(at: Date(timeIntervalSince1970: 1_780_000_060), cpu: 10)
             try harness.check(

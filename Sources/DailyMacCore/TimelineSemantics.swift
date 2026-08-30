@@ -49,6 +49,22 @@ public enum TimelineSelection: Equatable, Sendable {
     case unrecorded
 }
 
+/// The most recent stretch of human use, allowing a brief interruption without
+/// turning one natural work session into several fragments.
+public struct CurrentActivitySession: Equatable, Sendable {
+    public let startedAt: Date
+    public let lastActiveAt: Date
+
+    public init(startedAt: Date, lastActiveAt: Date) {
+        self.startedAt = startedAt
+        self.lastActiveAt = lastActiveAt
+    }
+
+    public func duration(endingAt date: Date) -> TimeInterval {
+        max(0, date.timeIntervalSince(startedAt))
+    }
+}
+
 /// Controls how much short-lived movement the shared machine graph exposes.
 /// Precise keeps interval-level evidence for inspection; Calm uses longer
 /// time-weighted windows so the overall shape is readable at a glance.
@@ -275,6 +291,11 @@ public struct TimelineActivityLane: Identifiable, Equatable, Sendable {
 /// Pure rules shared by the native timeline and validation executable. They keep
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
+    /// A short pause should not split one natural work session. The monitor's
+    /// idle classifier already waits for sustained inactivity, so this extra
+    /// tolerance represents a genuinely longer interruption.
+    public static let currentSessionInterruptionTolerance: TimeInterval = 10 * 60
+
     /// A stable, range-aware averaging window for the processor plot. Calm mode
     /// intentionally targets roughly 30–48 meaningful movements per range;
     /// Precise mode retains the existing close-inspection density.
@@ -287,10 +308,14 @@ public enum TimelineSemantics {
         case (.precise, .sixHours): return 120
         case (.precise, .twelveHours): return 300
         case (.precise, .twentyFourHours): return 600
+        case (.precise, .fortyEightHours): return 20 * 60
+        case (.precise, .oneWeek): return 60 * 60
         case (.calm, .oneHour): return 2 * 60
         case (.calm, .sixHours): return 8 * 60
         case (.calm, .twelveHours): return 16 * 60
         case (.calm, .twentyFourHours): return 30 * 60
+        case (.calm, .fortyEightHours): return 60 * 60
+        case (.calm, .oneWeek): return 3 * 60 * 60
         }
     }
 
@@ -573,6 +598,62 @@ public enum TimelineSemantics {
             awakeIntervals: mergeMeasuredIntervals(awake),
             handsOnIntervals: mergeMeasuredIntervals(handsOn)
         )
+    }
+
+    /// Returns the current natural work session rather than the sum of active
+    /// intervals. Samples marked idle are ignored, while short gaps between
+    /// active readings stay inside the same session. A longer interruption
+    /// starts a new session and a stale final reading means there is no current
+    /// session to show.
+    public static func currentActivitySession(
+        from samples: [SystemSample],
+        endingAt end: Date,
+        maximumInterruption: TimeInterval = currentSessionInterruptionTolerance
+    ) -> CurrentActivitySession? {
+        guard maximumInterruption > 0 else { return nil }
+        let active = samples
+            .filter { !$0.isIdle && $0.category != .idle && $0.timestamp <= end }
+            .sorted { $0.timestamp < $1.timestamp }
+        guard let latest = active.last,
+              end.timeIntervalSince(latest.timestamp) >= 0,
+              end.timeIntervalSince(latest.timestamp) <= maximumInterruption else { return nil }
+
+        func observedStart(of sample: SystemSample) -> Date {
+            sample.timestamp.addingTimeInterval(-CoverageEvaluator.boundedDuration(of: sample))
+        }
+
+        var startedAt = observedStart(of: latest)
+        for sample in active.dropLast().reversed() {
+            let gap = startedAt.timeIntervalSince(sample.timestamp)
+            if gap < 0 || gap > maximumInterruption { break }
+            startedAt = observedStart(of: sample)
+        }
+
+        return CurrentActivitySession(startedAt: startedAt, lastActiveAt: latest.timestamp)
+    }
+
+    /// Updates an already-loaded current session with one new local reading.
+    /// This keeps the menu summary live without repeatedly rereading a day of
+    /// history from disk.
+    public static func updatingCurrentActivitySession(
+        _ session: CurrentActivitySession?,
+        with sample: SystemSample,
+        maximumInterruption: TimeInterval = currentSessionInterruptionTolerance
+    ) -> CurrentActivitySession? {
+        guard maximumInterruption > 0 else { return nil }
+        if sample.isIdle || sample.category == .idle {
+            guard let session,
+                  sample.timestamp.timeIntervalSince(session.lastActiveAt) <= maximumInterruption else { return nil }
+            return session
+        }
+
+        let sampleStart = sample.timestamp.addingTimeInterval(-CoverageEvaluator.boundedDuration(of: sample))
+        guard let session,
+              sampleStart.timeIntervalSince(session.lastActiveAt) <= maximumInterruption,
+              sample.timestamp >= session.lastActiveAt else {
+            return CurrentActivitySession(startedAt: sampleStart, lastActiveAt: sample.timestamp)
+        }
+        return CurrentActivitySession(startedAt: session.startedAt, lastActiveAt: sample.timestamp)
     }
 
     public static func windowUsageSummary(
