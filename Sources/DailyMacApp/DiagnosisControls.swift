@@ -191,23 +191,30 @@ struct MenuBarActivitySummaryLabel: View {
     let currentSessionDuration: TimeInterval?
 
     var body: some View {
-        if let activeTodayDuration {
-            ViewThatFits(in: .horizontal) {
-                summary(
-                    active: Formatters.activeUseToday(activeTodayDuration),
-                    session: Formatters.currentSession(currentSessionDuration)
-                )
-                summary(
-                    active: "Today \(Formatters.duration(activeTodayDuration))",
-                    session: compactSessionLabel
-                )
-            }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .help("Active today is observed non-idle use. Current session continues across a brief pause and resets after a longer interruption. Neither is a focus or productivity score.")
-            .accessibilityHint("Observed non-idle use and the length of the current natural work session. Neither is a focus or productivity score.")
+        ViewThatFits(in: .horizontal) {
+            summary(active: activeTodayLabel, session: currentSessionLabel)
+            summary(active: compactActiveTodayLabel, session: compactSessionLabel)
         }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .help("Active today is observed non-idle use. Current session continues across a brief pause and resets after a longer interruption. Neither is a focus or productivity score.")
+        .accessibilityHint("Observed non-idle use and the length of the current natural work session. Neither is a focus or productivity score.")
+    }
+
+    private var activeTodayLabel: String {
+        guard let activeTodayDuration else { return "Active today · collecting" }
+        return Formatters.activeUseToday(activeTodayDuration)
+    }
+
+    private var compactActiveTodayLabel: String {
+        guard let activeTodayDuration else { return "Today collecting" }
+        guard activeTodayDuration >= 60 else { return "Today no active use yet" }
+        return "Today \(Formatters.duration(activeTodayDuration))"
+    }
+
+    private var currentSessionLabel: String {
+        Formatters.currentSession(currentSessionDuration)
     }
 
     private var compactSessionLabel: String {

@@ -4,9 +4,6 @@ import SwiftUI
 
 struct MenuBarMonitoringView: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var route = AppRoute.shared
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
     @AppStorage(TimelineDisplayMode.storageKey)
     private var timelineDisplayMode = TimelineDisplayMode.precise.rawValue
@@ -55,17 +52,10 @@ struct MenuBarMonitoringView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Monitoring")
                     .font(.headline)
-                HStack(spacing: 5) {
-                    Text(menuBarRangeTitle)
-                    Text("·")
-                    if let dataThrough = model.menuBarMonitoringContent?.dataThrough {
-                        Text("Data through \(dataThrough.formatted(date: .omitted, time: .shortened))")
-                    } else {
-                        Text("Waiting for the first reading")
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                MenuBarActivitySummaryLabel(
+                    activeTodayDuration: model.todayReport?.activeDuration,
+                    currentSessionDuration: model.currentSessionDuration
+                )
             }
 
             Spacer(minLength: 12)
@@ -80,10 +70,6 @@ struct MenuBarMonitoringView: View {
                             .foregroundStyle(.secondary)
                             .help(model.menuBarRefreshMessage ?? "")
                     }
-                    MenuBarActivitySummaryLabel(
-                        activeTodayDuration: model.todayReport?.activeDuration,
-                        currentSessionDuration: model.currentSessionDuration
-                    )
                 }
                 .font(.caption)
 
@@ -97,19 +83,6 @@ struct MenuBarMonitoringView: View {
                 TimelineDisplayModeControl()
 
                 DiagnosisIconButton()
-
-                Button {
-                    route.requestMonitoring()
-                    openWindow(id: "main")
-                    dismiss()
-                    NSApp.activate(ignoringOtherApps: true)
-                } label: {
-                    Image(systemName: "rectangle.split.2x1")
-                        .frame(width: 14, height: 14)
-                }
-                .buttonStyle(GlassyIconButtonStyle())
-                .help("Open monitoring window")
-                .accessibilityLabel("Open monitoring window")
 
                 Button {
                     model.refreshMenuBarNow()
@@ -196,6 +169,7 @@ struct MenuBarMonitoringView: View {
                 .frame(width: 14, height: 14)
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .buttonStyle(GlassyIconButtonStyle())
         .fixedSize()
         .help("More options")
