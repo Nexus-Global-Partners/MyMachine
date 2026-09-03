@@ -296,6 +296,64 @@ public enum TimelineSemantics {
     /// tolerance represents a genuinely longer interruption.
     public static let currentSessionInterruptionTolerance: TimeInterval = 10 * 60
 
+    /// Manual inspection is an explicit override. Smart is the only preference
+    /// that is allowed to move with the live work context.
+    public static func monitoringRange(
+        for preference: MonitoringRangePreference,
+        at date: Date,
+        recentSamples: [SystemSample],
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> MonitoringRange {
+        switch preference {
+        case .smart:
+            return recommendedMonitoringRange(
+                at: date,
+                recentSamples: recentSamples,
+                calendar: calendar
+            )
+        case .fixed(let range):
+            return range
+        }
+    }
+
+    /// Chooses a stable live window from recently recorded evidence. A genuinely
+    /// close-in start stays at one hour, an established work stretch gets useful
+    /// pause context, and a substantial late day becomes a day-shaped summary.
+    /// The thresholds do not overlap, so a changing live percentage cannot make
+    /// the timeline jump back and forth each time the menu opens.
+    public static func recommendedMonitoringRange(
+        at date: Date,
+        recentSamples: [SystemSample],
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> MonitoringRange {
+        let dayWindow = DateInterval(start: calendar.startOfDay(for: date), end: date)
+        let activeTodayIntervals = recentSamples.compactMap { sample -> DateInterval? in
+            guard !sample.isIdle, sample.category != .idle else { return nil }
+            return observedInterval(for: sample, within: dayWindow)
+        }
+        let activeToday = mergeMeasuredIntervals(activeTodayIntervals)
+            .reduce(0) { $0 + $1.duration }
+        let sessionDuration = currentActivitySession(from: recentSamples, endingAt: date)?
+            .duration(endingAt: date) ?? 0
+
+        // By late afternoon, a substantial day benefits from a day-shaped view
+        // even when the person has only just returned for a new session.
+        let localHour = calendar.component(.hour, from: date)
+        if localHour >= 16, activeToday >= 4 * 60 * 60 {
+            return .twelveHours
+        }
+
+        // Six wall-clock hours comfortably contains a roughly four-hour work
+        // stretch plus natural pauses without making the graph feel archival.
+        if sessionDuration >= 75 * 60 || activeToday >= 90 * 60 {
+            return .sixHours
+        }
+
+        // A new or lightly recorded day stays close enough to explain a burst
+        // without pretending sparse history deserves a broader overview.
+        return .oneHour
+    }
+
     /// A stable, range-aware averaging window for the processor plot. Calm mode
     /// intentionally targets roughly 30–48 meaningful movements per range;
     /// Precise mode retains the existing close-inspection density.

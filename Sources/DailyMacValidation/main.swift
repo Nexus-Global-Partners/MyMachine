@@ -70,6 +70,94 @@ struct DailyMacValidation {
             }
         }
 
+        await harness.run("smart monitoring range follows live work context") {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try require(TimeZone(identifier: "UTC"), "UTC timezone unavailable")
+            let morning = try require(
+                calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 9)),
+                "morning smart-range fixture unavailable"
+            )
+            let midday = try require(
+                calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 13)),
+                "midday smart-range fixture unavailable"
+            )
+            let evening = try require(
+                calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 18)),
+                "evening smart-range fixture unavailable"
+            )
+
+            let intenseStart = morning.addingTimeInterval(-20 * 60)
+            let intenseSamples = (1...4).map { step in
+                sample(
+                    at: intenseStart.addingTimeInterval(Double(step) * 5 * 60),
+                    duration: 5 * 60,
+                    interval: 5 * 60,
+                    cpu: 78
+                )
+            }
+            let closeRange = TimelineSemantics.recommendedMonitoringRange(
+                at: morning,
+                recentSamples: intenseSamples,
+                calendar: calendar
+            )
+            try harness.check(closeRange == .oneHour, "a fresh demanding session did not stay close")
+
+            let workStart = midday.addingTimeInterval(-2.5 * 60 * 60)
+            let workSamples = (1...10).map { step in
+                sample(
+                    at: workStart.addingTimeInterval(Double(step) * 15 * 60),
+                    duration: 15 * 60,
+                    interval: 15 * 60,
+                    cpu: 48
+                )
+            }
+            let workStretch = TimelineSemantics.recommendedMonitoringRange(
+                at: midday,
+                recentSamples: workSamples,
+                calendar: calendar
+            )
+            try harness.check(workStretch == .sixHours, "an established work stretch lacked useful pause context")
+
+            let dayStart = evening.addingTimeInterval(-9 * 60 * 60)
+            let fullDaySamples = (1...6).map { step in
+                sample(
+                    at: dayStart.addingTimeInterval(Double(step) * 60 * 60),
+                    duration: 60 * 60,
+                    interval: 60 * 60,
+                    cpu: 35
+                )
+            }
+            let fullDay = TimelineSemantics.recommendedMonitoringRange(
+                at: evening,
+                recentSamples: fullDaySamples,
+                calendar: calendar
+            )
+            try harness.check(fullDay == .twelveHours, "a substantial late day was not summarized")
+
+            let resumedSamples = fullDaySamples + (1...2).map { step in
+                sample(
+                    at: evening.addingTimeInterval(Double(step - 2) * 5 * 60),
+                    duration: 5 * 60,
+                    interval: 5 * 60,
+                    cpu: 82
+                )
+            }
+            let resumedIntensity = TimelineSemantics.recommendedMonitoringRange(
+                at: evening,
+                recentSamples: resumedSamples,
+                calendar: calendar
+            )
+            try harness.check(resumedIntensity == .twelveHours, "a newly resumed session hid substantial late-day context")
+
+            let manual = TimelineSemantics.monitoringRange(
+                for: .fixed(.fortyEightHours),
+                at: evening,
+                recentSamples: intenseSamples,
+                calendar: calendar
+            )
+            try harness.check(manual == .fortyEightHours, "a manual history window was overwritten by Smart")
+        }
+
         await harness.run("menu panel conceals its provisional frame until anchored") {
             let validationFile = URL(fileURLWithPath: #filePath)
             let repositoryRoot = validationFile

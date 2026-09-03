@@ -112,6 +112,7 @@ final class AppModel: ObservableObject {
     @Published var monitoringRange: MonitoringRange = .twentyFourHours
     @Published private(set) var monitoringContent: MonitoringDisplayState?
     @Published var monitoringIsRefreshing = false
+    @Published private(set) var menuBarMonitoringRangePreference: MonitoringRangePreference = .smart
     @Published private(set) var menuBarMonitoringRange: MonitoringRange = .oneHour
     @Published private(set) var menuBarMonitoringContent: MonitoringDisplayState?
     @Published private(set) var menuBarIsRefreshing = false
@@ -455,8 +456,15 @@ final class AppModel: ObservableObject {
         restartMenuBarRefresh(endingAt: Date())
     }
 
+    func selectSmartMenuBarMonitoringRange() {
+        menuBarMonitoringRangePreference = .smart
+        restartMenuBarRefresh(endingAt: Date())
+    }
+
     func selectMenuBarMonitoringRange(_ range: MonitoringRange) {
-        guard menuBarMonitoringRange != range else { return }
+        let wasFixedToRange = menuBarMonitoringRangePreference == .fixed(range)
+        guard !wasFixedToRange else { return }
+        menuBarMonitoringRangePreference = .fixed(range)
         menuBarMonitoringRange = range
         restartMenuBarRefresh(endingAt: Date())
     }
@@ -798,30 +806,38 @@ final class AppModel: ObservableObject {
         menuBarRefreshGeneration &+= 1
         let generation = menuBarRefreshGeneration
         let refreshEpoch = dataEpoch
-        let range = menuBarMonitoringRange
+        let requestedPreference = menuBarMonitoringRangePreference
         menuBarIsRefreshing = true
         menuBarRefreshMessage = nil
 
         let task = Task { [weak self] in
             guard let self else { return }
             do {
+                // Smart is resolved from the same private history used by the
+                // graph, so first launch does not depend on a report cache.
+                let recentSamples = try await store.samples(
+                    in: DateInterval(start: now.addingTimeInterval(-86_400), end: now)
+                )
+                let range = TimelineSemantics.monitoringRange(
+                    for: requestedPreference,
+                    at: now,
+                    recentSamples: recentSamples
+                )
                 let content = try await self.makeMonitoringContent(
                     range: range,
                     endingAt: now,
                     limit: 720
                 )
-                let sessionSamples = try await store.samples(
-                    in: DateInterval(start: now.addingTimeInterval(-86_400), end: now)
-                )
                 let currentSession = TimelineSemantics.currentActivitySession(
-                    from: sessionSamples,
+                    from: recentSamples,
                     endingAt: now
                 )
                 guard !Task.isCancelled,
                       generation == self.menuBarRefreshGeneration,
                       refreshEpoch == self.dataEpoch,
                       !self.dataEraseInProgress,
-                      range == self.menuBarMonitoringRange else { return }
+                      requestedPreference == self.menuBarMonitoringRangePreference else { return }
+                self.menuBarMonitoringRange = range
                 self.menuBarMonitoringContent = content
                 self.currentActivitySession = currentSession
             } catch {

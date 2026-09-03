@@ -26,6 +26,84 @@ struct DiagnosisIconButton: View {
     }
 }
 
+/// The menu-bar timeline opens on one context-aware view instead of asking the
+/// person to choose a scale before they can read the graph. Fixed windows remain
+/// available as a progressive-disclosure inspection tool.
+struct MenuBarMonitoringRangeControl: View {
+    let preference: MonitoringRangePreference
+    let effectiveRange: MonitoringRange
+    let onSelectSmart: () -> Void
+    let onSelectRange: (MonitoringRange) -> Void
+
+    var body: some View {
+        Menu {
+            Button {
+                onSelectSmart()
+            } label: {
+                menuItem(
+                    "Automatic · \(effectiveRange.compactLabel)",
+                    selected: preference.isSmart
+                )
+            }
+
+            Divider()
+
+            ForEach(MonitoringRange.allCases) { range in
+                Button {
+                    onSelectRange(range)
+                } label: {
+                    menuItem(range.label, selected: preference == .fixed(range))
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: preference.isSmart ? "sparkles" : "clock")
+                    .imageScale(.small)
+                Text(controlTitle)
+                    .monospacedDigit()
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 82)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .buttonStyle(GlassySecondaryButtonStyle())
+        .fixedSize()
+        .help(helpText)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var controlTitle: String {
+        preference.isSmart
+            ? "Auto · \(effectiveRange.compactLabel)"
+            : effectiveRange.compactLabel
+    }
+
+    private var helpText: String {
+        if preference.isSmart {
+            return "Automatic chooses the most useful live window from recent work and time of day. Choose a fixed range to inspect it manually."
+        }
+        return "Showing a fixed \(effectiveRange.label) window. Choose Automatic to follow current work again."
+    }
+
+    private var accessibilityLabel: String {
+        preference.isSmart
+            ? "History range, Automatic, showing \(effectiveRange.label)"
+            : "History range, fixed at \(effectiveRange.label)"
+    }
+
+    @ViewBuilder
+    private func menuItem(_ title: String, selected: Bool) -> some View {
+        if selected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+}
+
 struct MonitoringRangePickerControl: View {
     let selection: MonitoringRange
     let itemWidth: CGFloat
@@ -47,7 +125,7 @@ struct MonitoringRangePickerControl: View {
                 Button {
                     onSelect(range)
                 } label: {
-                    Text(shortLabel(for: range))
+                    Text(range.compactLabel)
                         .font(.caption.weight(range == selection ? .semibold : .medium))
                         .foregroundStyle(range == selection ? Color.accentColor : Color.secondary.opacity(0.90))
                         .frame(width: itemWidth, height: 23)
@@ -80,16 +158,6 @@ struct MonitoringRangePickerControl: View {
         .accessibilityLabel("History range")
     }
 
-    private func shortLabel(for range: MonitoringRange) -> String {
-        switch range {
-        case .oneHour: return "1h"
-        case .sixHours: return "6h"
-        case .twelveHours: return "12h"
-        case .twentyFourHours: return "24h"
-        case .fortyEightHours: return "48h"
-        case .oneWeek: return "7d"
-        }
-    }
 }
 
 /// A deliberately compact two-state switch. One click changes the graph

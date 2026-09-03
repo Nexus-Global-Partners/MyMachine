@@ -558,8 +558,31 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
         }
     }
 
+    public var compactLabel: String {
+        switch self {
+        case .oneHour: return "1h"
+        case .sixHours: return "6h"
+        case .twelveHours: return "12h"
+        case .twentyFourHours: return "24h"
+        case .fortyEightHours: return "48h"
+        case .oneWeek: return "7d"
+        }
+    }
+
     public func interval(endingAt end: Date) -> DateInterval {
         DateInterval(start: end.addingTimeInterval(-duration), end: end)
+    }
+}
+
+/// The menu timeline defaults to a context-aware window, while still allowing
+/// an explicit range to remain fixed until the person returns to Smart.
+public enum MonitoringRangePreference: Equatable, Sendable {
+    case smart
+    case fixed(MonitoringRange)
+
+    public var isSmart: Bool {
+        if case .smart = self { return true }
+        return false
     }
 }
 

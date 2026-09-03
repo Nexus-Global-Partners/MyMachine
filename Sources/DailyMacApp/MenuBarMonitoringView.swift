@@ -73,12 +73,13 @@ struct MenuBarMonitoringView: View {
                 }
                 .font(.caption)
 
-                MonitoringRangePickerControl(
-                    selection: model.menuBarMonitoringRange,
-                    itemWidth: 27,
-                    onSelect: model.selectMenuBarMonitoringRange
+                MenuBarMonitoringRangeControl(
+                    preference: model.menuBarMonitoringRangePreference,
+                    effectiveRange: model.menuBarMonitoringContent?.snapshot.range
+                        ?? model.menuBarMonitoringRange,
+                    onSelectSmart: model.selectSmartMenuBarMonitoringRange,
+                    onSelectRange: model.selectMenuBarMonitoringRange
                 )
-                .help("Choose how much history to show")
 
                 TimelineDisplayModeControl()
 
