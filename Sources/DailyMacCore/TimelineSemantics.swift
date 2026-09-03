@@ -658,6 +658,52 @@ public enum TimelineSemantics {
         )
     }
 
+    /// Known periods without physical input. Confirmed sleep counts as human
+    /// absence, while unrecorded gaps remain unclassified and are never bridged.
+    /// The machine-state rail can still distinguish awake background work from
+    /// sleep inside these broader human-away periods.
+    public static func humanAwayIntervals(
+        presence: TimelinePresenceContext,
+        sleepIntervals: [DateInterval],
+        within window: DateInterval
+    ) -> [DateInterval] {
+        func clipped(_ interval: DateInterval) -> DateInterval? {
+            let start = max(window.start, interval.start)
+            let end = min(window.end, interval.end)
+            guard end > start else { return nil }
+            return DateInterval(start: start, end: end)
+        }
+
+        let knownPresence = mergeMeasuredIntervals(
+            (presence.awakeIntervals + sleepIntervals).compactMap(clipped)
+        )
+        let handsOn = mergeMeasuredIntervals(
+            presence.handsOnIntervals.compactMap(clipped)
+        )
+
+        return handsOn.reduce(knownPresence) { remaining, exclusion in
+            remaining.flatMap { candidate -> [DateInterval] in
+                guard exclusion.end > candidate.start,
+                      exclusion.start < candidate.end else { return [candidate] }
+
+                var pieces: [DateInterval] = []
+                if exclusion.start > candidate.start {
+                    pieces.append(DateInterval(
+                        start: candidate.start,
+                        end: min(candidate.end, exclusion.start)
+                    ))
+                }
+                if exclusion.end < candidate.end {
+                    pieces.append(DateInterval(
+                        start: max(candidate.start, exclusion.end),
+                        end: candidate.end
+                    ))
+                }
+                return pieces.filter { $0.duration > 0 }
+            }
+        }
+    }
+
     /// Returns the current natural work session rather than the sum of active
     /// intervals. Samples marked idle are ignored, while short gaps between
     /// active readings stay inside the same session. A longer interruption

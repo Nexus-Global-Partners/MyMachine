@@ -2198,6 +2198,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             drawProcessorMemory(in: &context, rect: rects.cpu)
             drawProcessor(in: &context, rect: rects.cpu)
             drawMachineStateRail(in: &context, rect: rects.cpu)
+            drawHumanAwayAnnotation(in: &context, rect: rects.cpu)
             if let battery = rects.battery {
                 drawBattery(in: &context, rect: battery, rightAxisX: rects.plotWidth)
             }
@@ -2691,6 +2692,53 @@ private struct UnifiedDataCanvas: View, Equatable {
             in: &context,
             plot: plot
         )
+    }
+
+    /// One scale-aware label explains the longest meaningful stretch without
+    /// physical input. It is intentionally neutral: the state rail beneath it
+    /// still says whether the Mac was asleep or continuing background work.
+    private func drawHumanAwayAnnotation(
+        in context: inout GraphicsContext,
+        rect: CGRect
+    ) {
+        let plot = rect.insetBy(dx: 0, dy: 6)
+        let away = TimelineSemantics.humanAwayIntervals(
+            presence: presenceContext,
+            sleepIntervals: sleepIntervals,
+            within: interval
+        )
+        guard let widest = away.max(by: { $0.duration < $1.duration }),
+              widest.duration >= 5 * 60 else { return }
+
+        let startX = xPosition(widest.start, plotWidth: plot.width)
+        let endX = xPosition(widest.end, plotWidth: plot.width)
+        let duration = humanAwayDurationLabel(widest.duration)
+        let label = "Away · \(duration)"
+        let estimatedWidth = CGFloat(label.count) * 5.2 + 14
+        guard endX - startX >= estimatedWidth else { return }
+
+        context.draw(
+            Text(label)
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.secondary.opacity(displayMode == .calm ? 0.56 : 0.66)),
+            at: CGPoint(x: (startX + endX) / 2, y: plot.maxY - 24),
+            anchor: .center
+        )
+    }
+
+    private func humanAwayDurationLabel(_ duration: TimeInterval) -> String {
+        let totalMinutes = max(1, Int(duration / 60))
+        let days = totalMinutes / (24 * 60)
+        let hours = (totalMinutes % (24 * 60)) / 60
+        let minutes = totalMinutes % 60
+
+        if days > 0 {
+            return hours > 0 ? "\(days) d \(hours) hr" : "\(days) d"
+        }
+        if hours > 0 {
+            return minutes > 0 ? "\(hours) hr \(minutes) min" : "\(hours) hr"
+        }
+        return "\(minutes) min"
     }
 
     private func drawStateRailSegments(

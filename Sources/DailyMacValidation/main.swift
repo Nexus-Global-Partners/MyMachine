@@ -1503,6 +1503,53 @@ struct DailyMacValidation {
             )
         }
 
+        await harness.run("human-away context excludes hands-on time and unrecorded gaps") {
+            let start = Date(timeIntervalSince1970: 1_800_285_000)
+            let window = DateInterval(start: start, duration: 30 * 60)
+            let presence = TimelinePresenceContext(
+                awakeIntervals: [
+                    DateInterval(start: start, duration: 10 * 60),
+                    DateInterval(
+                        start: start.addingTimeInterval(20 * 60),
+                        duration: 5 * 60
+                    )
+                ],
+                handsOnIntervals: [
+                    DateInterval(start: start, duration: 2 * 60),
+                    DateInterval(
+                        start: start.addingTimeInterval(8 * 60),
+                        duration: 2 * 60
+                    )
+                ]
+            )
+            let sleep = DateInterval(
+                start: start.addingTimeInterval(25 * 60),
+                duration: 5 * 60
+            )
+
+            let away = TimelineSemantics.humanAwayIntervals(
+                presence: presence,
+                sleepIntervals: [sleep],
+                within: window
+            )
+
+            try harness.check(away.count == 2, "human-away context merged across hands-on or unrecorded time")
+            try harness.check(
+                abs(away[0].start.timeIntervalSince(start.addingTimeInterval(2 * 60))) < 0.001
+                    && abs(away[0].duration - 6 * 60) < 0.001,
+                "human-away context did not subtract measured physical input"
+            )
+            try harness.check(
+                abs(away[1].start.timeIntervalSince(start.addingTimeInterval(20 * 60))) < 0.001
+                    && abs(away[1].duration - 10 * 60) < 0.001,
+                "human-away context bridged an unrecorded gap"
+            )
+            try harness.check(
+                away[1].contains(sleep.start) && away[1].end == sleep.end,
+                "confirmed sleep did not remain inside truthful human-away context"
+            )
+        }
+
         await harness.run("battery timeline never bridges power changes, gaps, or sleep") {
             let start = Date(timeIntervalSince1970: 1_800_300_000)
             let interval = DateInterval(start: start, end: start.addingTimeInterval(400))
