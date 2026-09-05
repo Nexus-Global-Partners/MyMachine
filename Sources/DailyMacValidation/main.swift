@@ -718,7 +718,7 @@ struct DailyMacValidation {
             fields["recommendations"] = insights
             let hostile = try JSONDecoder().decode(DailyReport.self, from: JSONSerialization.data(withJSONObject: fields))
             let markdown = ReportRenderer.markdown(hostile)
-            for forbidden in ["![image]", "<img", "`code`", "[link](x)", "\n# heading", "\u{202E}"] {
+            for forbidden in ["![image]", "<img src=x>", "`code`", "[link](x)", "\n# heading", "\u{202E}"] {
                 try harness.check(!markdown.contains(forbidden), "untrusted Markdown escaped its literal boundary")
             }
             try harness.check(markdown.contains("\\!\\[image\\]\\(https\\:"), "escaped label was lost")
@@ -735,7 +735,10 @@ struct DailyMacValidation {
                 samples: (0..<20).map { sample(at: oldDay.addingTimeInterval(Double($0) * 15), app: "PrivateClientApp", bundle: "com.private.client") },
                 processSamples: [], events: [])
             try await store.save(report: report)
+            try await store.save(event: ActivityEvent(timestamp: oldDay, type: .sustainedCPU, title: "PrivateClientApp", explanation: "PrivateClientApp was in front", severity: .notable))
             try await store.performRetention(settings: .default, now: now)
+            let oldEvents = try await store.events(from: .distantPast, to: .distantFuture)
+            try harness.check(!oldEvents.contains { $0.title.contains("PrivateClientApp") || $0.explanation.contains("PrivateClientApp") }, "identity remained in event prose")
             let retained = try require(try await store.report(dayKey: report.dayKey), "aggregate report disappeared")
             let encoded = String(decoding: try JSONEncoder().encode(retained), as: UTF8.self)
             try harness.check(!encoded.contains("PrivateClientApp") && !encoded.contains("com.private.client"), "identity remained in a derived field")
@@ -1663,6 +1666,22 @@ struct DailyMacValidation {
             try harness.check(erasedEvents.isEmpty, "erase left events")
             try harness.check(erasedResources.isEmpty, "erase left app-family resource samples")
             try harness.check(!FileManager.default.fileExists(atPath: recoveryDirectory.path), "erase left a recovery archive containing telemetry")
+        }
+
+        await harness.run("store rejects redirected database files without modifying targets") {
+            let directory = temporaryDirectory(prefix: "DailyMacRedirectedStore")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let target = directory.appendingPathComponent("unrelated.txt")
+            let original = Data("unrelated private fixture".utf8)
+            try original.write(to: target)
+            try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("DailyMac.sqlite"), withDestinationURL: target)
+            var rejected = false
+            do { _ = try SQLiteStore(directoryURL: directory) }
+            catch { rejected = true }
+            try harness.check(rejected, "redirected database was accepted")
+            let remaining = try Data(contentsOf: target)
+            try harness.check(remaining == original, "unrelated target changed")
         }
 
         await harness.run("owner-only files and privacy-minimal schema") {

@@ -423,15 +423,15 @@ final class AppModel: ObservableObject {
                 detector.resetAfterGap()
                 await sampler.resetDeltas()
                 dataEraseInProgress = false
-                let shouldResume = shouldResumeAfterDataErase
                 shouldResumeAfterDataErase = false
-                if shouldResume { beginLoopIfNeeded() }
+                collectionReady = true
+                errorMessage = nil
+                collectionState = isCurrentlyPaused ? .paused : .monitoring
+                if settings.hasCollectionConsent && !settings.isPaused { beginLoopIfNeeded() }
             } catch {
                 if eraseEpoch == dataEpoch {
                     dataEraseInProgress = false
-                    let shouldResume = shouldResumeAfterDataErase
                     shouldResumeAfterDataErase = false
-                    if shouldResume { beginLoopIfNeeded() }
                 }
                 await show(error)
             }

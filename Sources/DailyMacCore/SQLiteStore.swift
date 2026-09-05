@@ -13,7 +13,7 @@ public enum StoreError: LocalizedError {
         case .cannotOpen(let detail): return "MY MACHINE could not open its local data store: \(detail)"
         case .statement(let detail): return "MY MACHINE could not prepare a local database operation: \(detail)"
         case .write(let detail): return "MY MACHINE could not save local monitoring data: \(detail)"
-        case .cleanupIncomplete: return "History was removed from the active tables, but local cleanup could not finish. Close any tools reading the database and choose Delete All Collected Data again. Backups and exports are separate copies."
+        case .cleanupIncomplete: return "Local history cleanup could not finish. Close tools reading the database and reopen MY MACHINE, or retry Delete All Collected Data if you were deleting history. Separate backups and exports are not removed."
         }
     }
 }
@@ -29,10 +29,19 @@ public actor SQLiteStore {
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     public init(directoryURL: URL? = nil) throws {
-        let selected = directoryURL ?? Self.defaultDirectoryURL()
+        let requested = (directoryURL ?? SQLiteStore.defaultDirectoryURL()).standardizedFileURL
         if directoryURL == nil {
-            try Self.migrateLegacyDirectoryIfNeeded(to: selected)
+            try Self.migrateLegacyDirectoryIfNeeded(to: requested)
         }
+        try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try Self.securePath(requested, directory: true)
+        // SQLite NOFOLLOW also rejects symlinked ancestors. Resolve system aliases
+        // only after verifying that the selected store itself is not a symlink.
+        guard let resolved = realpath(requested.path, nil) else {
+            throw StoreError.cannotOpen("Storage location could not be resolved")
+        }
+        defer { free(resolved) }
+        let selected = URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
         self.directoryURL = selected
         self.databaseURL = selected.appendingPathComponent("DailyMac.sqlite", isDirectory: false)
         self.encoder = JSONEncoder()
@@ -40,8 +49,6 @@ public actor SQLiteStore {
         encoder.dateEncodingStrategy = .millisecondsSince1970
         decoder.dateDecodingStrategy = .millisecondsSince1970
 
-        try FileManager.default.createDirectory(at: selected, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try Self.securePath(selected, directory: true)
         try Self.secureStoreFiles(databaseURL: databaseURL)
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW
@@ -992,6 +999,8 @@ public actor SQLiteStore {
         // Mode bits alone do not override extended ACL grants. Keep restrictive
         // ACLs, but refuse unexpected grants rather than silently changing them.
         guard let acl = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED) else {
+            // Darwin returns ENOENT when this open file has no extended ACL.
+            if errno == ENOENT { return }
             throw StoreError.cannotOpen("Storage access rules could not be verified")
         }
         defer { acl_free(UnsafeMutableRawPointer(acl)) }
