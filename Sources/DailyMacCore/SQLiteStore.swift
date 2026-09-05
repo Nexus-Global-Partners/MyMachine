@@ -1,16 +1,19 @@
 import Foundation
 import SQLite3
+import Darwin
 
 public enum StoreError: LocalizedError {
     case cannotOpen(String)
     case statement(String)
     case write(String)
+    case cleanupIncomplete
 
     public var errorDescription: String? {
         switch self {
         case .cannotOpen(let detail): return "MY MACHINE could not open its local data store: \(detail)"
         case .statement(let detail): return "MY MACHINE could not prepare a local database operation: \(detail)"
         case .write(let detail): return "MY MACHINE could not save local monitoring data: \(detail)"
+        case .cleanupIncomplete: return "Local history cleanup could not finish. Close tools reading the database and reopen MY MACHINE, or retry Delete All Collected Data if you were deleting history. Separate backups and exports are not removed."
         }
     }
 }
@@ -26,10 +29,19 @@ public actor SQLiteStore {
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     public init(directoryURL: URL? = nil) throws {
-        let selected = directoryURL ?? Self.defaultDirectoryURL()
+        let requested = (directoryURL ?? SQLiteStore.defaultDirectoryURL()).standardizedFileURL
         if directoryURL == nil {
-            try Self.migrateLegacyDirectoryIfNeeded(to: selected)
+            try Self.migrateLegacyDirectoryIfNeeded(to: requested)
         }
+        try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try Self.securePath(requested, directory: true)
+        // SQLite NOFOLLOW also rejects symlinked ancestors. Resolve system aliases
+        // only after verifying that the selected store itself is not a symlink.
+        guard let resolved = realpath(requested.path, nil) else {
+            throw StoreError.cannotOpen("Storage location could not be resolved")
+        }
+        defer { free(resolved) }
+        let selected = URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
         self.directoryURL = selected
         self.databaseURL = selected.appendingPathComponent("DailyMac.sqlite", isDirectory: false)
         self.encoder = JSONEncoder()
@@ -37,9 +49,9 @@ public actor SQLiteStore {
         encoder.dateEncodingStrategy = .millisecondsSince1970
         decoder.dateDecodingStrategy = .millisecondsSince1970
 
-        try FileManager.default.createDirectory(at: selected, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try Self.secureStoreFiles(databaseURL: databaseURL)
         var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW
         guard sqlite3_open_v2(databaseURL.path, &handle, flags, nil) == SQLITE_OK, let handle else {
             let detail = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
             if let handle { sqlite3_close(handle) }
@@ -74,7 +86,7 @@ public actor SQLiteStore {
         }
         db = opened
         try Self.createSchema(opened)
-        Self.secureStoreFiles(databaseURL: databaseURL)
+        try Self.secureStoreFiles(databaseURL: databaseURL)
     }
 
     deinit {
@@ -182,7 +194,7 @@ public actor SQLiteStore {
         sqlite3_bind_double(statement, 1, start.timeIntervalSince1970)
         sqlite3_bind_double(statement, 2, end.timeIntervalSince1970)
         var result: [SystemSample] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             guard let id = UUID(uuidString: text(statement, 0)),
                   let category = WorkCategory(rawValue: text(statement, 5)),
                   let pressure = MemoryPressureLevel(rawValue: text(statement, 12)),
@@ -262,7 +274,7 @@ public actor SQLiteStore {
         sqlite3_bind_double(statement, 1, start.timeIntervalSince1970)
         sqlite3_bind_double(statement, 2, end.timeIntervalSince1970)
         var result: [ProcessSample] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             guard let id = UUID(uuidString: text(statement, 0)) else { continue }
             let parentPID: Int32? = sqlite3_column_type(statement, 6) == SQLITE_NULL ? nil : Int32(sqlite3_column_int(statement, 6))
             let relation = optionalText(statement, 9).flatMap(ProcessOwnerRelation.init(rawValue:))
@@ -302,7 +314,7 @@ public actor SQLiteStore {
         sqlite3_bind_double(statement, 1, interval.start.timeIntervalSince1970)
         sqlite3_bind_double(statement, 2, interval.end.timeIntervalSince1970)
         var result: [AppResourceSample] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             guard let id = UUID(uuidString: text(statement, 0)) else { continue }
             let workerNames: [String]
             if let data = text(statement, 13).data(using: .utf8),
@@ -340,7 +352,7 @@ public actor SQLiteStore {
         sqlite3_bind_double(statement, 1, start.timeIntervalSince1970)
         sqlite3_bind_double(statement, 2, end.timeIntervalSince1970)
         var result: [ActivityEvent] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             if let event = activityEvent(from: statement) { result.append(event) }
         }
         return result
@@ -361,7 +373,7 @@ public actor SQLiteStore {
             """)
             defer { sqlite3_finalize(previous) }
             sqlite3_bind_double(previous, 1, interval.start.timeIntervalSince1970)
-            if sqlite3_step(previous) == SQLITE_ROW,
+            if try nextRow(previous),
                let event = activityEvent(from: previous) {
                 result.append(event)
             }
@@ -376,7 +388,7 @@ public actor SQLiteStore {
         defer { sqlite3_finalize(window) }
         sqlite3_bind_double(window, 1, interval.start.timeIntervalSince1970)
         sqlite3_bind_double(window, 2, interval.end.timeIntervalSince1970)
-        while sqlite3_step(window) == SQLITE_ROW {
+        while try nextRow(window) {
             if let event = activityEvent(from: window) { result.append(event) }
         }
 
@@ -387,7 +399,7 @@ public actor SQLiteStore {
         let statement = try prepare("SELECT report_json FROM daily_reports WHERE day_key = ? LIMIT 1;")
         defer { sqlite3_finalize(statement) }
         bind(dayKey, to: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW,
+        guard try nextRow(statement),
               let data = text(statement, 0).data(using: .utf8) else { return nil }
         return try decoder.decode(DailyReport.self, from: data)
     }
@@ -397,9 +409,11 @@ public actor SQLiteStore {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int(statement, 1, Int32(max(1, limit)))
         var result: [DailyReport] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let data = text(statement, 0).data(using: .utf8),
-                  let report = try? decoder.decode(DailyReport.self, from: data) else { continue }
+        while try nextRow(statement) {
+            guard let data = text(statement, 0).data(using: .utf8) else {
+                throw StoreError.statement("A retained report could not be read safely")
+            }
+            let report = try decoder.decode(DailyReport.self, from: data)
             result.append(report)
         }
         return result
@@ -408,7 +422,7 @@ public actor SQLiteStore {
     public func latestSample() throws -> SystemSample? {
         let statement = try prepare("SELECT timestamp FROM system_samples ORDER BY timestamp DESC LIMIT 1;")
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        guard try nextRow(statement) else { return nil }
         let date = Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
         return try samples(from: date.addingTimeInterval(-0.001), to: date.addingTimeInterval(0.001)).first
     }
@@ -425,7 +439,7 @@ public actor SQLiteStore {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int(statement, 1, Int32(max(1, limit)))
         var result: [ProcessImpact] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             let timestamp = Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
             let pid = Int32(sqlite3_column_int(statement, 1))
             let name = text(statement, 2)
@@ -446,7 +460,7 @@ public actor SQLiteStore {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, end.timeIntervalSince1970)
         var result: [Date] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             result.append(Date(timeIntervalSince1970: sqlite3_column_double(statement, 0)))
         }
         return result
@@ -455,10 +469,11 @@ public actor SQLiteStore {
     public func loadSettings() throws -> MonitoringSettings {
         let statement = try prepare("SELECT value FROM metadata WHERE key = 'settings' LIMIT 1;")
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW,
-              let data = text(statement, 0).data(using: .utf8),
-              let settings = try? decoder.decode(MonitoringSettings.self, from: data) else { return .default }
-        return settings
+        guard try nextRow(statement) else { return .default }
+        guard let data = text(statement, 0).data(using: .utf8) else {
+            throw StoreError.statement("Settings could not be read safely")
+        }
+        return try decoder.decode(MonitoringSettings.self, from: data)
     }
 
     public func saveSettings(_ settings: MonitoringSettings) throws {
@@ -478,9 +493,11 @@ public actor SQLiteStore {
     }
 
     public func performRetention(settings: MonitoringSettings, now: Date = Date()) throws {
-        let rawCutoff = now.addingTimeInterval(-Double(max(1, settings.rawRetentionDays)) * 86_400)
+        let rawDays = min(max(1, settings.rawRetentionDays), settings.effectiveNamedHistoryRetentionDays)
+        let rawCutoff = now.addingTimeInterval(-Double(rawDays) * 86_400)
         let eventCutoff = now.addingTimeInterval(-Double(max(1, settings.eventRetentionDays)) * 86_400)
         let reportCutoff = now.addingTimeInterval(-Double(max(1, settings.reportRetentionDays)) * 86_400)
+        let namedCutoff = now.addingTimeInterval(-Double(settings.effectiveNamedHistoryRetentionDays) * 86_400)
         try transaction {
             try execute("DELETE FROM app_resource_samples WHERE timestamp < \(rawCutoff.timeIntervalSince1970);")
             try execute("DELETE FROM process_samples WHERE timestamp < \(rawCutoff.timeIntervalSince1970);")
@@ -488,9 +505,31 @@ public actor SQLiteStore {
             try execute("DELETE FROM events WHERE timestamp < \(rawCutoff.timeIntervalSince1970) AND type IN ('appLaunched','appQuit','foregroundChanged');")
             try execute("DELETE FROM events WHERE timestamp < \(eventCutoff.timeIntervalSince1970);")
             try execute("DELETE FROM daily_reports WHERE generated_at < \(reportCutoff.timeIntervalSince1970);")
+            // Older performance events may also contain foreground names in prose.
+            let events = try prepare("UPDATE events SET title = ?, explanation = ? WHERE timestamp < ?;")
+            defer { sqlite3_finalize(events) }
+            bind("Historical machine event", to: 1, in: events)
+            bind("Original details expired under your named-history retention settings.", to: 2, in: events)
+            sqlite3_bind_double(events, 3, namedCutoff.timeIntervalSince1970)
+            guard sqlite3_step(events) == SQLITE_DONE else { throw StoreError.write(lastError()) }
+            // Reports can embed names in prose, not only in the applications array.
+            let statement = try prepare("SELECT report_json FROM daily_reports WHERE day_key < ?;")
+            defer { sqlite3_finalize(statement) }
+            bind(DayBoundaries.key(for: namedCutoff), to: 1, in: statement)
+            var expired: [DailyReport] = []
+            while try nextRow(statement) {
+                guard let data = text(statement, 0).data(using: .utf8) else {
+                    throw StoreError.statement("A retained report could not be read safely")
+                }
+                let report = try decoder.decode(DailyReport.self, from: data)
+                if report.applicationDetailsRemoved != true { expired.append(report) }
+            }
+            for report in expired {
+                try save(report: ReportPrivacy.removingApplicationDetails(from: report))
+            }
         }
         try removeRecoveryArchives(olderThan: rawCutoff)
-        try execute("PRAGMA wal_checkpoint(PASSIVE);")
+        try truncateJournal()
     }
 
     public func eraseAllData() throws {
@@ -506,11 +545,29 @@ public actor SQLiteStore {
         // store. An explicit erase must cover them as well.
         try removeRecoveryArchives(olderThan: nil)
 
-        // The logical deletion above is authoritative. Compaction only
-        // reclaims space and must not turn a completed erase into a stopped
-        // monitoring session if SQLite cannot compact at that moment.
-        try? execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        try? execute("VACUUM;")
+        do {
+            try truncateJournal()
+            try execute("VACUUM;")
+            // VACUUM itself writes to the WAL: verify cleanup after it as well.
+            try truncateJournal()
+        } catch {
+            throw StoreError.cleanupIncomplete
+        }
+    }
+
+    private func truncateJournal() throws {
+        guard let db else { throw StoreError.cleanupIncomplete }
+        let result = sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
+        guard result == SQLITE_OK else { throw StoreError.cleanupIncomplete }
+    }
+
+    /// Never turn a read failure into an empty or partial history.
+    private func nextRow(_ statement: OpaquePointer) throws -> Bool {
+        switch sqlite3_step(statement) {
+        case SQLITE_ROW: return true
+        case SQLITE_DONE: return false
+        default: throw StoreError.statement(lastError())
+        }
     }
 
     private func removeRecoveryArchives(olderThan cutoff: Date?) throws {
@@ -921,9 +978,40 @@ public actor SQLiteStore {
         }
     }
 
-    private static func secureStoreFiles(databaseURL: URL) {
+    private static func secureStoreFiles(databaseURL: URL) throws {
         for url in [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal"), URL(fileURLWithPath: databaseURL.path + "-shm")] where FileManager.default.fileExists(atPath: url.path) {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try securePath(url, directory: false)
+        }
+    }
+
+    private static func securePath(_ url: URL, directory: Bool) throws {
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw StoreError.cannotOpen("Storage must not be a symbolic link and must be accessible") }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_uid == geteuid(),
+              (info.st_mode & S_IFMT) == (directory ? S_IFDIR : S_IFREG),
+              directory || info.st_nlink == 1 else {
+            throw StoreError.cannotOpen("Storage must be owned by the current user and use ordinary private files")
+        }
+        let mode: mode_t = directory ? 0o700 : 0o600
+        guard fchmod(descriptor, mode) == 0 else { throw StoreError.cannotOpen("Owner-only storage permissions could not be applied") }
+        // Mode bits alone do not override extended ACL grants. Keep restrictive
+        // ACLs, but refuse unexpected grants rather than silently changing them.
+        guard let acl = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED) else {
+            // Darwin returns ENOENT when this open file has no extended ACL.
+            if errno == ENOENT { return }
+            throw StoreError.cannotOpen("Storage access rules could not be verified")
+        }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        var entry: acl_entry_t?
+        var entryID = ACL_FIRST_ENTRY
+        while acl_get_entry(acl, entryID.rawValue, &entry) == 0 {
+            var tag = ACL_UNDEFINED_TAG
+            guard let entry, acl_get_tag_type(entry, &tag) == 0, tag != ACL_EXTENDED_ALLOW else {
+                throw StoreError.cannotOpen("Storage has an unexpected extended access grant")
+            }
+            entryID = ACL_NEXT_ENTRY
         }
     }
 }

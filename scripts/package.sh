@@ -5,12 +5,27 @@ PROJECT_DIR="${0:A:h:h}"
 OUTPUT_DIR="$PROJECT_DIR/outputs"
 APP_DIR="$OUTPUT_DIR/MY MACHINE.app"
 CONTENTS_DIR="$APP_DIR/Contents"
-SOURCE_STAGE="$(mktemp -d)"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PROJECT_DIR/Resources/Info.plist")"
 APP_ARCHIVE="$OUTPUT_DIR/MY-MACHINE-$VERSION.zip"
 SOURCE_ARCHIVE="$OUTPUT_DIR/MY-MACHINE-Source-$VERSION.zip"
 CHECKSUM_FILE="$OUTPUT_DIR/SHA256SUMS-$VERSION.txt"
+SIGNING_IDENTITY="${MY_MACHINE_SIGNING_IDENTITY:-}"
+NOTARY_PROFILE="${MY_MACHINE_NOTARY_PROFILE:-}"
 
+if [[ "${MY_MACHINE_REQUIRE_NOTARIZATION:-0}" == "1" && ( -z "$SIGNING_IDENTITY" || -z "$NOTARY_PROFILE" ) ]]; then
+  echo "A distribution build requires Developer ID signing and a Keychain notary profile." >&2
+  exit 1
+fi
+if [[ -n "$SIGNING_IDENTITY" && "$SIGNING_IDENTITY" != "Developer ID Application:"* ]]; then
+  echo "Use a Developer ID Application identity for distribution." >&2
+  exit 1
+fi
+if [[ -n "$NOTARY_PROFILE" && -z "$SIGNING_IDENTITY" ]]; then
+  echo "Notarization requires a Developer ID Application identity." >&2
+  exit 1
+fi
+
+SOURCE_STAGE="$(mktemp -d)"
 cleanup() {
   /bin/rm -rf "$SOURCE_STAGE"
 }
@@ -30,11 +45,25 @@ swift build -c release --product DailyMac
 /bin/chmod 755 "$CONTENTS_DIR/MacOS/DailyMac"
 /usr/bin/strip -S -x "$CONTENTS_DIR/MacOS/DailyMac"
 
-/usr/bin/codesign --force --deep --options runtime --timestamp=none --entitlements "Resources/DailyMac.entitlements" --sign - "$APP_DIR"
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+  /usr/bin/codesign --force --options runtime --timestamp --entitlements "Resources/DailyMac.entitlements" --sign "$SIGNING_IDENTITY" "$APP_DIR"
+else
+  echo "Development build only: ad-hoc signed, not notarized." >&2
+  /usr/bin/codesign --force --options runtime --timestamp=none --entitlements "Resources/DailyMac.entitlements" --sign - "$APP_DIR"
+fi
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 /bin/rm -f "$APP_ARCHIVE"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$APP_ARCHIVE"
+
+if [[ -n "$NOTARY_PROFILE" ]]; then
+  xcrun notarytool submit "$APP_ARCHIVE" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP_DIR"
+  xcrun stapler validate "$APP_DIR"
+  /usr/sbin/spctl --assess --type execute "$APP_DIR"
+  /bin/rm -f "$APP_ARCHIVE"
+  /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$APP_ARCHIVE"
+fi
 
 /bin/mkdir -p "$SOURCE_STAGE/MY-MACHINE-Source"
 /usr/bin/rsync -a \

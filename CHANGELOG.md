@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — privacy and security foundation
+
+- Require explicit consent before collection, including upgrades without saved consent; default new login and notification choices off.
+- Default diagnosis to application aliases and preserve the explicit copy-only handoff.
+- Expire named reports after 30 days, remove original event/report prose and keep aggregate trends for one year; expose retention controls.
+- Escape dynamic Markdown fields, verify SQLite journal cleanup, reject unsafe store paths/access grants and propagate database read errors.
+- Keep all sampler calls out of non-live validation and add privacy regression checks.
+- Separate draft uploads from build credentials and prepare optional Developer ID signing/notarization. Ad-hoc artifacts remain development-only.
+
+
 All notable user-visible changes are recorded here.
 
 ## [Unreleased]
