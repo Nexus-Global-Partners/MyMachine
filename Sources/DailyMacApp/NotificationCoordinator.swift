@@ -16,10 +16,14 @@ final class AppRoute: ObservableObject {
 
     @Published private(set) var monitoringRequestGeneration = 0
     private var pendingMonitoringRequest = false
+    private(set) var destination: SidebarDestination = .monitoring
 
     private init() {}
 
-    func requestMonitoring() {
+    func requestMonitoring() { request(.monitoring) }
+
+    func request(_ destination: SidebarDestination) {
+        self.destination = destination
         pendingMonitoringRequest = true
         monitoringRequestGeneration &+= 1
     }

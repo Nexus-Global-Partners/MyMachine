@@ -39,6 +39,59 @@ struct DailyMacValidation {
         print("MY MACHINE validation starting")
         let harness = ValidationHarness()
 
+        await harness.run("notch hover dwell rejects quick crossings") {
+            var state = NotchInteraction()
+            state.pointer(at: 0, inActivation: true, inSurface: false)
+            state.pointer(at: 0.2, inActivation: false, inSurface: false)
+            state.pointer(at: 1, inActivation: true, inSurface: false)
+            try harness.check(state.phase == .hidden, "crossing accumulated hover time")
+            state.pointer(at: 1.31, inActivation: true, inSurface: false)
+            try harness.check(state.phase == .preview, "deliberate hover did not reveal preview")
+        }
+
+        await harness.run("notch preview crossing and exit grace") {
+            var state = NotchInteraction()
+            state.pointer(at: 0, inActivation: true, inSurface: false)
+            state.pointer(at: 0.31, inActivation: true, inSurface: false)
+            state.pointer(at: 0.4, inActivation: false, inSurface: true)
+            state.pointer(at: 0.5, inActivation: false, inSurface: false)
+            state.pointer(at: 0.65, inActivation: false, inSurface: true)
+            try harness.check(state.phase == .preview, "preview flickered during pointer crossing")
+            state.pointer(at: 1, inActivation: false, inSurface: false)
+            state.pointer(at: 1.21, inActivation: false, inSurface: false)
+            try harness.check(state.phase == .hidden, "preview did not retract after exit")
+        }
+
+        await harness.run("notch click persists and dismissal requires re-entry") {
+            var state = NotchInteraction()
+            state.expand()
+            state.pointer(at: 1, inActivation: false, inSurface: false)
+            try harness.check(state.phase == .expanded, "clicked dashboard closed on pointer exit")
+            state.dismiss()
+            state.pointer(at: 2, inActivation: true, inSurface: false)
+            state.pointer(at: 3, inActivation: true, inSurface: false)
+            try harness.check(state.phase == .hidden, "dismissal immediately reopened")
+            state.pointer(at: 4, inActivation: false, inSurface: false)
+            state.pointer(at: 5, inActivation: true, inSurface: false)
+            state.pointer(at: 5.31, inActivation: true, inSurface: false)
+            try harness.check(state.phase == .preview, "re-entry did not restore hover")
+        }
+
+        await harness.run("notch geometry respects housing and secondary display bounds") {
+            let screen = CGRect(x: -1512, y: 200, width: 1512, height: 982)
+            let visible = CGRect(x: -1512, y: 240, width: 1512, height: 910)
+            let target = NotchGeometry.activation(screen: screen, topInset: 32,
+                left: CGRect(x: -1512, y: 1150, width: 650, height: 32),
+                right: CGRect(x: -650, y: 1150, width: 650, height: 32))
+            try harness.check(target == CGRect(x: -862, y: 1150, width: 212, height: 32), "activation overlaps menu areas")
+            let panel = NotchGeometry.panel(screen: screen, visible: visible, activation: target, size: CGSize(width: 460, height: 440))
+            try harness.check(visible.contains(panel) && panel.maxY == 1150, "panel covers housing or escapes screen")
+            try harness.check(NotchGeometry.activation(screen: screen, topInset: 0, left: nil, right: nil) == nil, "invented notch on external display")
+            let tiny = CGRect(x: 10, y: 20, width: 320, height: 240)
+            let fallback = NotchGeometry.panel(screen: tiny, visible: tiny, activation: nil, size: CGSize(width: 460, height: 440))
+            try harness.check(tiny.contains(fallback), "fallback overflows small display")
+        }
+
         await harness.run("DST and local-day boundaries") {
             let timezone = try require(TimeZone(identifier: "America/Los_Angeles"), "timezone unavailable")
             let spring = try require(DayBoundaries.interval(for: "2026-03-08", timezone: timezone), "spring interval unavailable")

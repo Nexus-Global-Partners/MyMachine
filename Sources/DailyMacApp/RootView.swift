@@ -76,8 +76,9 @@ struct RootView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .onAppear { selection = route.destination }
         .onChange(of: route.monitoringRequestGeneration) {
-            selection = .monitoring
+            selection = route.destination
         }
     }
 

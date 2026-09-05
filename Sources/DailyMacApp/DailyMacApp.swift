@@ -21,6 +21,9 @@ struct DailyMacApp: App {
         .commands {
             CommandGroup(replacing: .newItem) { }
             CommandMenu("Monitoring") {
+                Button("Toggle Quick Dashboard") { NotchPanelController.shared.toggle() }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                Divider()
                 Button("Open Monitoring") { AppRoute.shared.requestMonitoring() }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Divider()
@@ -53,7 +56,10 @@ struct DailyMacMenuBarLabel: View {
     var body: some View {
         Image(nsImage: MyMachineVisualIdentity.menuBarIcon)
             .accessibilityLabel("MY MACHINE — \(model.collectionState.label)")
-            .task { openPendingRoute() }
+            .task {
+                NotchPanelController.shared.attach(model: model)
+                openPendingRoute()
+            }
             .onChange(of: route.monitoringRequestGeneration) {
                 openPendingRoute()
             }

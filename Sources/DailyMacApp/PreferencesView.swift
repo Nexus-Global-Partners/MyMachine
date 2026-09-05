@@ -4,6 +4,7 @@ import SwiftUI
 struct PreferencesView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(NotchPanelController.hoverKey) private var notchHoverEnabled = true
     @State private var confirmErase = false
 
     var body: some View {
@@ -20,6 +21,17 @@ struct PreferencesView: View {
                     Text("System follows your Mac. Light and Dark apply consistently to the menu and main window.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Quick dashboard") {
+                    Toggle("Reveal a preview when hovering over the notch", isOn: $notchHoverEnabled)
+                    Text("Rest the pointer over the camera notch, then click the preview to expand. Escape or a click outside closes it. Opening the dashboard never starts monitoring.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("On displays without a notch, use Open Quick Dashboard in the menu-bar options. Shift–Command–D toggles it while MY MACHINE has keyboard focus. Hover is suspended when the menu bar is hidden or in full-screen presentation.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Open Quick Dashboard") { NotchPanelController.shared.toggle() }
+                    Text("The preview uses only machine-level status. Pointer positions are used transiently to reveal and dismiss it; they are never recorded or sent.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 Section("Monitoring") {

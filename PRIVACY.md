@@ -47,3 +47,7 @@ The SQLite database is not application-encrypted yet. Owner-only file permission
 Delete All Collected Data removes active history and recovery archives and verifies SQLite journal truncation, including after compaction. If another reader blocks cleanup, the app reports incomplete cleanup and allows another deletion attempt. This is not a promise to erase existing backups, APFS snapshots, exported reports, clipboard-manager copies or data already shared with another service. Monitoring can collect new data after a successful deletion. Preferences remain.
 
 Exports contain personal data and may be saved into a shared or synchronized folder chosen by you. Report text is escaped as literal Markdown; app names cannot introduce active Markdown links or images. Diagnosis copies stay on the current Mac, but a local clipboard manager can retain them beyond the app's cleanup timer.
+
+## Quick dashboard interaction
+
+On a notched display, optional hover access uses transient mouse position and mouse-down events to reveal or dismiss the dashboard. These are used for interface hit testing only: coordinates and events are not logged, stored, added to analytics, or sent. No global keyboard events or camera content are accessed. Disable hover in Settings to stop this observation while the dashboard is closed. On displays without a notch, observation is limited to an explicitly opened dashboard. Opening the dashboard never starts or resumes monitoring. Its preview shows machine-level status, without application names.

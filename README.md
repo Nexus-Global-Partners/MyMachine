@@ -69,3 +69,7 @@ The battery subtitle reports the observed time required to lose the latest ten p
 The next build adds explicit collection consent, 30-day named-history retention with one-year aggregate trends, hidden diagnosis names by default, literal Markdown exports, verified journal cleanup and non-live validation isolation. Existing releases linked above predate these changes.
 
 A current Swift 6 toolchain and macOS 15 SDK are required for the full application. The default packaging path creates an **ad-hoc development build**, not a notarized public release. No Apple Developer membership or signing material is included in this repository. See SECURITY.md for signing setup and the remaining hardening work before distribution.
+
+## Quick dashboard (development branch)
+
+Hover over a MacBook camera notch to reveal a small preview, then click to expand your machine dashboard. Escape or clicking outside closes it. Access is also available through **Open Quick Dashboard** in the menu-bar options, including displays without a notch. Disable hover in Settings. The dashboard preserves explicit collection consent and pause state. See [interaction behavior and release checks](docs/NOTCH-DASHBOARD.md). This branch builds on the security/privacy foundation in PR #1 and has not been released or installed.
