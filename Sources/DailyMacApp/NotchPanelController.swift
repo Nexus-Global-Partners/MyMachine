@@ -69,7 +69,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
     }
 
     private func updateMonitoring() {
-        if !hoverEnabled && interaction.phase != .expanded { dismissImmediately() }
+        if !hoverEnabled && interaction.phase != .expanded { dismissImmediately(refreshObservation: false) }
         let needed = !suspended && ((hoverEnabled && NSScreen.screens.contains { activation(on: $0) != nil }) || interaction.phase == .expanded)
         if !needed {
             if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
@@ -147,12 +147,13 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         updateMonitoring()
     }
 
-    private func dismissImmediately() {
+    private func dismissImmediately(refreshObservation: Bool = true) {
         deadline?.cancel(); deadline = nil
         interaction.dismiss()
         displayedPhase = .hidden
         animationGeneration += 1
         panel?.orderOut(nil)
+        if refreshObservation { updateMonitoring() }
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -188,6 +189,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             window = DashboardPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             window.isOpaque = false
             window.backgroundColor = .clear
+            window.appearance = NSAppearance(named: .darkAqua)
             window.hasShadow = true
             window.level = .statusBar
             window.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
@@ -207,7 +209,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
                                           self?.dismissImmediately()
                                           AppRoute.shared.request(destination)
                                       })
-        window.contentView = NSHostingView(rootView: view)
+        window.contentView = DashboardHostingView(rootView: view)
         let destination = NotchGeometry.panel(screen: screen.frame, visible: screen.visibleFrame,
                                              activation: activation(on: screen),
                                              size: expanded ? CGSize(width: 460, height: 440) : CGSize(width: 280, height: 64))
@@ -234,4 +236,8 @@ private final class DashboardPanel: NSPanel {
     override var canBecomeKey: Bool { acceptsFocus }
     override var canBecomeMain: Bool { false }
     override func cancelOperation(_ sender: Any?) { onDismiss?() }
+}
+
+private final class DashboardHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

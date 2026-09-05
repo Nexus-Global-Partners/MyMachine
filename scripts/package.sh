@@ -85,6 +85,7 @@ fi
   "$PROJECT_DIR/Sources" \
   "$PROJECT_DIR/Resources" \
   "$PROJECT_DIR/scripts" \
+  "$PROJECT_DIR/docs" \
   "$SOURCE_STAGE/MY-MACHINE-Source/"
 /bin/rm -f "$SOURCE_ARCHIVE"
 /usr/bin/ditto --norsrc -c -k --keepParent "$SOURCE_STAGE/MY-MACHINE-Source" "$SOURCE_ARCHIVE"
