@@ -1,4 +1,4 @@
-name: Refresh draft release assets
+name: Refresh development draft assets
 
 on:
   workflow_dispatch:
@@ -9,20 +9,24 @@ on:
         default: v1.2.0
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  package-and-upload:
+  build:
     runs-on: macos-15
     timeout-minutes: 25
+    outputs:
+      source_commit: ${{ steps.source.outputs.commit }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.release_tag }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Verify immutable release source and metadata
+      - name: Verify release source and metadata
+        id: source
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -33,6 +37,7 @@ jobs:
           head_commit=$(git rev-parse HEAD)
           tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
           test "$head_commit" = "$tag_commit"
+          echo "commit=$head_commit" >> "$GITHUB_OUTPUT"
           test "$(gh release view "$RELEASE_TAG" --json isDraft -q '.isDraft')" = "true"
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           test "$RELEASE_TAG" = "v$version"
@@ -71,20 +76,46 @@ jobs:
           printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/SECURITY.md'
           printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/Sources/'
 
-      - name: Replace draft release assets
+      - name: Store inspected development artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: development-draft-${{ github.run_id }}
+          path: |
+            outputs/MY-MACHINE-*.zip
+            outputs/SHA256SUMS-*.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  upload-draft:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      # No repository checkout or project code executes with the write token.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: development-draft-${{ github.run_id }}
+          path: artifacts
+      - name: Replace development draft assets only
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
         run: |
           set -euo pipefail
-          git fetch --force --no-tags origin "refs/tags/$RELEASE_TAG"
-          test "$(git rev-list -n 1 FETCH_HEAD)" = "$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
-          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
-          gh release view "$RELEASE_TAG" --json isDraft -q '.isDraft' | grep -qx true
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          resolved=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq '.sha')
+          test "$resolved" = "$SOURCE_COMMIT"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft -q '.isDraft')" = "true"
+          version=${RELEASE_TAG#v}
+          cd artifacts
+          shasum -a 256 -c "SHA256SUMS-$version.txt"
           gh release upload "$RELEASE_TAG" \
-            "outputs/MY-MACHINE-$version.zip" \
-            "outputs/MY-MACHINE-Source-$version.zip" \
-            "outputs/SHA256SUMS-$version.txt" \
+            "MY-MACHINE-$version.zip" \
+            "MY-MACHINE-Source-$version.zip" \
+            "SHA256SUMS-$version.txt" \
             --clobber

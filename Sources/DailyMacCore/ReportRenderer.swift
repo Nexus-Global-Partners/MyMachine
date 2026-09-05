@@ -3,15 +3,15 @@ import Foundation
 public enum ReportRenderer {
     public static func markdown(_ report: DailyReport) -> String {
         var lines: [String] = [
-            "# MY MACHINE — \(report.dayKey)",
+            "# MY MACHINE — \(escape(report.dayKey))",
             "",
             "_Generated locally at \(report.generatedAt.formatted(date: .abbreviated, time: .shortened))._",
             "",
             "## In brief",
             "",
-            "**\(report.headline)**",
+            "**\(escape(report.headline))**",
             "",
-            report.overview,
+            escape(report.overview),
             "",
             "Coverage: \(Formatters.duration(report.activeDuration + report.idleDuration)); longest uninterrupted stretch: \(Formatters.duration(report.longestContinuousCoverage ?? 0)); active app use: \(Formatters.duration(report.activeDuration)); idle time excluded: \(Formatters.duration(report.idleDuration))."
         ]
@@ -26,7 +26,7 @@ public enum ReportRenderer {
                 "## Method and limitations",
                 ""
             ]
-            for limitation in report.limitations { lines.append("- \(limitation)") }
+            for limitation in report.limitations { lines.append("- \(escape(limitation))") }
             lines.append("")
             lines.append(privacyFooter)
             return lines.joined(separator: "\n")
@@ -34,7 +34,7 @@ public enum ReportRenderer {
 
         lines += ["", "## How the Mac was used", ""]
         for app in report.applications.prefix(5) {
-            lines.append("- **\(escape(app.name))** — \(app.interpretation)")
+            lines.append("- **\(escape(app.name))** — \(escape(app.interpretation))")
         }
         lines += ["", "## How the machine behaved", ""]
         lines.append("- CPU averaged \(Formatters.percent(report.averageCPU)) and peaked at \(Formatters.percent(report.peakCPU)). \(PracticalInterpreter.cpu(report.averageCPU))")
@@ -50,20 +50,20 @@ public enum ReportRenderer {
         }
         lines += ["", "## Important moments", ""]
         if report.importantMoments.isEmpty { lines.append("No disruptive performance event stood out in the recorded periods.") }
-        for insight in report.importantMoments { lines.append("- **\(insight.title)** — \(insight.explanation)") }
+        for insight in report.importantMoments { lines.append("- **\(escape(insight.title))** — \(escape(insight.explanation))") }
         lines += ["", "## Work × machine patterns", ""]
-        for insight in report.correlations { lines.append("- **\(insight.title)** — \(insight.explanation)") }
+        for insight in report.correlations { lines.append("- **\(escape(insight.title))** — \(escape(insight.explanation))") }
         lines += ["", "## What I would change tomorrow", ""]
         if report.recommendations.isEmpty {
             lines.append("No data-backed change is justified today. Keep working normally while MY MACHINE builds a stronger baseline.")
         } else {
             for insight in report.recommendations {
-                lines.append("- **\(insight.title)** — \(insight.explanation)")
-                if let evidence = insight.evidence { lines.append("  - Evidence: \(evidence)") }
+                lines.append("- **\(escape(insight.title))** — \(escape(insight.explanation))")
+                if let evidence = insight.evidence { lines.append("  - Evidence: \(escape(evidence))") }
             }
         }
         lines += ["", "## Method and limitations", ""]
-        for limitation in report.limitations { lines.append("- \(limitation)") }
+        for limitation in report.limitations { lines.append("- \(escape(limitation))") }
         lines.append("")
         lines.append(privacyFooter)
         return lines.joined(separator: "\n")
@@ -72,6 +72,22 @@ public enum ReportRenderer {
     private static let privacyFooter = "MY MACHINE stores this report and its telemetry locally. It does not capture keystrokes or what you type; only interval input totals are used for hands-on intensity. It never captures pointer coordinates or targets, screen contents, window titles, URLs, document contents, clipboard data, message contents, paths, or network destinations."
 
     private static func escape(_ value: String) -> String {
-        value.replacingOccurrences(of: "*", with: "\\*")
+        // Every persisted string is data, including prose containing app names.
+        // Escape CommonMark ASCII punctuation and flatten control/line characters
+        // before adding trusted report formatting. Also neutralizes HTML/autolinks.
+        let controls = CharacterSet.controlCharacters.union(.newlines)
+        let bidi = CharacterSet(charactersIn: "\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}")
+        var result = ""
+        for scalar in value.unicodeScalars {
+            if bidi.contains(scalar) { continue }
+            if controls.contains(scalar) { result.append(" "); continue }
+            let code = scalar.value
+            if (33...47).contains(code) || (58...64).contains(code) ||
+                (91...96).contains(code) || (123...126).contains(code) {
+                result.append("\\")
+            }
+            result.unicodeScalars.append(scalar)
+        }
+        return result
     }
 }

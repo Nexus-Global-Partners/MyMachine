@@ -731,6 +731,7 @@ public struct DailyReport: Identifiable, Codable, Equatable, Sendable {
     public let limitations: [String]
     public let sampleCount: Int
     public let longestContinuousCoverage: TimeInterval?
+    public var applicationDetailsRemoved: Bool? = nil
 }
 
 public struct ProcessImpact: Identifiable, Codable, Equatable, Sendable {
@@ -825,6 +826,13 @@ public struct MonitoringSettings: Codable, Equatable, Sendable {
     /// to decode without a migration.
     public var diagnosisDestination: DiagnosisDestination?
     public var diagnosisIncludeApplicationNames: Bool?
+    /// Missing values in older stores adopt the privacy-preserving policy.
+    public var namedHistoryRetentionDays: Int? = nil
+    public var collectionConsentGranted: Bool? = nil
+
+    public var includesDiagnosisApplicationNames: Bool { diagnosisIncludeApplicationNames == true }
+    public var effectiveNamedHistoryRetentionDays: Int { min(90, max(1, namedHistoryRetentionDays ?? 30)) }
+    public var hasCollectionConsent: Bool { collectionConsentGranted == true }
 
     public static let `default` = MonitoringSettings(
         baseSamplingInterval: 15,
@@ -833,12 +841,12 @@ public struct MonitoringSettings: Codable, Equatable, Sendable {
         eventRetentionDays: 90,
         reportRetentionDays: 365,
         processLimit: 16,
-        isPaused: false,
+        isPaused: true,
         pauseUntil: nil,
-        launchAtLoginPreference: nil,
-        briefingNotificationsEnabled: nil,
+        launchAtLoginPreference: false,
+        briefingNotificationsEnabled: false,
         diagnosisDestination: .copyOnly,
-        diagnosisIncludeApplicationNames: true
+        diagnosisIncludeApplicationNames: false
     )
 }
 
