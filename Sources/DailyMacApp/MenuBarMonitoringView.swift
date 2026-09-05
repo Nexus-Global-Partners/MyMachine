@@ -153,6 +153,10 @@ struct MenuBarMonitoringView: View {
                 Button("Pause Until I Resume") { model.pauseIndefinitely() }
             }
             Divider()
+            Button("Open Quick Dashboard") { NotchPanelController.shared.toggle() }
+            Button("Open Full Dashboard") { AppRoute.shared.requestMonitoring() }
+            Button("Settings") { AppRoute.shared.request(.settings) }
+            Divider()
             Menu("Appearance") {
                 ForEach(AppAppearance.allCases) { option in
                     Button {

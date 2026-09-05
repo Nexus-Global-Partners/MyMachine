@@ -110,7 +110,8 @@ Default retention:
 
 - Detailed samples and exact app events: 3 days
 - Notable aggregate events: 90 days
-- Compact daily reports: 365 days
+- Named daily reports: 30 days; older reports lose application details and original narrative
+- Aggregate daily reports: 365 days
 
 GPU data is optional and driver-dependent. Process coverage is best effort. Memory footprint may include shared pages. Disk counters never identify files. Network totals never identify destinations.
 
@@ -123,7 +124,7 @@ Diagnosis handoff is intentionally not an integration layer. `AppModel` queries 
 These are the most useful next engineering tasks, in priority order:
 
 1. Move the deterministic validation executable into XCTest over time for richer CI diagnostics; keep the live hardware check as a separate local smoke test.
-2. Decide whether distribution builds should be universal, Developer ID signed, and notarized.
+2. Obtain Apple Developer Program membership, provision a Developer ID identity and Keychain notary profile, then validate the optional signed packaging path. Decide separately whether builds should be universal.
 3. Run a full overnight sleep/wake, login, notification, and resource-endurance cycle on hardware.
 
 ## Repository hygiene
@@ -131,3 +132,9 @@ These are the most useful next engineering tasks, in priority order:
 Never commit `.build/`, `work/`, `outputs/`, SQLite/WAL/SHM files, app backups, QA captures, or local telemetry. The original development workspace contained private app history and identifiable screenshots in `work/`; those artifacts are intentionally absent from GitHub and the handoff ZIP.
 
 Before publishing a release, verify the repository is clean, run both validation configurations, create the immutable release tag, package from that tagged commit, and attach the app ZIP, source ZIP, and generated SHA-256 file to the GitHub release. The manual release-assets workflow checks out that exact tag, verifies the draft and release metadata, repeats the source-boundary audit, and can replace those three assets without publishing the draft.
+
+## Privacy foundation changes
+
+Start collection only after explicit consent; older installations without that choice must confirm it. New login and notification choices default off. The settings model centralizes diagnosis-name and named-retention defaults. `ReportPrivacy` removes all name-bearing prose, and retention also minimizes old event descriptions. Store reads throw on SQLite errors, and deletion verifies WAL truncation after compaction.
+
+Release builds are still development-only until signed/notarized with real credentials. The draft-assets workflow now uses a separate upload job without a source checkout; configure the protected `release` environment. See SECURITY.md for remaining encryption, sandbox and runtime verification work. These are not enabled simply by this source hardening pass.

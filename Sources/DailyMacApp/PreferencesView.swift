@@ -4,6 +4,7 @@ import SwiftUI
 struct PreferencesView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(NotchPanelController.hoverKey) private var notchHoverEnabled = true
     @State private var confirmErase = false
 
     var body: some View {
@@ -22,9 +23,20 @@ struct PreferencesView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Quick dashboard") {
+                    Toggle("Reveal a preview when hovering over the notch", isOn: $notchHoverEnabled)
+                    Text("Rest the pointer over the camera notch, then click the preview to expand. Escape or a click outside closes it. Opening the dashboard never starts monitoring.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("On displays without a notch, use Open Quick Dashboard in the menu-bar options. Shift–Command–D toggles it while MY MACHINE has keyboard focus. Hover is suspended when the menu bar is hidden or in full-screen presentation.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Open Quick Dashboard") { NotchPanelController.shared.toggle() }
+                    Text("The preview uses only machine-level status. Pointer positions are used transiently to reveal and dismiss it; they are never recorded or sent.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Section("Monitoring") {
                     Toggle("Collect activity and performance locally", isOn: Binding(
-                        get: { model.collectionState != .paused },
+                        get: { model.settings.hasCollectionConsent && !model.settings.isPaused && model.settings.pauseUntil == nil },
                         set: { $0 ? model.startMonitoring() : model.pauseIndefinitely() }
                     ))
                     Text(model.collectionState.detail)
@@ -62,7 +74,7 @@ struct PreferencesView: View {
 
                 Section("Proactive briefings") {
                     Toggle("Tell me when a private briefing is ready", isOn: Binding(
-                        get: { model.settings.briefingNotificationsEnabled != false },
+                        get: { model.settings.briefingNotificationsEnabled == true },
                         set: { model.setBriefingNotifications($0) }
                     ))
                     Label(
@@ -91,7 +103,7 @@ struct PreferencesView: View {
                     Text("Creates a private 24-hour summary and copies it. It can open ChatGPT or Claude, but never pastes or sends anything.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Turn off application names to replace them with anonymous labels.")
+                    Text("Application names are hidden by default. Clipboard managers may retain copies; aliases do not make the brief anonymous.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -116,7 +128,25 @@ struct PreferencesView: View {
                         Text("7 days").tag(7)
                         Text("14 days").tag(14)
                     }
-                    Text("Daily narrative summaries and aggregates remain for trend views. Detailed system, process, app-family, and exact app-lifecycle samples are deleted on this schedule; only notable performance events may remain longer. Default retention keeps the sensitive timeline short.")
+                    Picker("Named application history", selection: Binding(
+                        get: { model.settings.effectiveNamedHistoryRetentionDays },
+                        set: { model.settings.namedHistoryRetentionDays = $0; model.persistSettings() }
+                    )) {
+                        Text("7 days").tag(7)
+                        Text("30 days (recommended)").tag(30)
+                        Text("90 days").tag(90)
+                    }
+                    Picker("Other events", selection: settingBinding(\.eventRetentionDays)) {
+                        Text("7 days").tag(7)
+                        Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                    }
+                    Picker("Aggregate daily trends", selection: settingBinding(\.reportRetentionDays)) {
+                        Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                        Text("1 year").tag(365)
+                    }
+                    Text("Cleanup runs while MY MACHINE is open and on startup. Named reports default to 30 days; older reports keep aggregate trends without application details or original narrative.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -169,7 +199,7 @@ struct PreferencesView: View {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) { model.eraseAllData() }
         } message: {
-            Text("This removes detailed samples, events, and daily reports. Monitoring, privacy, and launch preferences remain. Collected history cannot be recovered.")
+            Text("This removes detailed samples, events, and daily reports. Monitoring, privacy, and launch preferences remain. Separate backups, snapshots, exported reports and clipboard-manager copies are not removed. Monitoring can collect new data afterward.")
         }
     }
 
@@ -195,7 +225,7 @@ struct PreferencesView: View {
 
     private var diagnosisApplicationNamesBinding: Binding<Bool> {
         Binding(
-            get: { model.settings.diagnosisIncludeApplicationNames != false },
+            get: { model.settings.includesDiagnosisApplicationNames },
             set: {
                 model.settings.diagnosisIncludeApplicationNames = $0
                 model.persistSettings()

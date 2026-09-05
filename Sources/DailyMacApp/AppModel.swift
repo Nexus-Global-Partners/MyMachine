@@ -143,7 +143,7 @@ final class AppModel: ObservableObject {
 
     let dataDirectoryURL: URL
     private let store: SQLiteStore?
-    private let sampler = TelemetrySampler()
+    private lazy var sampler = TelemetrySampler()
     private let insights = InsightEngine()
     private var detector = EventDetector()
     private var monitorTask: Task<Void, Never>?
@@ -205,7 +205,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func acceptCollectionConsent() {
+        settings.collectionConsentGranted = true
+        startMonitoring()
+    }
+
     func startMonitoring() {
+        guard store != nil, collectionReady, !dataEraseInProgress else { return }
+        guard settings.hasCollectionConsent else {
+            AppRoute.shared.requestMonitoring()
+            return
+        }
         settings.isPaused = false
         settings.pauseUntil = nil
         persistCriticalPreferencesSynchronously()
@@ -254,8 +264,17 @@ final class AppModel: ObservableObject {
     func persistSettings() {
         guard let store else { return }
         let current = settings
+        let epoch = dataEpoch
         Task {
-            do { try await store.saveSettings(current) }
+            do {
+                try await store.saveSettings(current)
+                try await RetentionCoordinator.finalizeThenRetain(store: store, settings: current) {
+                    try await self.finalizeUnreportedDays()
+                }
+                let refreshed = try await store.reports()
+                guard epoch == self.dataEpoch, !self.dataEraseInProgress else { return }
+                self.reports = refreshed
+            }
             catch { await show(error) }
         }
     }
@@ -304,7 +323,7 @@ final class AppModel: ObservableObject {
         let endingAt = Date()
         let interval = MonitoringRange.twentyFourHours.interval(endingAt: endingAt)
         let destination = settings.diagnosisDestination ?? .copyOnly
-        let includeNames = settings.diagnosisIncludeApplicationNames != false
+        let includeNames = settings.includesDiagnosisApplicationNames
         let currentTrend7 = trend7
         let currentTrend30 = trend30
         diagnosisFeedbackTask?.cancel()
@@ -404,15 +423,15 @@ final class AppModel: ObservableObject {
                 detector.resetAfterGap()
                 await sampler.resetDeltas()
                 dataEraseInProgress = false
-                let shouldResume = shouldResumeAfterDataErase
                 shouldResumeAfterDataErase = false
-                if shouldResume { beginLoopIfNeeded() }
+                collectionReady = true
+                errorMessage = nil
+                collectionState = isCurrentlyPaused ? .paused : .monitoring
+                if settings.hasCollectionConsent && !settings.isPaused { beginLoopIfNeeded() }
             } catch {
                 if eraseEpoch == dataEpoch {
                     dataEraseInProgress = false
-                    let shouldResume = shouldResumeAfterDataErase
                     shouldResumeAfterDataErase = false
-                    if shouldResume { beginLoopIfNeeded() }
                 }
                 await show(error)
             }
@@ -537,20 +556,14 @@ final class AppModel: ObservableObject {
         do {
             settings = try await store.loadSettings()
             restoreCriticalPreferencesIfPresent()
-            latestSystem = try await store.latestSample()
-            lastSampleTimestamp = latestSystem?.timestamp
-            lastUpdated = latestSystem?.timestamp
-            processImpacts = try await store.latestProcessImpacts()
-
-            // Warm the small one-hour panel first so the menu-bar experience is
-            // useful immediately, independent of report maintenance below.
-            let menuWarmup = beginMenuBarRefreshIfNeeded(endingAt: Date())
-            await menuWarmup?.value
-
             try await RetentionCoordinator.finalizeThenRetain(store: store, settings: settings) {
                 try await self.finalizeUnreportedDays()
             }
             lastRetentionDate = Date()
+            latestSystem = try await store.latestSample()
+            lastSampleTimestamp = latestSystem?.timestamp
+            lastUpdated = latestSystem?.timestamp
+            processImpacts = try await store.latestProcessImpacts()
             try await refreshTodayReport(force: true)
             try await refreshMonitoring(force: true)
             databaseSize = await store.databaseSizeBytes()
@@ -558,8 +571,9 @@ final class AppModel: ObservableObject {
             persistCriticalPreferencesSynchronously()
             collectionState = isCurrentlyPaused ? .paused : .monitoring
             attemptLoginRegistrationIfAppropriate()
-            if !settings.isPaused { beginLoopIfNeeded() }
-            if settings.briefingNotificationsEnabled != false {
+            if !settings.hasCollectionConsent { AppRoute.shared.requestMonitoring() }
+            if !isCurrentlyPaused || settings.pauseUntil != nil { beginLoopIfNeeded() }
+            if settings.briefingNotificationsEnabled == true {
                 Task { await self.configureBriefingNotifications() }
             } else {
                 notificationStatusDetail = "Proactive briefings are off. Monitoring and reports continue locally."
@@ -570,7 +584,7 @@ final class AppModel: ObservableObject {
     }
 
     private func beginLoopIfNeeded() {
-        guard monitorTask == nil, store != nil else { return }
+        guard monitorTask == nil, store != nil, collectionReady, settings.hasCollectionConsent, !dataEraseInProgress else { return }
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -627,6 +641,7 @@ final class AppModel: ObservableObject {
     }
 
     private var isCurrentlyPaused: Bool {
+        if !settings.hasCollectionConsent { return true }
         if settings.isPaused { return true }
         if let pausedUntil = settings.pauseUntil {
             if pausedUntil > Date() { return true }
@@ -1003,7 +1018,7 @@ final class AppModel: ObservableObject {
                 self.updateLoginItemStatus()
                 do { try await self.refreshMonitoring(force: false) }
                 catch { await self.show(error) }
-                guard self.settings.briefingNotificationsEnabled != false else { return }
+                guard self.settings.briefingNotificationsEnabled == true else { return }
                 await self.configureBriefingNotifications()
             }
         }
@@ -1019,14 +1034,14 @@ final class AppModel: ObservableObject {
     private func configureBriefingNotifications() async {
         notificationConfigurationGeneration &+= 1
         let generation = notificationConfigurationGeneration
-        guard settings.briefingNotificationsEnabled != false else {
+        guard settings.briefingNotificationsEnabled == true else {
             NotificationCoordinator.shared.setDeliveryActive(false)
             return
         }
         NotificationCoordinator.shared.setDeliveryActive(true)
         let authorization = await NotificationCoordinator.shared.prepareIfAppropriate()
         guard generation == notificationConfigurationGeneration,
-              settings.briefingNotificationsEnabled != false else { return }
+              settings.briefingNotificationsEnabled == true else { return }
         switch authorization {
         case .enabled:
             notificationDeliveryEnabled = true
@@ -1056,7 +1071,7 @@ final class AppModel: ObservableObject {
     private func attemptLoginRegistrationIfAppropriate() {
         guard ApplicationInstallation.isCanonicalApplicationsInstall,
               ProcessInfo.processInfo.environment["DAILYMAC_DISABLE_LOGIN_REGISTRATION"] != "1",
-              settings.launchAtLoginPreference != false,
+              settings.launchAtLoginPreference == true,
               SMAppService.mainApp.status == .notRegistered else { return }
         do { try SMAppService.mainApp.register() }
         catch { errorMessage = "MY MACHINE could not enable Launch at Login automatically: \(error.localizedDescription)" }
@@ -1097,6 +1112,9 @@ final class AppModel: ObservableObject {
 
     private func restoreCriticalPreferencesIfPresent() {
         let defaults = UserDefaults.standard
+        if defaults.object(forKey: Self.consentKey) != nil {
+            settings.collectionConsentGranted = defaults.bool(forKey: Self.consentKey)
+        }
         if defaults.object(forKey: Self.pauseFlagKey) != nil {
             settings.isPaused = defaults.bool(forKey: Self.pauseFlagKey)
             settings.pauseUntil = defaults.object(forKey: Self.pauseUntilKey) as? Date
@@ -1111,6 +1129,7 @@ final class AppModel: ObservableObject {
 
     private func persistCriticalPreferencesSynchronously() {
         let defaults = UserDefaults.standard
+        defaults.set(settings.hasCollectionConsent, forKey: Self.consentKey)
         defaults.set(settings.isPaused, forKey: Self.pauseFlagKey)
         if let pauseUntil = settings.pauseUntil { defaults.set(pauseUntil, forKey: Self.pauseUntilKey) }
         else { defaults.removeObject(forKey: Self.pauseUntilKey) }
@@ -1122,12 +1141,17 @@ final class AppModel: ObservableObject {
     }
 
     private func show(_ error: Error) async {
-        _ = error
         monitoringIsRefreshing = false
         stopMonitorLoop()
         collectionReady = false
-        errorMessage = Self.friendlyStorageError
-        collectionState = .failed(Self.friendlyStorageError)
+        let message: String
+        if case StoreError.cleanupIncomplete = error {
+            message = error.localizedDescription
+        } else {
+            message = Self.friendlyStorageError
+        }
+        errorMessage = message
+        collectionState = .failed(message)
     }
 
     private static func safeName(_ value: String?) -> String {
@@ -1136,6 +1160,7 @@ final class AppModel: ObservableObject {
     }
 
     private static let friendlyStorageError = "MY MACHINE could not safely update its local history, so monitoring stopped rather than showing incomplete conclusions. Existing data remains on this Mac. Quit and reopen the app; if this returns, the data folder in Settings can be preserved or removed before a fresh start."
+    private static let consentKey = "collectionConsentGranted"
     private static let pauseFlagKey = "privacyPauseEnabled"
     private static let pauseUntilKey = "privacyPauseUntil"
     private static let loginPreferenceKey = "launchAtLoginPreference"

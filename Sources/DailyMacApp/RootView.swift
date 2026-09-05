@@ -47,11 +47,25 @@ struct RootView: View {
                 .background(.bar)
             }
         } detail: {
-            switch selection ?? .monitoring {
-            case .monitoring: MonitoringView()
-            case .history: HistoryView()
-            case .activity: ActivityView()
-            case .settings: PreferencesView()
+            if !model.settings.hasCollectionConsent && selection != .settings {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Your Mac, your choice").font(.title)
+                    Text("MY MACHINE can record application names, activity counts and machine performance locally. It does not record what you type or what appears on screen, and does not upload monitoring data.")
+                    Text("Detailed samples default to 3 days and named reports to 30 days. Aggregate trends remain for one year. You can pause or delete history in Settings. Launch at Login and notifications are off by default for new installations.")
+                    Button("Start Local Monitoring") { model.acceptCollectionConsent() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.collectionState == .starting)
+                    Button("Review Privacy Settings") { selection = .settings }
+                }
+                .padding(32)
+                .frame(maxWidth: 650, alignment: .leading)
+            } else {
+                switch selection ?? .monitoring {
+                case .monitoring: MonitoringView()
+                case .history: HistoryView()
+                case .activity: ActivityView()
+                case .settings: PreferencesView()
+                }
             }
         }
         .alert("MY MACHINE", isPresented: Binding(
@@ -62,8 +76,9 @@ struct RootView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .onAppear { selection = route.destination }
         .onChange(of: route.monitoringRequestGeneration) {
-            selection = .monitoring
+            selection = route.destination
         }
     }
 

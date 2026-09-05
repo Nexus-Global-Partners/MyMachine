@@ -39,6 +39,59 @@ struct DailyMacValidation {
         print("MY MACHINE validation starting")
         let harness = ValidationHarness()
 
+        await harness.run("notch hover dwell rejects quick crossings") {
+            var state = NotchInteraction()
+            state.pointer(at: 0, inActivation: true, inSurface: false)
+            state.pointer(at: 0.2, inActivation: false, inSurface: false)
+            state.pointer(at: 1, inActivation: true, inSurface: false)
+            try harness.check(state.phase == .hidden, "crossing accumulated hover time")
+            state.pointer(at: 1.31, inActivation: true, inSurface: false)
+            try harness.check(state.phase == .preview, "deliberate hover did not reveal preview")
+        }
+
+        await harness.run("notch preview crossing and exit grace") {
+            var state = NotchInteraction()
+            state.pointer(at: 0, inActivation: true, inSurface: false)
+            state.pointer(at: 0.31, inActivation: true, inSurface: false)
+            state.pointer(at: 0.4, inActivation: false, inSurface: true)
+            state.pointer(at: 0.5, inActivation: false, inSurface: false)
+            state.pointer(at: 0.65, inActivation: false, inSurface: true)
+            try harness.check(state.phase == .preview, "preview flickered during pointer crossing")
+            state.pointer(at: 1, inActivation: false, inSurface: false)
+            state.pointer(at: 1.21, inActivation: false, inSurface: false)
+            try harness.check(state.phase == .hidden, "preview did not retract after exit")
+        }
+
+        await harness.run("notch click persists and dismissal requires re-entry") {
+            var state = NotchInteraction()
+            state.expand()
+            state.pointer(at: 1, inActivation: false, inSurface: false)
+            try harness.check(state.phase == .expanded, "clicked dashboard closed on pointer exit")
+            state.dismiss()
+            state.pointer(at: 2, inActivation: true, inSurface: false)
+            state.pointer(at: 3, inActivation: true, inSurface: false)
+            try harness.check(state.phase == .hidden, "dismissal immediately reopened")
+            state.pointer(at: 4, inActivation: false, inSurface: false)
+            state.pointer(at: 5, inActivation: true, inSurface: false)
+            state.pointer(at: 5.31, inActivation: true, inSurface: false)
+            try harness.check(state.phase == .preview, "re-entry did not restore hover")
+        }
+
+        await harness.run("notch geometry respects housing and secondary display bounds") {
+            let screen = CGRect(x: -1512, y: 200, width: 1512, height: 982)
+            let visible = CGRect(x: -1512, y: 240, width: 1512, height: 910)
+            let target = NotchGeometry.activation(screen: screen, topInset: 32,
+                left: CGRect(x: -1512, y: 1150, width: 650, height: 32),
+                right: CGRect(x: -650, y: 1150, width: 650, height: 32))
+            try harness.check(target == CGRect(x: -862, y: 1150, width: 212, height: 32), "activation overlaps menu areas")
+            let panel = NotchGeometry.panel(screen: screen, visible: visible, activation: target, size: CGSize(width: 460, height: 440))
+            try harness.check(visible.contains(panel) && panel.maxY == 1150, "panel covers housing or escapes screen")
+            try harness.check(NotchGeometry.activation(screen: screen, topInset: 0, left: nil, right: nil) == nil, "invented notch on external display")
+            let tiny = CGRect(x: 10, y: 20, width: 320, height: 240)
+            let fallback = NotchGeometry.panel(screen: tiny, visible: tiny, activation: nil, size: CGSize(width: 460, height: 440))
+            try harness.check(tiny.contains(fallback), "fallback overflows small display")
+        }
+
         await harness.run("DST and local-day boundaries") {
             let timezone = try require(TimeZone(identifier: "America/Los_Angeles"), "timezone unavailable")
             let spring = try require(DayBoundaries.interval(for: "2026-03-08", timezone: timezone), "spring interval unavailable")
@@ -168,35 +221,37 @@ struct DailyMacValidation {
             try harness.check(quiet.intensity(over: 15) == 0, "measured quiet interval did not produce zero intensity")
             try harness.check(active.intensity(over: 15) > 0.5 && active.intensity(over: 15) <= 1, "active interval did not produce a bounded intensity")
 
-            let sampler = TelemetrySampler()
-            let first = await sampler.sample(settings: .default, now: Date(timeIntervalSince1970: 1_780_000_000))
-            let second = await sampler.sample(settings: .default, now: Date(timeIntervalSince1970: 1_780_000_001))
-            try harness.check(first.system.manualActivity == nil, "first cumulative counter reading was presented as interval activity")
-            try harness.check(second.system.manualActivity != nil, "second cumulative counter reading did not produce content-free deltas")
-            if let gpu = second.system.gpuPercent {
-                try harness.check((0...100).contains(gpu), "graphics-driver activity escaped its honest percentage range")
+            if !CommandLine.arguments.contains("--skip-live") {
+                let sampler = TelemetrySampler()
+                let first = await sampler.sample(settings: .default, now: Date(timeIntervalSince1970: 1_780_000_000))
+                let second = await sampler.sample(settings: .default, now: Date(timeIntervalSince1970: 1_780_000_001))
+                try harness.check(first.system.manualActivity == nil, "first cumulative counter reading was presented as interval activity")
+                try harness.check(second.system.manualActivity != nil, "second cumulative counter reading did not produce content-free deltas")
+                if let gpu = second.system.gpuPercent {
+                    try harness.check((0...100).contains(gpu), "graphics-driver activity escaped its honest percentage range")
+                }
+                let coreValues = [
+                    second.system.performanceCorePercent,
+                    second.system.efficiencyCorePercent,
+                    second.system.performanceCoreContributionPercent
+                ]
+                let hasHeterogeneousCores = (sysctlInteger("hw.perflevel1.logicalcpu") ?? 0) > 0
+                if hasHeterogeneousCores {
+                    try harness.check(coreValues.allSatisfy { $0 != nil }, "Apple Silicon core clusters were not measured")
+                } else {
+                    try harness.check(coreValues.allSatisfy { $0 == nil }, "unsupported core topology produced a guessed split")
+                }
+                if let performance = second.system.performanceCorePercent,
+                   let efficiency = second.system.efficiencyCorePercent,
+                   let contribution = second.system.performanceCoreContributionPercent {
+                    try harness.check((0...100).contains(performance), "performance-core utilization escaped its honest range")
+                    try harness.check((0...100).contains(efficiency), "efficiency-core utilization escaped its honest range")
+                    try harness.check(contribution >= 0 && contribution <= second.system.cpuPercent + 0.001, "core contribution exceeded aggregate CPU")
+                }
+                await sampler.resetDeltas()
+                let afterReset = await sampler.sample(settings: .default, now: Date(timeIntervalSince1970: 1_780_000_002))
+                try harness.check(afterReset.system.manualActivity == nil, "counter reset did not restore baseline semantics")
             }
-            let coreValues = [
-                second.system.performanceCorePercent,
-                second.system.efficiencyCorePercent,
-                second.system.performanceCoreContributionPercent
-            ]
-            let hasHeterogeneousCores = (sysctlInteger("hw.perflevel1.logicalcpu") ?? 0) > 0
-            if hasHeterogeneousCores {
-                try harness.check(coreValues.allSatisfy { $0 != nil }, "Apple Silicon core clusters were not measured")
-            } else {
-                try harness.check(coreValues.allSatisfy { $0 == nil }, "unsupported core topology produced a guessed split")
-            }
-            if let performance = second.system.performanceCorePercent,
-               let efficiency = second.system.efficiencyCorePercent,
-               let contribution = second.system.performanceCoreContributionPercent {
-                try harness.check((0...100).contains(performance), "performance-core utilization escaped its honest range")
-                try harness.check((0...100).contains(efficiency), "efficiency-core utilization escaped its honest range")
-                try harness.check(contribution >= 0 && contribution <= second.system.cpuPercent + 0.001, "core contribution exceeded aggregate CPU")
-            }
-            await sampler.resetDeltas()
-            let afterReset = await sampler.sample(settings: .default, now: Date(timeIntervalSince1970: 1_780_000_002))
-            try harness.check(afterReset.system.manualActivity == nil, "counter reset did not restore baseline semantics")
         }
 
         await harness.run("legacy Codable samples default manual activity to unavailable") {
@@ -686,6 +741,93 @@ struct DailyMacValidation {
             let decoded = try JSONDecoder().decode(MonitoringSettings.self, from: legacySettings)
             try harness.check(decoded.pauseUntil == nil && decoded.launchAtLoginPreference == nil && decoded.briefingNotificationsEnabled == nil, "older settings did not migrate safely")
             try harness.check(decoded.diagnosisDestination == nil && decoded.diagnosisIncludeApplicationNames == nil, "older settings invented diagnosis preferences")
+        }
+
+        await harness.run("privacy defaults and legacy consent fail closed") {
+            let defaults = MonitoringSettings.default
+            try harness.check(defaults.isPaused && !defaults.hasCollectionConsent, "fresh collection was enabled")
+            try harness.check(defaults.launchAtLoginPreference == false && defaults.briefingNotificationsEnabled == false, "fresh background options were enabled")
+            try harness.check(!defaults.includesDiagnosisApplicationNames && defaults.effectiveNamedHistoryRetentionDays == 30, "privacy defaults changed")
+            let legacy = Data("{\"baseSamplingInterval\":15,\"idleThreshold\":300,\"rawRetentionDays\":3,\"eventRetentionDays\":90,\"reportRetentionDays\":365,\"processLimit\":16,\"isPaused\":false}".utf8)
+            let decoded = try JSONDecoder().decode(MonitoringSettings.self, from: legacy)
+            try harness.check(!decoded.hasCollectionConsent && !decoded.includesDiagnosisApplicationNames, "missing settings granted consent or identity sharing")
+        }
+
+        await harness.run("daily exports escape every untrusted prose field") {
+            let attack = "![image](https://example.invalid/pixel)<img src=x> `code` \\ [link](x)\n# heading\u{202E}"
+            let start = Date()
+            let report = InsightEngine().makeReport(dayKey: "2026-08-01", timezone: .gmt,
+                samples: (0..<20).map { sample(at: start.addingTimeInterval(Double($0) * 15), app: attack) },
+                processSamples: [], events: [])
+            let encoder = JSONEncoder()
+            var fields = try require(JSONSerialization.jsonObject(with: encoder.encode(report)) as? [String: Any], "fixture unavailable")
+            fields["headline"] = attack
+            fields["overview"] = attack
+            fields["limitations"] = [attack]
+            let insight = ReportInsight(kind: .recommendation, title: attack, explanation: attack, evidence: attack)
+            let insights = try JSONSerialization.jsonObject(with: encoder.encode([insight]))
+            fields["importantMoments"] = insights
+            fields["correlations"] = insights
+            fields["recommendations"] = insights
+            let hostile = try JSONDecoder().decode(DailyReport.self, from: JSONSerialization.data(withJSONObject: fields))
+            let markdown = ReportRenderer.markdown(hostile)
+            for forbidden in ["![image]", "<img src=x>", "`code`", "[link](x)", "\n# heading", "\u{202E}"] {
+                try harness.check(!markdown.contains(forbidden), "untrusted Markdown escaped its literal boundary")
+            }
+            try harness.check(markdown.contains("\\!\\[image\\]\\(https\\:"), "escaped label was lost")
+            try harness.check(markdown.contains("## In brief") && markdown.contains("## What I would change tomorrow"), "trusted formatting was lost")
+        }
+
+        await harness.run("named history expires across prose while aggregates survive") {
+            let directory = temporaryDirectory(prefix: "DailyMacNamedRetention")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = try SQLiteStore(directoryURL: directory)
+            let now = Date()
+            let oldDay = now.addingTimeInterval(-40 * 86_400)
+            let report = InsightEngine().makeReport(dayKey: DayBoundaries.key(for: oldDay), timezone: .gmt,
+                samples: (0..<20).map { sample(at: oldDay.addingTimeInterval(Double($0) * 15), app: "PrivateClientApp", bundle: "com.private.client") },
+                processSamples: [], events: [])
+            try await store.save(report: report)
+            try await store.save(event: ActivityEvent(timestamp: oldDay, type: .sustainedCPU, title: "PrivateClientApp", explanation: "PrivateClientApp was in front", severity: .notable))
+            try await store.performRetention(settings: .default, now: now)
+            let oldEvents = try await store.events(from: .distantPast, to: .distantFuture)
+            try harness.check(!oldEvents.contains { $0.title.contains("PrivateClientApp") || $0.explanation.contains("PrivateClientApp") }, "identity remained in event prose")
+            let retained = try require(try await store.report(dayKey: report.dayKey), "aggregate report disappeared")
+            let encoded = String(decoding: try JSONEncoder().encode(retained), as: UTF8.self)
+            try harness.check(!encoded.contains("PrivateClientApp") && !encoded.contains("com.private.client"), "identity remained in a derived field")
+            try harness.check(retained.applicationDetailsRemoved == true && retained.applications.isEmpty, "report was not minimized")
+            try harness.check(retained.averageCPU == report.averageCPU && retained.activeDuration == report.activeDuration && abs(retained.generatedAt.timeIntervalSince(report.generatedAt)) < 0.001, "retention changed measurements or extended report lifetime")
+            try await store.performRetention(settings: .default, now: now)
+            let repeated = try await store.report(dayKey: report.dayKey)
+            try harness.check(repeated == retained, "minimization was not idempotent")
+        }
+
+        await harness.run("erase reports blocked journal cleanup and supports retry") {
+            let directory = temporaryDirectory(prefix: "DailyMacEraseReader")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = try SQLiteStore(directoryURL: directory)
+            try await store.save(sample: sample(app: "ErasePrivateMarker"), processes: [])
+            var reader: OpaquePointer?
+            guard sqlite3_open_v2(store.databaseURL.path, &reader, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let reader else {
+                throw ValidationFailure.failed("reader unavailable")
+            }
+            defer { sqlite3_close(reader) }
+            try harness.check(sqlite3_exec(reader, "BEGIN; SELECT * FROM system_samples;", nil, nil, nil) == SQLITE_OK, "reader snapshot failed")
+            do {
+                try await store.eraseAllData()
+                throw ValidationFailure.failed("erase claimed cleanup while a reader held old pages")
+            } catch StoreError.cleanupIncomplete { }
+            let remaining = try await store.samples(from: .distantPast, to: .distantFuture)
+            try harness.check(remaining.isEmpty, "logical erase failed")
+            try harness.check(sqlite3_exec(reader, "ROLLBACK;", nil, nil, nil) == SQLITE_OK, "reader release failed")
+            try await store.eraseAllData()
+            let wal = URL(fileURLWithPath: store.databaseURL.path + "-wal")
+            if FileManager.default.fileExists(atPath: wal.path) {
+                let data = try Data(contentsOf: wal)
+                try harness.check(data.isEmpty, "completed erase left journal frames")
+            }
+            let bytes = try Data(contentsOf: store.databaseURL)
+            try harness.check(bytes.range(of: Data("ErasePrivateMarker".utf8)) == nil, "completed erase left seeded identity in database")
         }
 
         await harness.run("sparse reports do not invent advice") {
@@ -1577,6 +1719,22 @@ struct DailyMacValidation {
             try harness.check(erasedEvents.isEmpty, "erase left events")
             try harness.check(erasedResources.isEmpty, "erase left app-family resource samples")
             try harness.check(!FileManager.default.fileExists(atPath: recoveryDirectory.path), "erase left a recovery archive containing telemetry")
+        }
+
+        await harness.run("store rejects redirected database files without modifying targets") {
+            let directory = temporaryDirectory(prefix: "DailyMacRedirectedStore")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let target = directory.appendingPathComponent("unrelated.txt")
+            let original = Data("unrelated private fixture".utf8)
+            try original.write(to: target)
+            try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("DailyMac.sqlite"), withDestinationURL: target)
+            var rejected = false
+            do { _ = try SQLiteStore(directoryURL: directory) }
+            catch { rejected = true }
+            try harness.check(rejected, "redirected database was accepted")
+            let remaining = try Data(contentsOf: target)
+            try harness.check(remaining == original, "unrelated target changed")
         }
 
         await harness.run("owner-only files and privacy-minimal schema") {
