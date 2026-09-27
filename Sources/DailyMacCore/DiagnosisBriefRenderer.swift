@@ -132,7 +132,9 @@ public enum DiagnosisBriefRenderer {
         let seriousThermalDuration = ordered
             .filter { $0.thermalLevel == .serious || $0.thermalLevel == .critical }
             .reduce(0) { $0 + CoverageEvaluator.boundedDuration(of: $1) }
-        let monitorAverageCPU = weightedAverage(ordered) { $0.monitorCPUPercent }
+        let calibratedMonitorSamples = ordered.filter { $0.duration > 0 && $0.monitorCPUMeasurementVersion == 1 }
+        let monitorAverageCPU = calibratedMonitorSamples.isEmpty ? nil
+            : weightedAverage(calibratedMonitorSamples) { $0.monitorCPUPercent }
         let monitorAverageMemory = weightedAverage(ordered) { Double($0.monitorMemoryBytes) }
 
         let coreDistribution: CoreDistribution?
@@ -277,8 +279,8 @@ public enum DiagnosisBriefRenderer {
                 interpretation: "These are whole-machine interval totals. Network counters can overlap through VPN or virtual interfaces."
             ),
             monitorFootprint: MonitorFootprint(
-                cpuAveragePercent: rounded(monitorAverageCPU),
-                cpuPeakPercent: rounded(ordered.map(\.monitorCPUPercent).max() ?? 0),
+                cpuAveragePercent: monitorAverageCPU.map(rounded),
+                cpuPeakPercent: calibratedMonitorSamples.map(\.monitorCPUPercent).max().map(rounded),
                 memoryAverageMB: rounded(monitorAverageMemory / 1_000_000),
                 memoryPeakMB: megabytes(ordered.map(\.monitorMemoryBytes).max() ?? 0)
             ),
@@ -290,6 +292,7 @@ public enum DiagnosisBriefRenderer {
             limitations: [
                 "Foreground application context is not proof that the application caused whole-machine load.",
                 "Background application-family accounting is best-effort and intentionally omits process and worker names.",
+                "Per-process CPU attribution and monitor CPU footprint use calibrated measurements only; older uncalibrated readings are omitted.",
                 "Memory footprint can include shared pages; network counters can overlap through VPN or virtual interfaces.",
                 "The representative timeline is sampled evidence, not a raw or complete event log.",
                 "Missing time is unrecorded unless explicit sleep events confirm sleep."
@@ -483,7 +486,7 @@ private struct MemoryEvidence: Encodable { let averageUsedMB: Int; let peakUsedM
 private struct ThermalEvidence: Encodable { let peak: String; let seriousOrCriticalMinutes: Int }
 private struct BatteryEvidence: Encodable { let latestPowerSource: String; let observedChangePercent: Double?; let dischargeContext: String }
 private struct MachineActivityEvidence: Encodable { let diskActivityMB: Int; let networkTrafficMB: Int; let interpretation: String }
-private struct MonitorFootprint: Encodable { let cpuAveragePercent: Double; let cpuPeakPercent: Double; let memoryAverageMB: Double; let memoryPeakMB: Int }
+private struct MonitorFootprint: Encodable { let cpuAveragePercent: Double?; let cpuPeakPercent: Double?; let memoryAverageMB: Double; let memoryPeakMB: Int }
 private struct ForegroundApplication: Encodable { let name: String; let category: String?; let activeMinutes: Int; let wholeMachineCPUAverageWhileInFrontPercent: Double }
 private struct BackgroundApplication: Encodable { let name: String; let activityMinutes: Int; let cpuAveragePercent: Double; let cpuPeakPercent: Double; let peakMemoryMB: Int; let diskActivityMB: Int; let maximumRelatedWorkers: Int; let maximumAgentWorkers: Int; let memoryPressureOverlapMinutes: Int; let seriousHeatOverlapMinutes: Int }
 private struct NotableEvent: Encodable { let minutesBeforeEnd: Int; let kind: String; let importance: String }

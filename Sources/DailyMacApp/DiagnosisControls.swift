@@ -32,65 +32,107 @@ struct DiagnosisIconButton: View {
 struct MenuBarMonitoringRangeControl: View {
     let preference: MonitoringRangePreference
     let effectiveRange: MonitoringRange
+    let effectiveInterval: DateInterval?
     let onSelectSmart: () -> Void
     let onSelectRange: (MonitoringRange) -> Void
 
     var body: some View {
+        HStack(spacing: 0) {
+            rangeStepButton(preference.previous, direction: "Previous", symbol: "chevron.left")
+            rangeMenu
+            rangeStepButton(preference.next, direction: "Next", symbol: "chevron.right")
+        }
+        .padding(.horizontal, 2)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.75)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("History time range")
+    }
+
+    private func rangeStepButton(_ choice: MonitoringRangePreference?, direction: String, symbol: String) -> some View {
+        Button {
+            switch choice {
+            case .smart: onSelectSmart()
+            case .fixed(let range): onSelectRange(range)
+            case nil: break
+            }
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(choice == nil ? Color.secondary.opacity(0.38) : Color.primary.opacity(0.75))
+                .frame(width: 26, height: 29)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(choice == nil)
+        .help(choice.map { "\(direction) range: \($0.compactLabel)" } ?? "No \(direction.lowercased()) range")
+        .accessibilityLabel("\(direction) time range")
+        .accessibilityValue(choice?.compactLabel ?? "Unavailable")
+    }
+
+    private var rangeMenu: some View {
         Menu {
             Button {
                 onSelectSmart()
             } label: {
                 menuItem(
-                    "Automatic · \(effectiveRange.compactLabel)",
+                    "Auto",
                     selected: preference.isSmart
                 )
             }
 
             Divider()
 
-            ForEach(MonitoringRange.allCases) { range in
+            ForEach(MonitoringRange.selectableRanges) { range in
                 Button {
                     onSelectRange(range)
                 } label: {
-                    menuItem(range.label, selected: preference == .fixed(range))
+                    menuItem(range.compactLabel, selected: preference == .fixed(range))
                 }
             }
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: preference.isSmart ? "sparkles" : "clock")
-                    .imageScale(.small)
                 Text(controlTitle)
+                    .font(.caption.weight(.semibold))
                     .monospacedDigit()
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            .frame(width: 82)
+            .frame(minWidth: preference.isSmart ? 83 : 56, minHeight: 29)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .buttonStyle(GlassySecondaryButtonStyle())
+        .buttonStyle(.plain)
         .fixedSize()
         .help(helpText)
         .accessibilityLabel(accessibilityLabel)
     }
 
     private var controlTitle: String {
-        preference.isSmart
-            ? "Auto · \(effectiveRange.compactLabel)"
-            : effectiveRange.compactLabel
+        guard preference.isSmart else { return preference.compactLabel }
+        guard let effectiveInterval else { return "Auto" }
+        let minutes = max(1, Int(ceil(effectiveInterval.duration / 60)))
+        let span = minutes < 60 ? "\(minutes)m" : "\(Int(ceil(Double(minutes) / 60)))h"
+        return "Auto · \(span)"
     }
 
     private var helpText: String {
         if preference.isSmart {
-            return "Automatic chooses the most useful live window from recent work and time of day. Choose a fixed range to inspect it manually."
+            let observedStart = effectiveInterval?.start.formatted(date: .abbreviated, time: .shortened)
+                ?? "the latest observed day"
+            return "Automatic follows your current observed day from \(observedStart), including work across midnight. Use the arrows for one-click range changes."
         }
         return "Showing a fixed \(effectiveRange.label) window. Choose Automatic to follow current work again."
     }
 
     private var accessibilityLabel: String {
         preference.isSmart
-            ? "History range, Automatic, showing \(effectiveRange.label)"
+            ? "History range, Automatic, showing your current observed day"
             : "History range, fixed at \(effectiveRange.label)"
     }
 
@@ -121,7 +163,7 @@ struct MonitoringRangePickerControl: View {
 
     var body: some View {
         HStack(spacing: 1) {
-            ForEach(MonitoringRange.allCases) { range in
+            ForEach(MonitoringRange.selectableRanges) { range in
                 Button {
                     onSelect(range)
                 } label: {

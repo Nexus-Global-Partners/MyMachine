@@ -4,6 +4,60 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- A source-first install handoff that a friend can paste to their own coding agent, including local validation, safe replacement, and the one-time ad-hoc-signature approval boundary.
+
+### Changed
+
+- The graph-edge live readout now echoes the menu-bar instruments: blue CPU/GPU rails, a compact health signal, and the same measured fan / categorical thermal bars. Auto shows its current elapsed span, while one-click arrows remain adjacent to the time-range menu.
+- Menu-bar and popover fan readouts share one best-effort AppleSMC measurement instead of polling twice; the hardware poll now follows a 15-second cadence. Stale readings drop to unavailable instead of looking live.
+- The popover reuses Auto's already-loaded system history and skips battery computations it never draws. Background-pressure interval lookup is indexed instead of scanning every interval for every app row.
+
+### Fixed
+
+- The menu-bar's two-minute CPU/GPU average and sustained memory signal now use every recently saved sample, not just the last report refresh plus one live reading.
+- MY MACHINE's own CPU and disk-write counters are measured on every system sample even when a broader process scan is skipped, so a missing measurement no longer masquerades as zero CPU use or resets sustained-overhead detection.
+- Network and physical-disk counters now baseline each interface or device independently. Newly connected, reset, or reappearing devices no longer contribute old lifetime bytes as a fresh activity spike.
+- Live and cached states age out after roughly two missed sample intervals, and status text no longer promises the Mac will remain responsive based only on resource readings.
+- Report limitations distinguish the new best-effort live fan RPM readout from stored history and unavailable exact temperature measurements.
+
+### Earlier changes
+
+- The menu-bar icon now has two small live signals inside the Mac outline: a health bar for pressure or alerts and four load steps for current CPU/GPU demand. Green, yellow, orange and red follow rising severity; gray means monitoring is paused, asleep or missing fresh data. Machine load is never presented as a measure of human focus.
+- Added compact calendar-day browsing to the menu bar: step through recent recorded days, inspect their full local-day graphs in either mode, and return to the live range in one click. Historical gaps remain gaps, not invented zero activity.
+- Removed the full-width status banner from Precise; its health, CPU and GPU readings now sit in a compact graph pill, with detailed evidence directly below.
+- Simplified time scales to Auto / 1h / 4h / 6h / 12h / 24h / 48h. Previous/next arrows follow this exact order, including a return to Auto.
+- Restored the full-width CPU/GPU line graph for 48h in both Calm and Precise. Today and week are no longer picker options; stored history and daily summaries are preserved.
+
+## [1.4.0] - 2026-09-07
+
+### Added
+
+- Today: a live local-midnight-to-now timeline in Calm and Precise, with clock labels and averaging that adapts to the elapsed day.
+- Quiet previous/next range arrows beside the history menu allow single-click changes without opening the menu.
+- Daily overviews for 48 hours and the last seven calendar days: compare observed CPU/GPU means and peaks, human-use time, and open individual days for detail.
+- Retained daily resource summaries preserve GPU measurements and pressure durations after detailed readings expire. Older CPU/activity summaries remain usable; unavailable GPU history is explicitly missing.
+- A compact live workload inspector separates observed foreground, background, and agent-app CPU contribution from human presence, with leading apps, physical memory, swap and thermal context.
+- Accessible previous/next-reading actions expose graph inspection without requiring pointer input.
+
+### Changed
+
+- A single native menu-bar popover replaces the window repositioning workaround and the remaining full-dashboard route. Settings and privacy controls stay accessible from the overflow menu.
+- Automatic time-range selection remains live, with manual ranges available from one compact control.
+- Live updates refresh silently every 30 seconds while the panel is open. Closed panels stop UI refresh work, and report aggregation runs off the main thread.
+
+### Fixed
+
+- Human-use detection now queries specific hardware keyboard/pointer event ages and counters instead of the combined session's any-event timer. Software-only session events cannot renew the pink rail; the configured quiet-reading grace period remains. Earlier presence records are not retrospectively rewritten, and virtual HID devices remain an inference limitation.
+- App/process CPU counters now use the Mac's actual timebase; Apple Silicon readings previously under-reported CPU use. Older uncalibrated app readings are excluded from new CPU claims rather than silently mixed with corrected measurements. Whole-machine CPU history is unaffected.
+- Switching from Dark or Light back to System clears the native appearance override.
+- Short recorded sessions no longer vanish when smoothing produces a single point.
+- Live health is calculated from recent readings independently of the selected history range.
+- Quiet reading follows the existing idle classification instead of being marked away solely because no input events occurred.
+- Unknown intervals are distinguished from confirmed sleep, and a brief sleep inside a data gap no longer turns the entire gap into a zero-load curve.
+- Retention can now reclaim materially unused database space, with a weekly limit and non-fatal maintenance safeguards.
+
 ## [1.3.1] - 2026-08-30
 
 ### Changed

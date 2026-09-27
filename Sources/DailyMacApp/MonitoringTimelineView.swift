@@ -16,8 +16,10 @@ struct MonitoringTimelineView: View, Equatable {
     let backgroundPoints: [BackgroundActivityPoint]
     let events: [ActivityEvent]
     let appContributors: [AppComputeContribution]
+    let appResourceSamples: [AppResourceSample]
     let presentation: TimelinePresentation
     let displayMode: TimelineDisplayMode
+    let historical: Bool
 
     @State private var selectedTime: Date?
 
@@ -44,8 +46,10 @@ struct MonitoringTimelineView: View, Equatable {
         backgroundPoints: [BackgroundActivityPoint],
         events: [ActivityEvent],
         appContributors: [AppComputeContribution] = [],
+        appResourceSamples: [AppResourceSample] = [],
         presentation: TimelinePresentation = .full,
-        displayMode: TimelineDisplayMode = .precise
+        displayMode: TimelineDisplayMode = .precise,
+        historical: Bool = false
     ) {
         self.snapshot = snapshot
         let orderedSamples = samples.sorted(by: { $0.timestamp < $1.timestamp })
@@ -53,8 +57,10 @@ struct MonitoringTimelineView: View, Equatable {
         self.backgroundPoints = backgroundPoints
         self.events = events
         self.appContributors = appContributors
+        self.appResourceSamples = appResourceSamples
         self.presentation = presentation
         self.displayMode = displayMode
+        self.historical = historical
         self.interval = snapshot.interval
         let processorTrend = Self.makeProcessorTrend(
             from: orderedSamples,
@@ -102,7 +108,10 @@ struct MonitoringTimelineView: View, Equatable {
         )
         self.liveProcessorReading = Self.makeLiveProcessorReading(
             from: orderedSamples,
-            endingAt: snapshot.interval.end
+            endingAt: snapshot.interval.end,
+            duration: displayMode == .precise
+                ? max(10, min(60, orderedSamples.last?.samplingInterval ?? 15))
+                : 2 * 60
         )
         let activityLanes = TimelineSemantics.activityLanes(
             from: orderedSamples,
@@ -122,23 +131,30 @@ struct MonitoringTimelineView: View, Equatable {
 
         let sleeps = TimelineSemantics.sleepIntervals(from: events, within: snapshot.interval)
         self.sleepIntervals = sleeps
-        let rawBatteryRuns = TimelineSemantics.batteryRuns(
-            from: self.samples,
-            within: snapshot.interval,
-            sleepIntervals: sleeps,
-            pointLimit: .max
-        )
-        self.batteryTenPointTiming = rawBatteryRuns.last.map(TimelineSemantics.batteryTenPointTiming)
-            ?? .collecting
-        let runs = TimelineSemantics.batteryRuns(
-            from: self.samples,
-            within: snapshot.interval,
-            sleepIntervals: sleeps
-        )
-        self.batteryRuns = runs
-        let latestIsOnBattery = self.samples.last.map(Self.isValidBatterySample) ?? false
-        self.showsBatteryTrack = presentation != .menuBar
-            && (latestIsOnBattery || runs.contains { $0.readings.count >= 2 })
+        if presentation == .menuBar {
+            // The compact popover never draws a battery lane. Avoid two full
+            // battery-history passes every time its live graph refreshes.
+            self.batteryTenPointTiming = .collecting
+            self.batteryRuns = []
+            self.showsBatteryTrack = false
+        } else {
+            let rawBatteryRuns = TimelineSemantics.batteryRuns(
+                from: self.samples,
+                within: snapshot.interval,
+                sleepIntervals: sleeps,
+                pointLimit: .max
+            )
+            self.batteryTenPointTiming = rawBatteryRuns.last.map(TimelineSemantics.batteryTenPointTiming)
+                ?? .collecting
+            let runs = TimelineSemantics.batteryRuns(
+                from: self.samples,
+                within: snapshot.interval,
+                sleepIntervals: sleeps
+            )
+            self.batteryRuns = runs
+            let latestIsOnBattery = self.samples.last.map(Self.isValidBatterySample) ?? false
+            self.showsBatteryTrack = latestIsOnBattery || runs.contains { $0.readings.count >= 2 }
+        }
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -147,8 +163,10 @@ struct MonitoringTimelineView: View, Equatable {
             && lhs.backgroundPoints == rhs.backgroundPoints
             && lhs.events == rhs.events
             && lhs.appContributors == rhs.appContributors
+            && lhs.appResourceSamples == rhs.appResourceSamples
             && lhs.presentation == rhs.presentation
             && lhs.displayMode == rhs.displayMode
+            && lhs.historical == rhs.historical
     }
 
     var body: some View {
@@ -199,23 +217,64 @@ struct MonitoringTimelineView: View, Equatable {
         presentation == .menuBar
     }
 
-    private func menuBarGraphOnlyBody(layout: UnifiedTimelineLayout) -> some View {
-        VStack(alignment: .leading, spacing: displayMode == .calm ? 6 : 8) {
-            if displayMode == .precise {
-                compactContextStrip
-                    .frame(height: inspectorHeight, alignment: .center)
-            }
+    /// Used above a daily overview too: live health always refers to now,
+    /// separately from the averages and peaks in the historical comparison.
+    @ViewBuilder var liveStatusPill: some View {
+        if let liveProcessorReading {
+            calmProcessorLegend(liveProcessorReading)
+        } else {
+            Label("No current reading", systemImage: "clock.badge.questionmark")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
 
+    private func menuBarGraphOnlyBody(layout: UnifiedTimelineLayout) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
             dataCanvas(layout: layout) {
-                if displayMode == .calm, let reading = contextProcessorReading {
-                    calmProcessorLegend(reading)
-                        .padding(.top, 8)
-                        .padding(.leading, 10)
-                } else if displayMode == .precise, selectedTime == nil {
-                    preciseGraphEvidence
-                        .padding(.top, 8)
-                        .padding(.horizontal, 10)
-                        .padding(.trailing, layout.rightAxisWidth)
+                if let reading = contextProcessorReading,
+                   !historical || selectedTime != nil {
+                    HStack(spacing: 8) {
+                        calmProcessorLegend(reading)
+                        if selectedTime != nil {
+                            Button { selectedTime = nil } label: {
+                                Image(systemName: "arrow.uturn.backward.circle.fill")
+                                    .font(.system(size: 14, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .keyboardShortcut(.cancelAction)
+                            .foregroundStyle(.secondary)
+                            .help("Show current status")
+                            .accessibilityLabel("Return to current status")
+                        }
+                    }
+                    .padding(.top, 8)
+                    .padding(.leading, 10)
+                    .padding(.trailing, layout.rightAxisWidth + 10)
+                } else if selectedTime != nil, contextProcessorReading == nil {
+                    HStack(spacing: 7) {
+                        Label(compactContextPrimary, systemImage: compactContextSymbol)
+                        Button { selectedTime = nil } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityLabel("Clear selected time")
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .padding(.leading, 10)
+                }
+                if !historical && selectedTime == nil {
+                    HStack {
+                        Spacer(minLength: 0)
+                        FanSpeedGauge()
+                    }
+                    .padding(.top, 8)
+                    .padding(.trailing, layout.rightAxisWidth + 10)
                 }
             }
             .frame(height: layout.totalHeight)
@@ -224,16 +283,6 @@ struct MonitoringTimelineView: View, Equatable {
                 .contentShape(Rectangle())
                 .onTapGesture { selectedTime = nil }
         }
-    }
-
-    private var preciseGraphEvidence: some View {
-        HStack(alignment: .top, spacing: 8) {
-            preciseWindowEvidence
-            Spacer(minLength: 8)
-            preciseActivityEvidence
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .allowsHitTesting(false)
     }
 
     private var preciseWindowEvidence: some View {
@@ -389,11 +438,21 @@ struct MonitoringTimelineView: View, Equatable {
                 batteryRuns: batteryRuns,
                 sleepIntervals: sleepIntervals,
                 interval: interval,
+                timeGuideDates: timeMarks.map(\.date),
                 processorScaleMaximum: processorScaleMaximum,
                 layout: layout,
                 displayMode: displayMode
             )
             .equatable()
+            .accessibilityAction(named: Text("Inspect previous reading")) {
+                moveSelection(forward: false)
+            }
+            .accessibilityAction(named: Text("Inspect next reading")) {
+                moveSelection(forward: true)
+            }
+            .accessibilityAction(named: Text("Clear selected time")) {
+                selectedTime = nil
+            }
 
             TimelineSelectionOverlay(
                 selectedTime: $selectedTime,
@@ -409,23 +468,42 @@ struct MonitoringTimelineView: View, Equatable {
         dataCanvas(layout: layout) { EmptyView() }
     }
 
+    private func moveSelection(forward: Bool) {
+        let readings = samples.filter {
+            $0.duration > 0 && $0.timestamp >= interval.start && $0.timestamp <= interval.end
+        }
+        if forward {
+            selectedTime = readings.first { $0.timestamp > (selectedTime ?? interval.start) }?.timestamp
+                ?? readings.last?.timestamp
+        } else {
+            selectedTime = readings.last { $0.timestamp < (selectedTime ?? interval.end.addingTimeInterval(1)) }?.timestamp
+                ?? readings.first?.timestamp
+        }
+    }
+
     private func calmProcessorLegend(_ reading: TimelineLiveProcessorReading) -> some View {
         let signal = calmStatusSignal
         let tint = calmStatusTint(for: signal.urgency)
 
         return HStack(spacing: 8) {
-            HStack(spacing: 5) {
-                Image(systemName: signal.symbol)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(tint)
-                Text(signal.label)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 3) {
+                compactProcessorBar(reading.cpuPercent, color: TimelineColors.processor)
+                compactProcessorBar(reading.gpuPercent, color: TimelineColors.graphics)
             }
+            .accessibilityHidden(true)
 
-            Divider()
-                .frame(height: 12)
-                .opacity(0.45)
+            Circle()
+                .fill(tint)
+                .frame(width: 5, height: 5)
+                .accessibilityHidden(true)
+            Text(signal.label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.primary)
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.14))
+                .frame(width: 1, height: 12)
+                .accessibilityHidden(true)
 
             calmProcessorLegendMetric(
                 title: "CPU",
@@ -439,38 +517,29 @@ struct MonitoringTimelineView: View, Equatable {
                     color: TimelineColors.graphics
                 )
             }
-            Text(calmProcessorContextLabel)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
+            if displayMode == .precise, selectedTime == nil {
+                Text("\(Int(max(10, min(60, samples.last?.samplingInterval ?? 15))))s")
+                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .help("Latest measured interval; Calm shows a two-minute average")
+            }
+            if let selectedTime {
+                Text(selectedTime.formatted(date: .omitted, time: .shortened))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 24)
-        .background {
-            Capsule()
-                .fill(.thinMaterial)
-                .overlay {
-                    Capsule()
-                        .fill(tint.opacity(calmStatusFillOpacity(for: signal.urgency)))
-                }
-        }
+        .padding(.horizontal, 10)
+        .frame(height: 29)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            Capsule()
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.28),
-                            tint.opacity(calmStatusBorderOpacity(for: signal.urgency)),
-                            Color.primary.opacity(0.08)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.85
+                    signal.urgency == .critical ? tint.opacity(0.42) : Color.primary.opacity(0.10),
+                    lineWidth: 0.75
                 )
         }
-        .shadow(color: tint.opacity(calmStatusGlowOpacity(for: signal.urgency)), radius: 8, y: 1)
-        .shadow(color: .black.opacity(0.05), radius: 5, y: 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(processorAccessibilityLabel(
             reading,
@@ -479,13 +548,10 @@ struct MonitoringTimelineView: View, Equatable {
         .help(signal.help)
     }
 
-    private var calmProcessorContextLabel: String {
-        guard let selectedTime else { return "2 min" }
-        return selectedTime.formatted(date: .omitted, time: .shortened)
-    }
-
     private var calmProcessorAccessibilityContext: String {
-        guard let selectedTime else { return "Live two minute average" }
+        guard let selectedTime else {
+            return displayMode == .precise ? "Latest measured interval" : "Live two minute average"
+        }
         let clock = selectedTime.formatted(date: .omitted, time: .shortened)
         return "Selected at \(clock)"
     }
@@ -573,37 +639,10 @@ struct MonitoringTimelineView: View, Equatable {
 
     private func calmStatusTint(for urgency: TimelineUrgency) -> Color {
         switch urgency {
-        case .normal: TimelineColors.normal
-        case .elevated: TimelineColors.memoryStatus
-        case .critical: TimelineColors.critical
+        case .normal: .green
+        case .elevated: .yellow
+        case .critical: .red
         case .unavailable: .secondary
-        }
-    }
-
-    private func calmStatusFillOpacity(for urgency: TimelineUrgency) -> Double {
-        switch urgency {
-        case .normal: 0.09
-        case .elevated: 0.12
-        case .critical: 0.15
-        case .unavailable: 0.045
-        }
-    }
-
-    private func calmStatusBorderOpacity(for urgency: TimelineUrgency) -> Double {
-        switch urgency {
-        case .normal: 0.28
-        case .elevated: 0.38
-        case .critical: 0.50
-        case .unavailable: 0.16
-        }
-    }
-
-    private func calmStatusGlowOpacity(for urgency: TimelineUrgency) -> Double {
-        switch urgency {
-        case .normal: 0.08
-        case .elevated: 0.11
-        case .critical: 0.17
-        case .unavailable: 0.03
         }
     }
 
@@ -612,14 +651,28 @@ struct MonitoringTimelineView: View, Equatable {
         value: Double,
         color: Color
     ) -> some View {
-        HStack(spacing: 4) {
-            Capsule()
-                .fill(color)
-                .frame(width: 10, height: 2)
-            Text("\(title) \(Formatters.percent(value))")
+        HStack(spacing: 3) {
+            Text(title)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text(Formatters.percent(value))
                 .font(.caption2.monospacedDigit().weight(.semibold))
                 .foregroundStyle(color)
         }
+    }
+
+    private func compactProcessorBar(_ value: Double?, color: Color) -> some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(Color.primary.opacity(0.16))
+                .frame(width: 34, height: 5)
+            if let value {
+                Capsule()
+                    .fill(color.opacity(value > 0 ? 1 : 0.35))
+                    .frame(width: max(2, 34 * CGFloat(min(100, value)) / 100), height: 5)
+            }
+        }
+        .frame(width: 34, height: 5)
     }
 
     private var labelWidth: CGFloat {
@@ -1106,7 +1159,11 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var contextProcessorReading: TimelineLiveProcessorReading? {
-        guard selectedTime != nil else { return liveProcessorReading }
+        guard selectedTime != nil else {
+            guard let latest = samples.last(where: { $0.duration > 0 }),
+                  MachineStatusSignal.isFresh(latest) else { return nil }
+            return liveProcessorReading
+        }
         guard case .observed(let sample) = selectedState else { return nil }
         return TimelineLiveProcessorReading(
             cpuPercent: sample.cpuPercent.isFinite
@@ -1119,7 +1176,9 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var contextProcessorLabel: String {
-        guard selectedTime != nil else { return "LIVE · 2 MIN" }
+        guard selectedTime != nil else {
+            return displayMode == .precise ? "LIVE · INTERVAL" : "LIVE · 2 MIN"
+        }
         return "SELECTED"
     }
 
@@ -1169,22 +1228,13 @@ struct MonitoringTimelineView: View, Equatable {
         guard let latest = samples.last(where: { $0.duration > 0 }) else {
             return .unavailable("Waiting for the first complete reading.")
         }
-        let age = max(0, interval.end.timeIntervalSince(latest.timestamp))
-        guard age <= max(120, latest.samplingInterval * 4) else {
-            return .unavailable("No current reading. Earlier history remains visible below.")
+        guard MachineStatusSignal.isFresh(latest, at: Date()) else {
+            return .unavailable("No fresh reading. Earlier history remains visible.")
         }
 
-        let recentCutoff = latest.timestamp.addingTimeInterval(-120)
-        let recent = processorTrend.filter {
-            $0.timestamp >= recentCutoff && $0.timestamp <= latest.timestamp
-        }
-        let cpu = recent.isEmpty
-            ? latest.cpuPercent
-            : recent.reduce(0.0) { $0 + $1.cpuPercent } / Double(recent.count)
-        let graphics = recent.compactMap(\.gpuPercent)
-        let gpu = graphics.isEmpty
-            ? latest.gpuPercent
-            : graphics.reduce(0, +) / Double(graphics.count)
+        // Live health is independent of history-range smoothing.
+        let cpu = liveProcessorReading?.cpuPercent ?? latest.cpuPercent
+        let gpu = liveProcessorReading?.gpuPercent ?? latest.gpuPercent
         let gpuLeads = (gpu ?? 0) > cpu + 5
         let usage = min(100, max(0, gpuLeads ? (gpu ?? 0) : cpu))
         let source = gpuLeads ? "GPU activity" : "CPU demand"
@@ -1210,7 +1260,7 @@ struct MonitoringTimelineView: View, Equatable {
             return TimelineCurrentStatus(
                 urgency: .elevated,
                 tone: .memory,
-                message: "Memory pressure rose briefly. The Mac should remain responsive; no action is needed unless it persists."
+                message: "Memory pressure rose briefly. Keep an eye on it if slowdown repeats."
             )
         }
         if baseUrgency == .critical {
@@ -1224,20 +1274,20 @@ struct MonitoringTimelineView: View, Equatable {
             return TimelineCurrentStatus(
                 urgency: .elevated,
                 tone: latest.memoryPressure == .elevated ? .memory : .active,
-                message: "Demand is elevated but manageable. The Mac should remain responsive; no action is needed unless slowdown repeats."
+                message: "Memory or thermal pressure is elevated. Check again if slowdown repeats."
             )
         }
         if baseUrgency == .elevated {
             return TimelineCurrentStatus(
                 urgency: .elevated,
                 tone: .active,
-                message: "\(estimate)\(source) is high at \(Formatters.percent(usage)), within a normal active-work range. No action is needed."
+                message: "\(estimate)\(source) is high at \(Formatters.percent(usage)). High demand alone does not indicate a fault."
             )
         }
         return TimelineCurrentStatus(
             urgency: .normal,
             tone: .safe,
-            message: "Demand looks normal. The Mac has comfortable headroom for active work."
+            message: "No memory or thermal pressure detected in the latest reading."
         )
     }
 
@@ -1293,7 +1343,7 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var timeAxis: some View {
-        HStack(spacing: contentSpacing) {
+        HStack(spacing: usesMenuBarGraphOnlyLayout ? 0 : contentSpacing) {
             Color.clear.frame(width: usesMenuBarGraphOnlyLayout ? 0 : labelWidth, height: 1)
             GeometryReader { geometry in
                 let plotWidth = max(1, geometry.size.width - UnifiedTimelineLayout.rightAxisWidth)
@@ -1302,25 +1352,21 @@ struct MonitoringTimelineView: View, Equatable {
                         let tickLabelWidth: CGFloat = mark.kind == .clock
                             ? (mark.label.contains(" ") ? 58 : 46)
                             : 78
-                        let fraction = min(1, max(
-                            0,
-                            mark.date.timeIntervalSince(interval.start) / max(1, interval.duration)
-                        ))
+                        let fraction = TimelineSemantics.timelineFraction(for: mark.date, within: interval)
                         let clockX = plotWidth * CGFloat(fraction)
                         let isTerminal = abs(mark.date.timeIntervalSince(interval.end)) < 1
                         let positionX = isTerminal
                             ? plotWidth + UnifiedTimelineLayout.rightAxisWidth / 2
                             : max(tickLabelWidth / 2, clockX)
-                        VStack(spacing: 1) {
-                            Capsule()
-                                .fill(mark.kind.color.opacity(mark.kind == .wake ? 0.72 : 0.38))
-                                .frame(width: 1, height: 3)
-                            Text(mark.label)
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(mark.kind.color)
-                                .frame(width: tickLabelWidth)
-                        }
-                        .position(x: positionX, y: 8)
+                        Capsule()
+                            .fill(mark.kind.color.opacity(mark.kind == .wake ? 0.72 : 0.46))
+                            .frame(width: 1, height: 4)
+                            .position(x: clockX, y: 2)
+                        Text(mark.label)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(mark.kind.color)
+                            .frame(width: tickLabelWidth)
+                            .position(x: positionX, y: 11)
                     }
                 }
             }
@@ -1402,6 +1448,15 @@ struct MonitoringTimelineView: View, Equatable {
     }
 
     private var timeMarks: [TimelineAxisMark] {
+        if historical {
+            return [0.0, 0.25, 0.5, 0.75, 1.0].map { fraction in
+                let date = interval.start.addingTimeInterval(interval.duration * fraction)
+                return TimelineAxisMark(date: date, label: clockAxisLabel(for: date))
+            }
+        }
+        if snapshot.range == .today {
+            return todayTimeMarks
+        }
         if snapshot.range == .twentyFourHours {
             return twentyFourHourTimeMarks
         }
@@ -1413,11 +1468,13 @@ struct MonitoringTimelineView: View, Equatable {
         switch snapshot.range {
         case .oneHour:
             marks = [(-3_600, "−1h"), (-1_800, "−30m"), (-600, "−10m"), (0, "Now")]
+        case .fourHours:
+            marks = [(-14_400, "−4h"), (-7_200, "−2h"), (-3_600, "−1h"), (0, "Now")]
         case .sixHours:
             marks = [(-21_600, "−6h"), (-7_200, "−2h"), (-3_600, "−1h"), (-1_800, "−30m"), (0, "Now")]
         case .twelveHours:
             marks = [(-43_200, "−12h"), (-21_600, "−6h"), (-10_800, "−3h"), (-3_600, "−1h"), (0, "Now")]
-        case .twentyFourHours:
+        case .today, .twentyFourHours:
             marks = []
         case .fortyEightHours, .oneWeek:
             marks = []
@@ -1429,11 +1486,15 @@ struct MonitoringTimelineView: View, Equatable {
             )
         }
         guard let wake = leadingWakeBoundary else { return resolved }
+        // Keep the extra wake label readable at each scale, especially 4h
+        // where a wake a few minutes before −1h must replace that tick.
+        let minimumClockSeparation = max(5 * 60, interval.duration * 0.10)
+        guard interval.end.timeIntervalSince(wake) >= minimumClockSeparation else { return resolved }
 
         if let closeIndex = resolved.indices.min(by: {
             abs(resolved[$0].date.timeIntervalSince(wake))
                 < abs(resolved[$1].date.timeIntervalSince(wake))
-        }), abs(resolved[closeIndex].date.timeIntervalSince(wake)) <= 5 * 60 {
+        }), abs(resolved[closeIndex].date.timeIntervalSince(wake)) <= minimumClockSeparation {
             resolved[closeIndex] = TimelineAxisMark(
                 date: wake,
                 label: relativeAxisLabel(for: wake)
@@ -1448,6 +1509,25 @@ struct MonitoringTimelineView: View, Equatable {
             resolved.append(TimelineAxisMark(date: wake, label: relativeAxisLabel(for: wake)))
         }
         return resolved.sorted { $0.date < $1.date }
+    }
+
+    /// Today and Auto use their actual interval start: midnight for explicit
+    /// Today, or the latest evidence-based waking-day boundary for Auto.
+    private var todayTimeMarks: [TimelineAxisMark] {
+        guard interval.duration > 0 else { return [TimelineAxisMark(date: interval.end, label: "Now")] }
+        let minutes = interval.duration / 60
+        let step = minutes <= 10 ? 2 : minutes <= 30 ? 5 : minutes <= 60 ? 15
+            : minutes <= 180 ? 30 : minutes <= 360 ? 60 : minutes <= 720 ? 120 : 240
+        var dates = [interval.start]
+        var cursor = interval.start
+        while let next = Calendar.autoupdatingCurrent.date(byAdding: .minute, value: step, to: cursor),
+              next > cursor,
+              next < interval.end.addingTimeInterval(-interval.duration * 0.13) {
+            dates.append(next)
+            cursor = next
+        }
+        return dates.map { TimelineAxisMark(date: $0, label: clockAxisLabel(for: $0)) }
+            + [TimelineAxisMark(date: interval.end, label: "Now")]
     }
 
     /// A day view should read like a day, not a countdown. Real clock labels
@@ -1674,77 +1754,9 @@ struct MonitoringTimelineView: View, Equatable {
         range: MonitoringRange,
         displayMode: TimelineDisplayMode
     ) -> [ProcessorTrendPoint] {
-        let bucketDuration = TimelineSemantics.processorTrendBucketDuration(
-            for: range,
-            displayMode: displayMode
+        TimelineSemantics.processorTrend(
+            from: samples, within: interval, range: range, displayMode: displayMode
         )
-
-        var buckets: [ProcessorBucketKey: [SystemSample]] = [:]
-        var segment = 0
-        var previous: SystemSample?
-        for sample in samples where sample.timestamp >= interval.start && sample.timestamp <= interval.end {
-            guard sample.duration > 0 else {
-                previous = nil
-                segment += 1
-                continue
-            }
-            if let previous {
-                let gap = sample.timestamp.timeIntervalSince(previous.timestamp)
-                let expected = max(previous.samplingInterval, sample.samplingInterval)
-                if gap <= 0 || gap > max(120, expected * 2.2) { segment += 1 }
-            }
-            let bucket = max(0, Int(sample.timestamp.timeIntervalSince(interval.start) / bucketDuration))
-            buckets[ProcessorBucketKey(segment: segment, bucket: bucket), default: []].append(sample)
-            previous = sample
-        }
-
-        return buckets.keys.sorted {
-            $0.segment == $1.segment ? $0.bucket < $1.bucket : $0.segment < $1.segment
-        }.compactMap { key in
-            guard let values = buckets[key], let latest = values.last else { return nil }
-            let cpuWeighted = values.reduce(0.0) { partial, sample in
-                partial + sample.cpuPercent * max(1, sample.duration)
-            }
-            let cpuWeight = values.reduce(0.0) { $0 + max(1, $1.duration) }
-            let graphics = values.compactMap { sample -> (Double, Double)? in
-                guard let gpu = sample.gpuPercent else { return nil }
-                return (gpu, max(1, sample.duration))
-            }
-            let gpuPercent: Double? = graphics.isEmpty
-                ? nil
-                : graphics.reduce(0.0) { $0 + $1.0 * $1.1 } / graphics.reduce(0.0) { $0 + $1.1 }
-            let coreReadings = values.compactMap { sample -> (Double, Double, Double, Double)? in
-                guard let performance = sample.performanceCorePercent,
-                      let efficiency = sample.efficiencyCorePercent,
-                      let contribution = sample.performanceCoreContributionPercent,
-                      performance.isFinite, efficiency.isFinite, contribution.isFinite else { return nil }
-                return (performance, efficiency, contribution, max(1, sample.duration))
-            }
-            let hasCompleteCoreCoverage = CoreDistributionSemantics.hasCompleteCoverage(in: values)
-            let coreWeight = coreReadings.reduce(0.0) { $0 + $1.3 }
-            let cpuPercent = cpuWeighted / max(1, cpuWeight)
-            let performanceCorePercent: Double? = !hasCompleteCoreCoverage
-                ? nil
-                : coreReadings.reduce(0.0) { $0 + $1.0 * $1.3 } / coreWeight
-            let efficiencyCorePercent: Double? = !hasCompleteCoreCoverage
-                ? nil
-                : coreReadings.reduce(0.0) { $0 + $1.1 * $1.3 } / coreWeight
-            let performanceContribution: Double? = !hasCompleteCoreCoverage
-                ? nil
-                : min(
-                    cpuPercent,
-                    max(0, coreReadings.reduce(0.0) { $0 + $1.2 * $1.3 } / coreWeight)
-                )
-            return ProcessorTrendPoint(
-                segment: key.segment,
-                timestamp: latest.timestamp,
-                cpuPercent: cpuPercent,
-                performanceCorePercent: performanceCorePercent,
-                efficiencyCorePercent: efficiencyCorePercent,
-                performanceCoreContributionPercent: performanceContribution,
-                gpuPercent: gpuPercent
-            )
-        }
     }
 
     private static func makeMemoryConditions(
@@ -1813,8 +1825,7 @@ struct MonitoringTimelineView: View, Equatable {
         duration: TimeInterval = 2 * 60
     ) -> TimelineLiveProcessorReading? {
         guard let latest = samples.last(where: { $0.duration > 0 }) else { return nil }
-        let freshness = max(120, latest.samplingInterval * 4)
-        guard end.timeIntervalSince(latest.timestamp) <= freshness else { return nil }
+        guard MachineStatusSignal.isFresh(latest, at: Date()) else { return nil }
 
         let start = end.addingTimeInterval(-duration)
         var cpuTotal = 0.0
@@ -1824,7 +1835,7 @@ struct MonitoringTimelineView: View, Equatable {
 
         for sample in samples where sample.duration > 0 {
             let observedEnd = min(end, sample.timestamp)
-            let observedStart = max(start, sample.timestamp.addingTimeInterval(-sample.duration))
+            let observedStart = max(start, sample.timestamp.addingTimeInterval(-CoverageEvaluator.boundedDuration(of: sample)))
             let overlap = observedEnd.timeIntervalSince(observedStart)
             guard overlap > 0, sample.cpuPercent.isFinite else { continue }
             cpuTotal += sample.cpuPercent * overlap
@@ -1937,22 +1948,20 @@ private struct ContributorAppIcon: View {
 }
 
 private enum TimelineColors {
-    private static let electricPink = Color(.displayP3, red: 1.0, green: 0.17, blue: 0.84)
-
-    static let processor = Color(nsColor: .systemBlue)
-    static let handsOn = electricPink
-    static let automatic = Color(nsColor: .secondaryLabelColor)
-    static let graphics = Color(nsColor: .systemTeal)
-    static let battery = Color(nsColor: .systemGreen)
+    static let processor = MachinePalette.processor
+    static let handsOn = MachinePalette.human
+    static let automatic = MachinePalette.graphics
+    static let graphics = MachinePalette.graphics
+    static let battery = MachinePalette.normal
     static let memory = Color(nsColor: .systemGray)
-    static let memoryElevated = Color(nsColor: .systemOrange)
-    static let memoryStatus = Color(nsColor: .systemYellow)
-    static let thermal = Color(nsColor: .systemOrange)
-    static let presence = electricPink
+    static let memoryElevated = MachinePalette.warm
+    static let memoryStatus = MachinePalette.accent
+    static let thermal = MachinePalette.warm
+    static let presence = MachinePalette.human
     static let sleepState = Color(nsColor: .tertiaryLabelColor)
-    static let active = Color(nsColor: .systemCyan)
-    static let normal = Color(nsColor: .systemGreen)
-    static let critical = Color(nsColor: .systemRed)
+    static let active = MachinePalette.accent
+    static let normal = MachinePalette.normal
+    static let critical = MachinePalette.critical
 }
 
 private enum TimelineStatusTone {
@@ -2065,7 +2074,7 @@ private struct UnifiedTimelineLayout: Equatable {
             memoryHeight = 36
             sectionGap = 12
         case .menuBar:
-            cpuHeight = 164
+            cpuHeight = 240
             batteryHeight = 42
             memoryHeight = 32
             sectionGap = 8
@@ -2117,15 +2126,7 @@ private struct UnifiedTimelineRects {
     let memory: CGRect?
 }
 
-private struct ProcessorTrendPoint: Equatable {
-    let segment: Int
-    let timestamp: Date
-    let cpuPercent: Double
-    let performanceCorePercent: Double?
-    let efficiencyCorePercent: Double?
-    let performanceCoreContributionPercent: Double?
-    let gpuPercent: Double?
-}
+private typealias ProcessorTrendPoint = TimelineProcessorTrendPoint
 
 private struct ProcessorRenderRun {
     let startTime: Date
@@ -2168,6 +2169,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     let batteryRuns: [BatteryTimelineRun]
     let sleepIntervals: [DateInterval]
     let interval: DateInterval
+    let timeGuideDates: [Date]
     let processorScaleMaximum: Double
     let layout: UnifiedTimelineLayout
     let displayMode: TimelineDisplayMode
@@ -2183,6 +2185,7 @@ private struct UnifiedDataCanvas: View, Equatable {
             && lhs.batteryRuns == rhs.batteryRuns
             && lhs.sleepIntervals == rhs.sleepIntervals
             && lhs.interval == rhs.interval
+            && lhs.timeGuideDates == rhs.timeGuideDates
             && lhs.processorScaleMaximum == rhs.processorScaleMaximum
             && lhs.layout == rhs.layout
             && lhs.displayMode == rhs.displayMode
@@ -2254,6 +2257,14 @@ private struct UnifiedDataCanvas: View, Equatable {
                 at: CGPoint(x: rightAxisX + 6, y: y),
                 anchor: .leading
             )
+        }
+
+        for date in timeGuideDates {
+            let x = xPosition(date, plotWidth: plot.width)
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: plot.minY))
+            path.addLine(to: CGPoint(x: x, y: plot.maxY))
+            context.stroke(path, with: .color(.secondary.opacity(0.28)), lineWidth: 0.85)
         }
     }
 
@@ -2522,14 +2533,19 @@ private struct UnifiedDataCanvas: View, Equatable {
                   let end = next.points.first,
                   end.x - start.x > 1.5 else { continue }
 
+            let gapDuration = next.startTime.timeIntervalSince(previous.endTime)
             let containsConfirmedSleep = sleepIntervals.contains { sleep in
-                sleep.end > previous.endTime && sleep.start < next.startTime
+                // Only a sleep interval covering the gap justifies the zero
+                // baseline. A brief sleep inside missing history does not.
+                sleep.start <= previous.endTime.addingTimeInterval(120)
+                    && sleep.end >= next.startTime.addingTimeInterval(-120)
+                    && sleep.duration >= gapDuration * 0.8
             }
             let path = containsConfirmedSleep
                 ? processorSleepBridge(from: start, to: end, baselineY: plot.maxY)
                 : processorCaptureBridge(from: start, to: end)
-            let glowOpacity = displayMode == .calm ? 0.045 : 0.060
-            let lineOpacity = displayMode == .calm ? 0.24 : 0.31
+            let glowOpacity = displayMode == .calm ? 0.018 : 0.035
+            let lineOpacity = displayMode == .calm ? 0.19 : 0.25
             let lineWidth: CGFloat = displayMode == .calm ? 1.15 : 1.05
 
             context.stroke(
@@ -2540,7 +2556,8 @@ private struct UnifiedDataCanvas: View, Equatable {
             context.stroke(
                 path,
                 with: .color(.secondary.opacity(lineOpacity)),
-                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round,
+                                   dash: containsConfirmedSleep ? [] : [3, 3])
             )
         }
     }
@@ -2638,11 +2655,9 @@ private struct UnifiedDataCanvas: View, Equatable {
         )
     }
 
-    /// One quiet baseline carries the three states that matter when reading
-    /// machine demand. Rendering merges gaps too small to read at the selected
-    /// scale and labels the longest run of each visible state, so the rail stays
-    /// calm without asking the user to memorize color meanings. Missing telemetry
-    /// remains blank rather than being assigned a state.
+    /// A single compact rail can show background work underneath human use.
+    /// The two signals are independent; neither assigns CPU load to the person.
+    /// Confirmed sleep stays neutral, and missing telemetry stays blank.
     private func drawMachineStateRail(
         in context: inout GraphicsContext,
         rect: CGRect
@@ -2654,10 +2669,12 @@ private struct UnifiedDataCanvas: View, Equatable {
             subtracting(sleep, from: presenceContext.handsOnIntervals),
             in: plot
         )
-        let backgroundAutomatic = compactStateRailIntervals(subtracting(
-            handsOn + sleep,
-            from: automaticWorkIntervals
-        ), in: plot)
+        let backgroundAutomatic = compactStateRailIntervals(
+            subtracting(sleep, from: automaticWorkIntervals), in: plot
+        )
+        let backgroundUncovered = compactStateRailIntervals(
+            subtracting(handsOn, from: backgroundAutomatic), in: plot
+        )
 
         drawStateRailSegments(
             sleep,
@@ -2672,12 +2689,20 @@ private struct UnifiedDataCanvas: View, Equatable {
         )
         drawStateRailSegments(
             backgroundAutomatic,
-            label: "Background",
-            color: TimelineColors.automatic,
-            lineWidth: isCalm ? 1.4 : 1.65,
-            glowOpacity: isCalm ? 0.025 : 0.06,
-            lineOpacity: isCalm ? 0.44 : 0.56,
-            labelOpacity: isCalm ? 0.55 : 0.66,
+            label: "",
+            color: .secondary,
+            lineWidth: isCalm ? 3.5 : 3.8,
+            glowOpacity: isCalm ? 0.025 : 0.035,
+            lineOpacity: isCalm ? 0.40 : 0.48,
+            labelOpacity: 0,
+            in: &context,
+            plot: plot
+        )
+        drawStateRailLabel(
+            "Background",
+            intervals: backgroundUncovered,
+            color: .secondary,
+            opacity: isCalm ? 0.57 : 0.65,
             in: &context,
             plot: plot
         )
@@ -2685,17 +2710,17 @@ private struct UnifiedDataCanvas: View, Equatable {
             handsOn,
             label: "You",
             color: TimelineColors.presence,
-            lineWidth: isCalm ? 1.65 : 1.9,
-            glowOpacity: isCalm ? 0.045 : 0.08,
-            lineOpacity: isCalm ? 0.60 : 0.72,
-            labelOpacity: isCalm ? 0.74 : 0.82,
+            lineWidth: isCalm ? 1.8 : 2.0,
+            glowOpacity: isCalm ? 0.035 : 0.055,
+            lineOpacity: isCalm ? 0.82 : 0.92,
+            labelOpacity: isCalm ? 0.80 : 0.90,
             in: &context,
             plot: plot
         )
     }
 
     /// One scale-aware label explains the longest meaningful stretch without
-    /// physical input. It is intentionally neutral: the state rail beneath it
+    /// recent human use. It is intentionally neutral: the state rail beneath it
     /// still says whether the Mac was asleep or continuing background work.
     private func drawHumanAwayAnnotation(
         in context: inout GraphicsContext,
@@ -2773,14 +2798,16 @@ private struct UnifiedDataCanvas: View, Equatable {
             )
         }
 
-        drawStateRailLabel(
-            label,
-            intervals: intervals,
-            color: color,
-            opacity: labelOpacity,
-            in: &context,
-            plot: plot
-        )
+        if !label.isEmpty {
+            drawStateRailLabel(
+                label,
+                intervals: intervals,
+                color: color,
+                opacity: labelOpacity,
+                in: &context,
+                plot: plot
+            )
+        }
     }
 
     /// Coalesces only sub-pixel sampling seams. This is a display aggregation,
@@ -2830,8 +2857,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         )
     }
 
-    /// Produces mutually exclusive state intervals without inventing activity.
-    /// Hands-on and sleep always win over automatic work when timestamps overlap.
+    /// Removes explicitly excluded intervals without inventing activity.
     private func subtracting(
         _ exclusions: [DateInterval],
         from intervals: [DateInterval]
@@ -2887,37 +2913,18 @@ private struct UnifiedDataCanvas: View, Equatable {
         in context: inout GraphicsContext,
         plot: CGRect
     ) {
-        guard points.count >= 2, let first = points.first, let last = points.last else { return }
+        guard points.count >= 2 else { return }
         var line = Path()
-        line.move(to: first)
+        line.move(to: points[0])
         for point in points.dropFirst() { line.addLine(to: point) }
-        let width = max(1, last.x - first.x)
-        let fadeFraction = min(0.20, max(0.035, 14 / width))
-        let fadesIn = first.x > plot.minX + 2
-        let fadesOut = last.x < plot.maxX - 2
-        var mainStops: [Gradient.Stop] = [
-            .init(color: color.opacity(fadesIn ? 0.16 : 0.90), location: 0)
-        ]
-        if fadesIn {
-            mainStops.append(.init(color: color.opacity(0.90), location: fadeFraction))
-        }
-        if fadesOut {
-            mainStops.append(.init(color: color.opacity(0.90), location: 1 - fadeFraction))
-        }
-        mainStops.append(.init(color: color.opacity(fadesOut ? 0.16 : 0.90), location: 1))
-        let mainShading = GraphicsContext.Shading.linearGradient(
-            Gradient(stops: mainStops),
-            startPoint: CGPoint(x: first.x, y: plot.midY),
-            endPoint: CGPoint(x: last.x, y: plot.midY)
-        )
         context.stroke(
             line,
-            with: .color(color.opacity(0.085)),
+            with: .color(color.opacity(0.10)),
             style: StrokeStyle(lineWidth: lineWidth + 3.2, lineCap: .round, lineJoin: .round)
         )
         context.stroke(
             line,
-            with: mainShading,
+            with: .color(color.opacity(0.94)),
             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
         )
     }
@@ -3235,7 +3242,7 @@ private struct UnifiedDataCanvas: View, Equatable {
     }
 
     private func xPosition(_ date: Date, plotWidth: CGFloat) -> CGFloat {
-        let fraction = min(1, max(0, date.timeIntervalSince(interval.start) / max(1, interval.duration)))
+        let fraction = TimelineSemantics.timelineFraction(for: date, within: interval)
         return plotWidth * CGFloat(fraction)
     }
 
@@ -3290,7 +3297,7 @@ private struct UnifiedDataCanvas: View, Equatable {
         if !presenceContext.handsOnIntervals.isEmpty ||
             !automaticWorkIntervals.isEmpty ||
             !sleepIntervals.isEmpty {
-            summary += " A quiet labeled baseline distinguishes measured hands-on use, observed background work without physical input, and confirmed sleep. Awake time without evidence of either state and unrecorded gaps remain blank."
+            summary += " A quiet labeled baseline distinguishes recent human use, the Mac working while you are away, and confirmed sleep. Human presence does not attribute CPU usage. Awake time without evidence of either state and unrecorded gaps remain blank."
         }
         return summary
     }

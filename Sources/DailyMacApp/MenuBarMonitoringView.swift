@@ -16,23 +16,36 @@ struct MenuBarMonitoringView: View {
             Group {
                 if let content = model.menuBarMonitoringContent {
                     VStack(spacing: 0) {
-                        if content.snapshot.sampleCount > 0 {
+                        if content.snapshot.sampleCount > 0
+                            || (model.menuBarSelectedDayStart != nil && !content.events.isEmpty) {
                             MonitoringTimelineView(
                                 snapshot: content.snapshot,
                                 samples: content.samples,
                                 backgroundPoints: content.backgroundPoints,
                                 events: content.events,
                                 appContributors: content.appContributors,
+                                appResourceSamples: content.appResourceSamples,
                                 presentation: .menuBar,
-                                displayMode: selectedTimelineDisplayMode
+                                displayMode: selectedTimelineDisplayMode,
+                                historical: model.menuBarSelectedDayStart != nil
                             )
                             .equatable()
+                        } else if model.menuBarSelectedDayStart != nil {
+                            historicalEmptyState
                         } else {
                             emptyState
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 8)
+                } else if model.menuBarIsRefreshing {
+                    loadingState
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                } else if model.menuBarSelectedDayStart != nil {
+                    historicalEmptyState
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                 } else {
                     emptyState
                 }
@@ -40,11 +53,6 @@ struct MenuBarMonitoringView: View {
         }
         .frame(width: 760)
         .background(Color(nsColor: .windowBackgroundColor))
-        .background {
-            MenuBarWindowPresentationObserver {
-                model.menuBarDidOpen()
-            }
-        }
     }
 
     private var header: some View {
@@ -52,10 +60,16 @@ struct MenuBarMonitoringView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Monitoring")
                     .font(.headline)
-                MenuBarActivitySummaryLabel(
-                    activeTodayDuration: model.todayReport?.activeDuration,
-                    currentSessionDuration: model.currentSessionDuration
-                )
+                if let day = model.menuBarSelectedDayStart {
+                    Text(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    MenuBarActivitySummaryLabel(
+                        activeTodayDuration: model.todayReport?.activeDuration,
+                        currentSessionDuration: model.currentSessionDuration
+                    )
+                }
             }
 
             Spacer(minLength: 12)
@@ -69,17 +83,34 @@ struct MenuBarMonitoringView: View {
                         Label("Cached", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
                             .foregroundStyle(.secondary)
                             .help(model.menuBarRefreshMessage ?? "")
+                    } else if let staleReadingLabel {
+                        Text(staleReadingLabel)
+                            .foregroundStyle(.secondary)
+                            .help("The graph stays available, but no fresh machine reading is being claimed.")
                     }
                 }
                 .font(.caption)
 
-                MenuBarMonitoringRangeControl(
-                    preference: model.menuBarMonitoringRangePreference,
-                    effectiveRange: model.menuBarMonitoringContent?.snapshot.range
-                        ?? model.menuBarMonitoringRange,
-                    onSelectSmart: model.selectSmartMenuBarMonitoringRange,
-                    onSelectRange: model.selectMenuBarMonitoringRange
-                )
+                if model.menuBarSelectedDayStart != nil {
+                    historicalDayControl
+                } else {
+                    MenuBarMonitoringRangeControl(
+                        preference: model.menuBarMonitoringRangePreference,
+                        effectiveRange: model.menuBarMonitoringContent?.snapshot.range
+                            ?? model.menuBarMonitoringRange,
+                        effectiveInterval: model.menuBarMonitoringContent?.snapshot.interval,
+                        onSelectSmart: model.selectSmartMenuBarMonitoringRange,
+                        onSelectRange: model.selectMenuBarMonitoringRange
+                    )
+                    Button(action: model.browsePreviousMenuBarDay) {
+                        Image(systemName: "calendar.badge.clock")
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!model.canBrowsePreviousMenuBarDay)
+                    .help("Browse yesterday")
+                    .accessibilityLabel("Browse yesterday")
+                }
 
                 TimelineDisplayModeControl()
 
@@ -106,14 +137,25 @@ struct MenuBarMonitoringView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+    }
+
+    private var staleReadingLabel: String? {
+        guard model.menuBarSelectedDayStart == nil,
+              model.collectionState == .monitoring,
+              let latest = model.menuBarMonitoringContent?.samples.last,
+              !MachineStatusSignal.isFresh(latest) else { return nil }
+        let age = max(0, Date().timeIntervalSince(latest.timestamp))
+        return age < 60 ? "Last reading <1m ago" : "Last reading \(Int(age / 60))m ago"
     }
 
     private var menuBarRangeTitle: String {
         let displayedRange = model.menuBarMonitoringContent?.snapshot.range
             ?? model.menuBarMonitoringRange
         switch displayedRange {
+        case .today: return "Today"
         case .oneHour: return "Last hour"
+        case .fourHours: return "Last 4 hours"
         case .sixHours: return "Last 6 hours"
         case .twelveHours: return "Last 12 hours"
         case .twentyFourHours: return "Last 24 hours"
@@ -144,6 +186,69 @@ struct MenuBarMonitoringView: View {
         .padding(20)
     }
 
+    private var historicalEmptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "chart.xyaxis.line")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text("No detailed readings for this day")
+                .font(.subheadline.weight(.medium))
+            Text("MY MACHINE keeps detailed readings for \(settingsRetentionDays) days. Unrecorded time isn't treated as sleep or zero activity.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 400)
+        }
+        .frame(maxWidth: .infinity, minHeight: 188)
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(model.menuBarSelectedDayStart == nil ? "Opening live view…" : "Opening day…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 188)
+    }
+
+    private var settingsRetentionDays: Int { max(1, model.settings.rawRetentionDays) }
+
+    private var historicalDayControl: some View {
+        HStack(spacing: 2) {
+            Button(action: model.browsePreviousMenuBarDay) {
+                Image(systemName: "chevron.left")
+                    .frame(width: 20, height: 28)
+            }
+            .disabled(!model.canBrowsePreviousMenuBarDay)
+            .help("Previous day")
+            .accessibilityLabel("Previous day")
+
+            if let day = model.menuBarSelectedDayStart {
+                Text(day.formatted(.dateTime.weekday(.abbreviated).day()))
+                    .font(.caption.weight(.semibold))
+                    .frame(minWidth: 48)
+                    .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+            }
+
+            Button(action: model.browseNextMenuBarDay) {
+                Image(systemName: "chevron.right")
+                    .frame(width: 20, height: 28)
+            }
+            .help("Next day")
+            .accessibilityLabel("Next day")
+
+            Button("Live", action: model.returnToLiveMenuBarDay)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 6)
+                .help("Return to today's live view")
+                .accessibilityLabel("Return to today's live view")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 5)
+        .background(.thinMaterial, in: Capsule())
+    }
+
     private var moreOptionsMenu: some View {
         Menu {
             if model.collectionState == .paused {
@@ -162,6 +267,10 @@ struct MenuBarMonitoringView: View {
                         Label(option.label, systemImage: appearance == option.rawValue ? "checkmark" : option.symbol)
                     }
                 }
+            }
+            Divider()
+            SettingsLink {
+                Text("Settings & Privacy…")
             }
             Divider()
             Button("Quit MY MACHINE") { NSApp.terminate(nil) }
@@ -208,272 +317,5 @@ struct MenuBarMonitoringView: View {
         default:
             return "MY MACHINE will fill this view automatically as it observes the Mac."
         }
-    }
-}
-
-/// `MenuBarExtra` does not expose an `isPresented` binding. This lightweight
-/// bridge observes only its own window so every genuine reopening requests a
-/// fresh cache without holding up presentation.
-private struct MenuBarWindowPresentationObserver: NSViewRepresentable {
-    let didOpen: () -> Void
-
-    func makeNSView(context: Context) -> PresentationProbeView {
-        PresentationProbeView(didOpen: didOpen)
-    }
-
-    func updateNSView(_ nsView: PresentationProbeView, context: Context) {
-        nsView.didOpen = didOpen
-    }
-
-    static func dismantleNSView(_ nsView: PresentationProbeView, coordinator: ()) {
-        nsView.stopObserving()
-    }
-}
-
-private final class PresentationProbeView: NSView {
-    var didOpen: () -> Void
-
-    private weak var observedWindow: NSWindow?
-    private var observers: [NSObjectProtocol] = []
-    private var presentationReported = false
-    private var deferredCloseCheck: DispatchWorkItem?
-    private var deferredPositioning: DispatchWorkItem?
-    private var deferredVisibilityRecovery: DispatchWorkItem?
-
-    init(didOpen: @escaping () -> Void) {
-        self.didOpen = didOpen
-        super.init(frame: .zero)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window !== observedWindow else { return }
-        stopObserving()
-        guard let window else { return }
-        observedWindow = window
-        concealWindowForAnchoredPlacement(window)
-
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(
-            forName: NSWindow.didBecomeKeyNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            self?.deferredCloseCheck?.cancel()
-            self?.reportOpeningIfNeeded()
-        })
-        observers.append(center.addObserver(
-            forName: NSWindow.didResignKeyNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            self?.checkForClosureShortly()
-        })
-        observers.append(center.addObserver(
-            forName: NSWindow.didChangeOcclusionStateNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            self?.updatePresentationState()
-        })
-        observers.append(center.addObserver(
-            forName: NSWindow.didResizeNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            self?.restorePresentationAnchor()
-        })
-
-        DispatchQueue.main.async { [weak self] in
-            self?.reportOpeningIfNeeded()
-        }
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    func stopObserving() {
-        if let observedWindow {
-            MenuBarPanelAnchorLease.shared.releaseSoon(afterClosing: observedWindow)
-        }
-        deferredCloseCheck?.cancel()
-        deferredCloseCheck = nil
-        deferredPositioning?.cancel()
-        deferredPositioning = nil
-        deferredVisibilityRecovery?.cancel()
-        deferredVisibilityRecovery = nil
-        for observer in observers {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        observers.removeAll()
-        recoverVisibilityIfWindowSurvives(observedWindow)
-        observedWindow = nil
-        presentationReported = false
-    }
-
-    private func reportOpeningIfNeeded() {
-        guard let window = observedWindow,
-              window.isVisible,
-              window.isKeyWindow,
-              !presentationReported else { return }
-        let anchor = MenuBarPanelAnchorLease.shared.acquire(for: window)
-        presentationReported = true
-        didOpen()
-        positionWindow(window, under: anchor)
-    }
-
-    private func restorePresentationAnchor() {
-        guard presentationReported,
-              let window = observedWindow,
-              window.isVisible,
-              window.isKeyWindow,
-              let anchor = MenuBarPanelAnchorLease.shared.current else { return }
-        // Intrinsic-size changes (for example switching Calm/Precise) should
-        // stay anchored without replaying the first-presentation conceal/reveal.
-        positionWindowImmediately(window, under: anchor)
-    }
-
-    private func positionWindow(_ window: NSWindow, under anchor: MenuBarPanelAnchor) {
-        deferredPositioning?.cancel()
-        concealWindowForAnchoredPlacement(window)
-        positionWindowImmediately(window, under: anchor)
-
-        let item = DispatchWorkItem { [weak self, weak window] in
-            guard let self,
-                  let window,
-                  self.observedWindow === window,
-                  self.presentationReported,
-                  window.isVisible,
-                  window.isKeyWindow else { return }
-
-            self.positionWindowImmediately(window, under: anchor)
-            window.alphaValue = 1
-        }
-        deferredPositioning = item
-        DispatchQueue.main.async(execute: item)
-    }
-
-    private func concealWindowForAnchoredPlacement(_ window: NSWindow) {
-        deferredVisibilityRecovery?.cancel()
-        deferredVisibilityRecovery = nil
-        window.alphaValue = 0
-    }
-
-    private func positionWindowImmediately(_ window: NSWindow, under anchor: MenuBarPanelAnchor) {
-        let screen = NSScreen.screens.first {
-            NSMouseInRect(anchor.pointer, $0.frame, false)
-        } ?? window.screen ?? NSScreen.main
-        guard let screen else { return }
-
-        let bounds = screen.visibleFrame.insetBy(dx: 8, dy: 0)
-        var frame = window.frame
-        let desiredX = anchor.pointer.x - frame.width / 2
-        if frame.width <= bounds.width {
-            frame.origin.x = min(max(desiredX, bounds.minX), bounds.maxX - frame.width)
-        } else {
-            frame.origin.x = bounds.midX - frame.width / 2
-        }
-        let desiredY = anchor.topEdge - frame.height
-        if frame.height <= bounds.height {
-            frame.origin.y = min(max(desiredY, bounds.minY), bounds.maxY - frame.height)
-        }
-        guard abs(frame.origin.x - window.frame.origin.x) >= 0.5
-                || abs(frame.origin.y - window.frame.origin.y) >= 0.5 else { return }
-        window.setFrameOrigin(frame.origin)
-    }
-
-    private func recoverVisibilityIfWindowSurvives(_ window: NSWindow?) {
-        guard let window, window.alphaValue < 1 else { return }
-        let item = DispatchWorkItem { [weak window] in
-            guard let window,
-                  window.isVisible,
-                  window.isKeyWindow,
-                  window.alphaValue < 1 else { return }
-            window.alphaValue = 1
-        }
-        deferredVisibilityRecovery = item
-        DispatchQueue.main.async(execute: item)
-    }
-
-    private func updatePresentationState() {
-        guard let window = observedWindow else { return }
-        if !window.isVisible || !window.occlusionState.contains(.visible) {
-            deferredPositioning?.cancel()
-            deferredPositioning = nil
-            window.alphaValue = 1
-            presentationReported = false
-            MenuBarPanelAnchorLease.shared.releaseSoon(afterClosing: window)
-        } else if window.isKeyWindow {
-            reportOpeningIfNeeded()
-        }
-    }
-
-    private func checkForClosureShortly() {
-        deferredCloseCheck?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            guard let self, let window = self.observedWindow else { return }
-            if !window.isVisible || !window.occlusionState.contains(.visible) {
-                self.deferredPositioning?.cancel()
-                self.deferredPositioning = nil
-                window.alphaValue = 1
-                self.presentationReported = false
-                MenuBarPanelAnchorLease.shared.releaseSoon(afterClosing: window)
-            }
-        }
-        deferredCloseCheck = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
-    }
-}
-
-/// SwiftUI can replace the private `MenuBarExtra` window when its intrinsic
-/// height changes. Treating that replacement as a fresh opening would capture
-/// the mode button's pointer position and make the whole panel jump. This short
-/// lease carries the genuine opening anchor across an immediate replacement,
-/// while clearing it after the panel has actually closed.
-private struct MenuBarPanelAnchor {
-    let pointer: NSPoint
-    let topEdge: CGFloat
-}
-
-private final class MenuBarPanelAnchorLease {
-    static let shared = MenuBarPanelAnchorLease()
-
-    private(set) var current: MenuBarPanelAnchor?
-    private weak var activeWindow: NSWindow?
-    private var deferredRelease: DispatchWorkItem?
-
-    private init() {}
-
-    func acquire(for window: NSWindow) -> MenuBarPanelAnchor {
-        deferredRelease?.cancel()
-        deferredRelease = nil
-        activeWindow = window
-        if let current { return current }
-
-        let anchor = MenuBarPanelAnchor(
-            pointer: NSEvent.mouseLocation,
-            topEdge: window.frame.maxY
-        )
-        current = anchor
-        return anchor
-    }
-
-    func releaseSoon(afterClosing window: NSWindow) {
-        deferredRelease?.cancel()
-        let item = DispatchWorkItem { [weak self, weak window] in
-            guard let self else { return }
-            if let activeWindow = self.activeWindow,
-               activeWindow !== window,
-               activeWindow.isVisible {
-                return
-            }
-            self.activeWindow = nil
-            self.current = nil
-            self.deferredRelease = nil
-        }
-        deferredRelease = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: item)
     }
 }

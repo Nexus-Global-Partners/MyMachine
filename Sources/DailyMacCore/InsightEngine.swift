@@ -12,6 +12,7 @@ public struct InsightEngine: Sendable {
         historicalReports: [DailyReport] = []
     ) -> DailyReport {
         let ordered = samples.sorted { $0.timestamp < $1.timestamp }
+        let calibratedProcesses = processSamples.filter { $0.cpuMeasurementVersion == 1 }
         let longestContinuousCoverage = CoverageEvaluator.longestContinuousDuration(in: ordered)
         let supportsNarrative = longestContinuousCoverage >= CoverageEvaluator.narrativeMinimum
         let active = ordered.filter { !$0.isIdle }
@@ -33,8 +34,8 @@ public struct InsightEngine: Sendable {
         let categories = summarizeCategories(active)
         let batteryChange = meaningfulBatteryChange(ordered)
         let important = supportsNarrative ? importantMoments(samples: ordered, events: events) : []
-        let correlations = supportsNarrative ? makeCorrelations(samples: active, processes: processSamples, categories: categories, apps: apps, history: historicalReports) : []
-        let recommendations = supportsNarrative ? makeRecommendations(samples: ordered, processes: processSamples, batteryChange: batteryChange, thermalPeak: thermalPeak) : []
+        let correlations = supportsNarrative ? makeCorrelations(samples: active, processes: calibratedProcesses, categories: categories, apps: apps, history: historicalReports) : []
+        let recommendations = supportsNarrative ? makeRecommendations(samples: ordered, processes: calibratedProcesses, batteryChange: batteryChange, thermalPeak: thermalPeak) : []
         let headline = supportsNarrative
             ? makeHeadline(activeDuration: activeDuration, apps: apps, categories: categories, averageCPU: averageCPU, memoryPressure: pressurePeak, thermalPeak: thermalPeak)
             : "Not enough continuous coverage for a reliable briefing"
@@ -55,11 +56,14 @@ public struct InsightEngine: Sendable {
         } else {
             limitations.append("The current graphics driver did not expose a usable aggregate GPU activity estimate for these readings, so no GPU value was inferred.")
         }
-        limitations.append("Fan speed and exact sensor temperatures are not claimed because macOS offers no stable supported interface for them here.")
-        if processSamples.isEmpty && !ordered.isEmpty {
+        limitations.append("Fan RPM may appear as a best-effort live AppleSMC reading in the menu bar, but it is not retained in reports. Exact sensor temperatures are not claimed.")
+        if calibratedProcesses.isEmpty && !ordered.isEmpty {
             limitations.append("Process attribution was unavailable for these samples, so causes are described at the application level only.")
-        } else if !processSamples.isEmpty {
+        } else if !calibratedProcesses.isEmpty {
             limitations.append("Process attribution is best-effort and incomplete for protected or short-lived processes; named processes are the largest observed contributors, not a complete accounting.")
+        }
+        if calibratedProcesses.count < processSamples.count {
+            limitations.append("Legacy per-process CPU readings used an uncalibrated time unit and are omitted from attribution. Whole-machine CPU and the day's aggregate usage remain available.")
         }
 
         return DailyReport(
@@ -89,7 +93,10 @@ public struct InsightEngine: Sendable {
             recommendations: recommendations,
             limitations: limitations,
             sampleCount: ordered.count,
-            longestContinuousCoverage: longestContinuousCoverage
+            longestContinuousCoverage: longestContinuousCoverage,
+            resourceSummary: DayBoundaries.interval(for: dayKey, timezone: timezone).map {
+                MonitoringHistory.resourceSummary(from: ordered, within: $0)
+            }
         )
     }
 
@@ -97,9 +104,10 @@ public struct InsightEngine: Sendable {
         range: MonitoringRange,
         endingAt end: Date = Date(),
         samples: [SystemSample],
-        appResourceSamples: [AppResourceSample] = []
+        appResourceSamples: [AppResourceSample] = [],
+        intervalOverride: DateInterval? = nil
     ) -> MonitoringSnapshot {
-        let interval = range.interval(endingAt: end)
+        let interval = intervalOverride ?? range.interval(endingAt: end)
         let segmented = segmentedWindowedSamples(samples, within: interval)
         let windowed = segmented.map(\.value)
         let ordered = windowed.map(\.sample)
@@ -135,6 +143,7 @@ public struct InsightEngine: Sendable {
         )
         let insights = monitoringInsights(
             range: range,
+            windowDuration: interval.duration,
             supportsNarrative: supportsNarrative,
             segmented: segmented,
             observedDuration: observedDuration,
@@ -786,7 +795,12 @@ public struct InsightEngine: Sendable {
         _ samples: [AppResourceSample],
         within interval: DateInterval
     ) -> [ClippedAppResource] {
-        samples.compactMap { sample in
+        let uncalibratedCollections = Set(samples.filter { $0.cpuMeasurementVersion != 1 }.map(\.timestamp))
+        return samples.compactMap { sample in
+            // Absolute CPU and share-only rollups must use one calibrated
+            // measurement generation. Exclude a whole mixed collection so its
+            // remaining apps cannot acquire a misleading share of partial CPU.
+            guard !uncalibratedCollections.contains(sample.timestamp) else { return nil }
             let measuredDuration = max(0, sample.duration)
             guard measuredDuration > 0 else { return nil }
             let measured = DateInterval(
@@ -858,11 +872,28 @@ public struct InsightEngine: Sendable {
     }
 
     private func overlapDuration(of interval: DateInterval, with matches: [DateInterval]) -> TimeInterval {
-        matches.reduce(0) { total, candidate in
+        // matchingSystemIntervals returns merged intervals ordered by start.
+        // Skip every interval ending before this sample begins instead of
+        // scanning the full pressure history for every app reading.
+        var lower = 0
+        var upper = matches.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if matches[middle].end <= interval.start {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+
+        var overlap: TimeInterval = 0
+        for candidate in matches[lower...] {
+            if candidate.start >= interval.end { break }
             let start = max(interval.start, candidate.start)
             let end = min(interval.end, candidate.end)
-            return total + max(0, end.timeIntervalSince(start))
+            overlap += max(0, end.timeIntervalSince(start))
         }
+        return overlap
     }
 
     private func backgroundImpactScore(_ summary: BackgroundAppSummary) -> Double {
@@ -1033,6 +1064,7 @@ public struct InsightEngine: Sendable {
 
     private func monitoringInsights(
         range: MonitoringRange,
+        windowDuration: TimeInterval,
         supportsNarrative: Bool,
         segmented: [SegmentedWindowedSample],
         observedDuration: TimeInterval,
@@ -1106,7 +1138,7 @@ public struct InsightEngine: Sendable {
             }
         }
 
-        if result.count < 3, observedDuration < range.duration * 0.75 {
+        if result.count < 3, observedDuration < windowDuration * 0.75 {
             result.append(ReportInsight(
                 kind: .observation,
                 title: "Part of this window is unrecorded",

@@ -91,6 +91,19 @@ public enum TimelineDisplayMode: String, Codable, CaseIterable, Identifiable, Se
     }
 }
 
+/// A time-weighted processor trend, including the observed endpoints of each
+/// uninterrupted run. A short run therefore remains drawable even when it is
+/// shorter than the selected averaging window.
+public struct TimelineProcessorTrendPoint: Equatable, Sendable {
+    public let segment: Int
+    public let timestamp: Date
+    public let cpuPercent: Double
+    public let performanceCorePercent: Double?
+    public let efficiencyCorePercent: Double?
+    public let performanceCoreContributionPercent: Double?
+    public let gpuPercent: Double?
+}
+
 /// A compact, evidence-bounded reading of the currently visible timeline.
 /// Durations include only intervals that were actually recorded; missing time is
 /// never relabeled as quiet use, heavy work, or hands-on activity.
@@ -191,8 +204,9 @@ public struct TimelineThermalContext: Equatable, Sendable {
 }
 
 /// Content-free presence context for the core graph. `awakeIntervals` mean the
-/// Mac was observed running; `handsOnIntervals` are the subset with measured
-/// physical input (or the legacy non-idle signal when input counts are absent).
+/// Mac was observed running; `handsOnIntervals` are the subset classified as
+/// non-idle by the content-free system idle signal. This includes a person
+/// reading between inputs, rather than mistaking every quiet sample for absence.
 /// The view decides how to distinguish unattended time and confirmed sleep.
 public struct TimelinePresenceContext: Equatable, Sendable {
     public let awakeIntervals: [DateInterval]
@@ -291,13 +305,18 @@ public struct TimelineActivityLane: Identifiable, Equatable, Sendable {
 /// Pure rules shared by the native timeline and validation executable. They keep
 /// the interface honest: absent telemetry is never relabeled as sleep or activity.
 public enum TimelineSemantics {
+    /// Shared horizontal position for plot guides, traces, and time-axis ticks.
+    public static func timelineFraction(for date: Date, within interval: DateInterval) -> Double {
+        min(1, max(0, date.timeIntervalSince(interval.start) / max(1, interval.duration)))
+    }
+
     /// A short pause should not split one natural work session. The monitor's
     /// idle classifier already waits for sustained inactivity, so this extra
     /// tolerance represents a genuinely longer interruption.
     public static let currentSessionInterruptionTolerance: TimeInterval = 10 * 60
 
-    /// Manual inspection is an explicit override. Smart is the only preference
-    /// that is allowed to move with the live work context.
+    /// Manual inspection is an explicit override. Auto uses a day-shaped range;
+    /// `automaticDayWindow` supplies its evidence-based start instead of midnight.
     public static func monitoringRange(
         for preference: MonitoringRangePreference,
         at date: Date,
@@ -306,52 +325,52 @@ public enum TimelineSemantics {
     ) -> MonitoringRange {
         switch preference {
         case .smart:
-            return recommendedMonitoringRange(
-                at: date,
-                recentSamples: recentSamples,
-                calendar: calendar
-            )
+            return .today
         case .fixed(let range):
             return range
         }
     }
 
-    /// Chooses a stable live window from recently recorded evidence. A genuinely
-    /// close-in start stays at one hour, an established work stretch gets useful
-    /// pause context, and a substantial late day becomes a day-shaped summary.
-    /// The thresholds do not overlap, so a changing live percentage cannot make
-    /// the timeline jump back and forth each time the menu opens.
-    public static func recommendedMonitoringRange(
+    /// Auto follows the current waking/work day, even when it crosses midnight.
+    /// A confirmed long sleep gives the strongest boundary. Without one, a long
+    /// break in observed human activity can bound the view, but is never called
+    /// sleep: collection might simply have stopped. Short pauses do not reset it.
+    public static func automaticDayWindow(
         at date: Date,
         recentSamples: [SystemSample],
+        sleepWakeEvents: [ActivityEvent],
         calendar: Calendar = .autoupdatingCurrent
-    ) -> MonitoringRange {
-        let dayWindow = DateInterval(start: calendar.startOfDay(for: date), end: date)
-        let activeTodayIntervals = recentSamples.compactMap { sample -> DateInterval? in
+    ) -> DateInterval {
+        let earliest = date.addingTimeInterval(-36 * 60 * 60)
+        let search = DateInterval(start: earliest, end: date)
+        let active = recentSamples.compactMap { sample -> DateInterval? in
             guard !sample.isIdle, sample.category != .idle else { return nil }
-            return observedInterval(for: sample, within: dayWindow)
-        }
-        let activeToday = mergeMeasuredIntervals(activeTodayIntervals)
-            .reduce(0) { $0 + $1.duration }
-        let sessionDuration = currentActivitySession(from: recentSamples, endingAt: date)?
-            .duration(endingAt: date) ?? 0
+            return observedInterval(for: sample, within: search)
+        }.sorted { $0.start < $1.start }
 
-        // By late afternoon, a substantial day benefits from a day-shaped view
-        // even when the person has only just returned for a new session.
-        let localHour = calendar.component(.hour, from: date)
-        if localHour >= 16, activeToday >= 4 * 60 * 60 {
-            return .twelveHours
+        let substantialSleeps = sleepIntervals(from: sleepWakeEvents, within: search)
+            .filter { $0.duration >= 3 * 60 * 60 && $0.end < date }
+        var boundaries = substantialSleeps.map(\.end)
+
+        // A long unrecorded gap is a work-day boundary, not evidence of sleep.
+        // The overnight criterion avoids restarting Auto after a normal break.
+        for pair in zip(active, active.dropFirst()) {
+            let gapStart = pair.0.end
+            let resumedAt = pair.1.start
+            let gap = resumedAt.timeIntervalSince(gapStart)
+            guard gap >= 3 * 60 * 60 else { continue }
+            guard !substantialSleeps.contains(where: {
+                $0.start < resumedAt && $0.end > gapStart
+            }) else { continue }
+            let fourAM = calendar.date(bySettingHour: 4, minute: 0, second: 0, of: resumedAt)
+            let crossesOvernight = fourAM.map { gapStart <= $0 && $0 < resumedAt } ?? false
+            if gap >= 8 * 60 * 60 || crossesOvernight {
+                boundaries.append(resumedAt)
+            }
         }
 
-        // Six wall-clock hours comfortably contains a roughly four-hour work
-        // stretch plus natural pauses without making the graph feel archival.
-        if sessionDuration >= 75 * 60 || activeToday >= 90 * 60 {
-            return .sixHours
-        }
-
-        // A new or lightly recorded day stays close enough to explain a burst
-        // without pretending sparse history deserves a broader overview.
-        return .oneHour
+        let start = boundaries.max() ?? active.first?.start ?? calendar.startOfDay(for: date)
+        return DateInterval(start: max(earliest, min(start, date.addingTimeInterval(-1))), end: date)
     }
 
     /// A stable, range-aware averaging window for the processor plot. Calm mode
@@ -359,22 +378,160 @@ public enum TimelineSemantics {
     /// Precise mode retains the existing close-inspection density.
     public static func processorTrendBucketDuration(
         for range: MonitoringRange,
-        displayMode: TimelineDisplayMode
+        displayMode: TimelineDisplayMode,
+        windowDuration: TimeInterval? = nil
     ) -> TimeInterval {
+        if range == .today {
+            // Today's window grows while live. Do not flatten a short morning
+            // into the averaging density intended for an entire 24-hour day.
+            let elapsed = windowDuration ?? range.duration
+            let scale: MonitoringRange = elapsed <= 3_600 ? .oneHour
+                : elapsed <= 6 * 3_600 ? .sixHours
+                : elapsed <= 12 * 3_600 ? .twelveHours : .twentyFourHours
+            return processorTrendBucketDuration(for: scale, displayMode: displayMode)
+        }
         switch (displayMode, range) {
         case (.precise, .oneHour): return 30
+        case (.precise, .fourHours): return 90
         case (.precise, .sixHours): return 120
         case (.precise, .twelveHours): return 300
-        case (.precise, .twentyFourHours): return 600
+        case (.precise, .today), (.precise, .twentyFourHours): return 600
         case (.precise, .fortyEightHours): return 20 * 60
         case (.precise, .oneWeek): return 60 * 60
         case (.calm, .oneHour): return 2 * 60
+        case (.calm, .fourHours): return 6 * 60
         case (.calm, .sixHours): return 8 * 60
         case (.calm, .twelveHours): return 16 * 60
-        case (.calm, .twentyFourHours): return 30 * 60
+        case (.calm, .today), (.calm, .twentyFourHours): return 30 * 60
         case (.calm, .fortyEightHours): return 60 * 60
         case (.calm, .oneWeek): return 3 * 60 * 60
         }
+    }
+
+    /// Builds display samples from measured intervals, never from wall-clock
+    /// gaps. Boundary samples are clipped and cadence-bounded before weighting.
+    /// Availability changes split GPU runs so absent readings cannot become a
+    /// measured zero or a colored interpolation through missing telemetry.
+    public static func processorTrend(
+        from samples: [SystemSample],
+        within window: DateInterval,
+        range: MonitoringRange,
+        displayMode: TimelineDisplayMode
+    ) -> [TimelineProcessorTrendPoint] {
+        guard window.duration > 0, window.duration.isFinite else { return [] }
+        let bucketDuration = processorTrendBucketDuration(
+            for: range, displayMode: displayMode, windowDuration: window.duration
+        )
+        struct Bucket {
+            var segment: Int
+            var index: Int
+            var start: Date
+            var end: Date
+            var weight = 0.0
+            var cpu = 0.0
+            var gpu = 0.0
+            var hasGPU: Bool
+            var performance = 0.0
+            var efficiency = 0.0
+            var contribution = 0.0
+            var completeCores = true
+
+            mutating func add(_ sample: SystemSample, from start: Date, to end: Date) {
+                let duration = end.timeIntervalSince(start)
+                self.end = max(self.end, end)
+                weight += duration
+                cpu += sample.cpuPercent * duration
+                if hasGPU, let value = sample.gpuPercent { gpu += value * duration }
+                if CoreDistributionSemantics.hasCompleteCoverage(in: [sample]) {
+                    performance += sample.performanceCorePercent! * duration
+                    efficiency += sample.efficiencyCorePercent! * duration
+                    contribution += sample.performanceCoreContributionPercent! * duration
+                } else {
+                    completeCores = false
+                }
+            }
+
+            func point(at timestamp: Date) -> TimelineProcessorTrendPoint {
+                let cpuMean = cpu / weight
+                return TimelineProcessorTrendPoint(
+                    segment: segment,
+                    timestamp: timestamp,
+                    cpuPercent: cpuMean,
+                    performanceCorePercent: completeCores ? performance / weight : nil,
+                    efficiencyCorePercent: completeCores ? efficiency / weight : nil,
+                    performanceCoreContributionPercent: completeCores
+                        ? min(cpuMean, max(0, contribution / weight)) : nil,
+                    gpuPercent: hasGPU ? gpu / weight : nil
+                )
+            }
+        }
+
+        var buckets: [Bucket] = []
+        var segment = 0
+        var previousEnd: Date?
+        var previousHasGPU: Bool?
+        let ordered = samples
+            .filter { $0.timestamp.timeIntervalSinceReferenceDate.isFinite }
+            .sorted { $0.timestamp < $1.timestamp }
+
+        for sample in ordered {
+            // A zero-duration restart marks a real break even when the two
+            // neighboring measured intervals would otherwise touch.
+            guard sample.duration.isFinite, sample.duration > 0,
+                  sample.samplingInterval.isFinite,
+                  sample.cpuPercent.isFinite, (0...100).contains(sample.cpuPercent) else {
+                if sample.timestamp >= window.start, sample.timestamp <= window.end {
+                    previousEnd = nil
+                    previousHasGPU = nil
+                    segment += 1
+                }
+                continue
+            }
+            guard let measured = observedInterval(for: sample, within: window) else { continue }
+            let hasGPU = sample.gpuPercent.map { $0.isFinite && (0...100).contains($0) } ?? false
+            if let previousEnd {
+                if measured.start.timeIntervalSince(previousEnd) > 1.5
+                    || previousHasGPU != hasGPU {
+                    segment += 1
+                }
+            }
+            // Duplicated or overlapping intervals cannot count twice.
+            var cursor = max(measured.start, previousEnd ?? measured.start)
+            guard cursor < measured.end else { continue }
+            while cursor < measured.end {
+                let index = max(0, Int(cursor.timeIntervalSince(window.start) / bucketDuration))
+                let boundary = window.start.addingTimeInterval(Double(index + 1) * bucketDuration)
+                let end = min(measured.end, boundary)
+                guard end > cursor else { break }
+                if buckets.last?.segment != segment || buckets.last?.index != index {
+                    buckets.append(Bucket(
+                        segment: segment,
+                        index: index,
+                        start: cursor,
+                        end: end,
+                        hasGPU: hasGPU
+                    ))
+                }
+                buckets[buckets.count - 1].add(sample, from: cursor, to: end)
+                cursor = end
+            }
+            previousEnd = measured.end
+            previousHasGPU = hasGPU
+        }
+
+        var result: [TimelineProcessorTrendPoint] = []
+        for (index, bucket) in buckets.enumerated() {
+            let startsRun = index == 0 || buckets[index - 1].segment != bucket.segment
+            let endsRun = index == buckets.count - 1 || buckets[index + 1].segment != bucket.segment
+            if startsRun { result.append(bucket.point(at: bucket.start)) }
+            if !startsRun || !endsRun {
+                result.append(bucket.point(at: bucket.start.addingTimeInterval(
+                    bucket.end.timeIntervalSince(bucket.start) / 2
+                )))
+            }
+            if endsRun { result.append(bucket.point(at: bucket.end)) }
+        }
+        return result
     }
 
     public static let sustainedMemoryConstraintMinimum: TimeInterval = 2 * 60
@@ -643,13 +800,9 @@ public enum TimelineSemantics {
             guard let interval = observedInterval(for: sample, within: window) else { continue }
             awake.append(interval)
 
-            let hasPhysicalInput: Bool
-            if let activity = sample.manualActivity {
-                hasPhysicalInput = activity.intensity(over: sample.duration) >= handsOnIntensityThreshold
-            } else {
-                hasPhysicalInput = !sample.isIdle
-            }
-            if hasPhysicalInput { handsOn.append(interval) }
+            // Input counters describe interaction intensity, not presence. The
+            // system idle classifier already tolerates natural pauses in input.
+            if !sample.isIdle, sample.category != .idle { handsOn.append(interval) }
         }
 
         return TimelinePresenceContext(
@@ -658,8 +811,8 @@ public enum TimelineSemantics {
         )
     }
 
-    /// Known periods without physical input. Confirmed sleep counts as human
-    /// absence, while unrecorded gaps remain unclassified and are never bridged.
+    /// Known periods classified idle. Confirmed sleep counts as human absence,
+    /// while unrecorded gaps remain unclassified and are never bridged.
     /// The machine-state rail can still distinguish awake background work from
     /// sleep inside these broader human-away periods.
     public static func humanAwayIntervals(

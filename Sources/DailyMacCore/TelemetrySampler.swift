@@ -5,9 +5,49 @@ import Foundation
 import IOKit
 import IOKit.ps
 
+/// Cumulative bytes exposed by one network interface or storage driver.
+/// Network interfaces can represent overlapping paths (for example a VPN and
+/// its physical link), so their sum is activity context, not unique transfers.
+public struct DeviceByteCounters: Equatable, Sendable {
+    public let read: UInt64
+    public let written: UInt64
+
+    public init(read: UInt64, written: UInt64) {
+        self.read = read
+        self.written = written
+    }
+}
+
 public enum TelemetrySemantics {
-    /// CoreGraphics defines kCGAnyInputEventType as the all-bits-set event value.
-    public static let anyInputEventTypeRawValue = UInt32.max
+    /// The session table includes software-posted events. Human-use inference
+    /// must use hardware input classes, never the broad any-event idle timer.
+    /// This remains a recent-input proxy, not proof of attention or identity;
+    /// virtual HID devices can still present themselves as hardware.
+    /// https://developer.apple.com/documentation/coregraphics/cgeventsourcestateid
+    public static let humanInputSourceState = CGEventSourceStateID.hidSystemState
+    public static let humanInputEventTypes: [CGEventType] = [
+        .keyDown, .keyUp, .flagsChanged,
+        .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+        .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .tabletPointer
+    ]
+
+    /// No event payload, event tap, or additional permission is needed. A source
+    /// with no recorded input or invalid ages cannot establish human presence.
+    public static func humanInputIdleSeconds(
+        readAge: (CGEventSourceStateID, CGEventType) -> Double = {
+            CGEventSource.secondsSinceLastEventType($0, eventType: $1)
+        },
+        readCount: (CGEventSourceStateID, CGEventType) -> UInt32 = {
+            CGEventSource.counterForEventType($0, eventType: $1)
+        }
+    ) -> TimeInterval? {
+        humanInputEventTypes.compactMap { type -> Double? in
+            guard readCount(humanInputSourceState, type) > 0 else { return nil }
+            let age = readAge(humanInputSourceState, type)
+            guard age.isFinite, age >= 0 else { return nil }
+            return age
+        }.min()
+    }
 
     public static func isUnexpectedGap(elapsed: TimeInterval, expectedInterval: TimeInterval) -> Bool {
         elapsed > max(2, expectedInterval * 2.2)
@@ -23,6 +63,55 @@ public enum TelemetrySemantics {
         guard previous >= UInt32.max - plausibleRolloverWindow,
               current <= plausibleRolloverWindow else { return nil }
         return UInt64(UInt32.max - previous) + UInt64(current) + 1
+    }
+
+    /// proc_pid_rusage exposes CPU totals in Mach absolute-time ticks, not
+    /// necessarily nanoseconds (Apple Silicon commonly uses a 125/3 timebase).
+    /// Convert deltas, preserving precision for long-lived process counters.
+    /// 100% means one fully occupied logical core, as in Activity Monitor.
+    /// XNU's fill_task_rusage copies task_power_info_locked's Mach-time totals:
+    /// https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c
+    /// https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c
+    public static func processCPUPercent(
+        currentUserTicks: UInt64,
+        currentSystemTicks: UInt64,
+        previousUserTicks: UInt64,
+        previousSystemTicks: UInt64,
+        elapsed: TimeInterval,
+        timebaseNumerator: UInt32,
+        timebaseDenominator: UInt32
+    ) -> Double? {
+        guard elapsed.isFinite, elapsed > 0,
+              timebaseNumerator > 0, timebaseDenominator > 0,
+              currentUserTicks >= previousUserTicks,
+              currentSystemTicks >= previousSystemTicks else { return nil }
+        // Convert each exact integer delta before summing. Neither a UInt64
+        // sum nor an integer multiplication by the timebase can overflow.
+        let ticks = Double(currentUserTicks - previousUserTicks)
+            + Double(currentSystemTicks - previousSystemTicks)
+        let seconds = ticks * (Double(timebaseNumerator) / Double(timebaseDenominator)) / 1_000_000_000
+        let percent = seconds / elapsed * 100
+        guard percent.isFinite else { return nil }
+        return percent
+    }
+
+    /// Include only identities observed in consecutive snapshots. Newly
+    /// appearing devices have an unknown prior lifetime total; counter resets
+    /// cannot establish an interval delta either.
+    public static func continuingDeviceBytes<ID: Hashable>(
+        current: [ID: DeviceByteCounters],
+        previous: [ID: DeviceByteCounters]
+    ) -> DeviceByteCounters {
+        var read: UInt64 = 0
+        var written: UInt64 = 0
+        for (identity, latest) in current {
+            guard let earlier = previous[identity],
+                  latest.read >= earlier.read,
+                  latest.written >= earlier.written else { continue }
+            read = read &+ (latest.read - earlier.read)
+            written = written &+ (latest.written - earlier.written)
+        }
+        return DeviceByteCounters(read: read, written: written)
     }
 }
 
@@ -339,16 +428,6 @@ private struct CPUClusterReading {
     let performanceContributionPercent: Double
 }
 
-private struct NetworkCounter {
-    let received: UInt64
-    let sent: UInt64
-}
-
-private struct DiskCounter {
-    let read: UInt64
-    let written: UInt64
-}
-
 private struct BatteryReading {
     let percent: Double?
     let source: PowerSource
@@ -375,8 +454,8 @@ private struct RawProcessCounter {
     let start: UInt64
     let name: String
     let bundleID: String?
-    let userNanos: UInt64
-    let systemNanos: UInt64
+    let userTicks: UInt64
+    let systemTicks: UInt64
     let memory: UInt64
     let diskRead: UInt64
     let diskWrite: UInt64
@@ -395,12 +474,26 @@ private struct ProcessCollection {
     let attemptedCount: Int
 }
 
+private struct ProcessCPUTimebase {
+    let numerator: UInt32
+    let denominator: UInt32
+
+    static func read() -> ProcessCPUTimebase? {
+        var value = mach_timebase_info_data_t()
+        guard mach_timebase_info(&value) == KERN_SUCCESS,
+              value.numer > 0, value.denom > 0 else { return nil }
+        return ProcessCPUTimebase(numerator: value.numer, denominator: value.denom)
+    }
+}
+
 public actor TelemetrySampler {
     private var previousCPU: CPUCounter?
     private var previousCoreCPU: [CPUCounter]?
-    private var previousNetwork: NetworkCounter?
-    private var previousDisk: DiskCounter?
+    private var previousNetwork: [UInt16: DeviceByteCounters]?
+    private var previousDisk: [UInt64: DeviceByteCounters]?
     private var previousProcesses: [ProcessKey: RawProcessCounter] = [:]
+    private var previousMonitorProcess: RawProcessCounter?
+    private var previousMonitorProcessInstant: ContinuousClock.Instant?
     private let monotonicClock = ContinuousClock()
     private var previousInstant: ContinuousClock.Instant?
     private var previousExpectedInterval: TimeInterval?
@@ -410,6 +503,7 @@ public actor TelemetrySampler {
     private var lastProcessCollectionInstant: ContinuousClock.Instant?
     private let categorizer = ApplicationCategorizer()
     private let coreTopology = CPUCoreTopology.read()
+    private let processCPUTimebase = ProcessCPUTimebase.read()
 
     public init() {}
 
@@ -419,6 +513,8 @@ public actor TelemetrySampler {
         previousNetwork = nil
         previousDisk = nil
         previousProcesses = [:]
+        previousMonitorProcess = nil
+        previousMonitorProcessInstant = nil
         previousInstant = nil
         previousExpectedInterval = nil
         previousSwap = nil
@@ -460,8 +556,7 @@ public actor TelemetrySampler {
         let unexpectedGap = previousInstant != nil && TelemetrySemantics.isUnexpectedGap(elapsed: elapsed, expectedInterval: observedInterval)
         if unexpectedGap { resetDeltas() }
         let observedDuration = previousInstant == nil ? 0 : min(elapsed, max(2, observedInterval * 2.2))
-        let anyInputEvent = CGEventType(rawValue: TelemetrySemantics.anyInputEventTypeRawValue)!
-        let idleSeconds = max(0, CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEvent))
+        let idleSeconds = TelemetrySemantics.humanInputIdleSeconds() ?? .infinity
         let isIdle = idleSeconds >= settings.idleThreshold
         let currentManualActivity = readManualActivityCounters()
         let manualActivity = manualActivityCounts(
@@ -492,13 +587,15 @@ public actor TelemetrySampler {
         let thermal = readThermal()
         let battery = readBattery()
         let network = readNetwork()
-        let networkReceived = network.map { positiveDelta($0.received, previousNetwork?.received) } ?? 0
-        let networkSent = network.map { positiveDelta($0.sent, previousNetwork?.sent) } ?? 0
-        if let network { previousNetwork = network }
+        let networkDelta = network.map {
+            TelemetrySemantics.continuingDeviceBytes(current: $0, previous: previousNetwork ?? [:])
+        } ?? DeviceByteCounters(read: 0, written: 0)
+        previousNetwork = network
         let disk = readDisk()
-        let diskRead = disk.map { positiveDelta($0.read, previousDisk?.read) } ?? 0
-        let diskWrite = disk.map { positiveDelta($0.written, previousDisk?.written) } ?? 0
-        if let disk { previousDisk = disk }
+        let diskDelta = disk.map {
+            TelemetrySemantics.continuingDeviceBytes(current: $0, previous: previousDisk ?? [:])
+        } ?? DeviceByteCounters(read: 0, written: 0)
+        previousDisk = disk
 
         let processElapsed = lastProcessCollectionInstant.map { seconds(from: $0, to: currentInstant) } ?? elapsed
         let shouldCollectProcesses = lastProcessCollectionInstant == nil || processElapsed >= max(30, settings.baseSamplingInterval)
@@ -511,10 +608,37 @@ public actor TelemetrySampler {
             collection = ProcessCollection(retained: [], allDeltas: [], appResources: [], observedCount: latestProcessCollection?.observedCount ?? 0, attemptedCount: latestProcessCollection?.attemptedCount ?? 0)
         }
 
-        let own = collection.allDeltas.first { $0.processID == getpid() }
-        let ownCPU = own?.cpuPercent ?? 0
-        let ownMemory = own?.memoryBytes ?? currentProcessMemoryFallback()
-        let ownDiskWrite = own?.diskWriteBytes ?? 0
+        // Read this process on every system cycle, independently of the more
+        // expensive all-process scan. A skipped scan is not a zero-CPU or
+        // zero-write observation of the monitor.
+        let own = readProcess(pid: getpid(), app: (ProcessInfo.processInfo.processName, nil))
+        let ownInstant = monotonicClock.now
+        let previousOwn = previousMonitorProcess
+        let ownElapsed = previousMonitorProcessInstant.map { seconds(from: $0, to: ownInstant) }
+        let ownCPU: Double?
+        let ownDiskWrite: UInt64
+        if let own, let previousOwn, own.start == previousOwn.start {
+            ownDiskWrite = positiveDelta(own.diskWrite, previousOwn.diskWrite)
+            if let ownElapsed, let timebase = processCPUTimebase {
+                ownCPU = TelemetrySemantics.processCPUPercent(
+                    currentUserTicks: own.userTicks,
+                    currentSystemTicks: own.systemTicks,
+                    previousUserTicks: previousOwn.userTicks,
+                    previousSystemTicks: previousOwn.systemTicks,
+                    elapsed: ownElapsed,
+                    timebaseNumerator: timebase.numerator,
+                    timebaseDenominator: timebase.denominator
+                )
+            } else {
+                ownCPU = nil
+            }
+        } else {
+            ownCPU = nil
+            ownDiskWrite = 0
+        }
+        let ownMemory = own?.memory ?? currentProcessMemoryFallback()
+        previousMonitorProcess = own
+        previousMonitorProcessInstant = own == nil ? nil : ownInstant
         let nextInterval = adaptiveInterval(base: settings.baseSamplingInterval, isIdle: isIdle, battery: battery, monitorCPU: ownCPU)
         let category: WorkCategory = isIdle ? .idle : categorizer.category(appName: context.0, bundleID: context.1)
 
@@ -540,15 +664,16 @@ public actor TelemetrySampler {
             batteryPercent: battery.percent,
             powerSource: battery.source,
             isCharging: battery.charging,
-            diskReadBytes: diskRead,
-            diskWriteBytes: diskWrite,
-            networkReceivedBytes: networkReceived,
-            networkSentBytes: networkSent,
-            monitorCPUPercent: ownCPU,
+            diskReadBytes: diskDelta.read,
+            diskWriteBytes: diskDelta.written,
+            networkReceivedBytes: networkDelta.read,
+            networkSentBytes: networkDelta.written,
+            monitorCPUPercent: ownCPU ?? 0,
             monitorMemoryBytes: ownMemory,
             monitorDiskWriteBytes: ownDiskWrite,
             samplingInterval: observedInterval,
-            manualActivity: manualActivity
+            manualActivity: manualActivity,
+            monitorCPUMeasurementVersion: ownCPU == nil ? nil : 1
         )
         previousInstant = currentInstant
         previousExpectedInterval = nextInterval
@@ -585,8 +710,17 @@ public actor TelemetrySampler {
         for raw in rawProcesses {
             let key = ProcessKey(pid: raw.processID, start: raw.start)
             guard let previous = previousProcesses[key] else { continue }
-            let cpuNanos = positiveDelta(raw.userNanos, previous.userNanos) &+ positiveDelta(raw.systemNanos, previous.systemNanos)
-            let cpuPercent = min(10_000, Double(cpuNanos) / max(elapsed * 1_000_000_000, 1) * 100)
+            guard let timebase = processCPUTimebase,
+                  let measuredCPU = TelemetrySemantics.processCPUPercent(
+                    currentUserTicks: raw.userTicks,
+                    currentSystemTicks: raw.systemTicks,
+                    previousUserTicks: previous.userTicks,
+                    previousSystemTicks: previous.systemTicks,
+                    elapsed: elapsed,
+                    timebaseNumerator: timebase.numerator,
+                    timebaseDenominator: timebase.denominator
+                  ) else { continue }
+            let cpuPercent = min(10_000, measuredCPU)
             let read = positiveDelta(raw.diskRead, previous.diskRead)
             let write = positiveDelta(raw.diskWrite, previous.diskWrite)
             let owner = ownership[raw.processID]
@@ -739,8 +873,8 @@ public actor TelemetrySampler {
             start: counters.start,
             name: processName,
             bundleID: app?.1,
-            userNanos: counters.user,
-            systemNanos: counters.system,
+            userTicks: counters.user,
+            systemTicks: counters.system,
             memory: counters.memory,
             diskRead: counters.read,
             diskWrite: counters.write
@@ -829,11 +963,11 @@ public actor TelemetrySampler {
         return readings.max()
     }
 
-    /// Reads only WindowServer event totals. This API neither installs an event tap
+    /// Reads only hardware-source event totals. This API neither installs an event tap
     /// nor requests Input Monitoring or Accessibility access, and exposes no payload.
     private func readManualActivityCounters() -> ManualActivityCounterSnapshot {
         func count(_ type: CGEventType) -> UInt32 {
-            CGEventSource.counterForEventType(.combinedSessionState, eventType: type)
+            CGEventSource.counterForEventType(TelemetrySemantics.humanInputSourceState, eventType: type)
         }
         return ManualActivityCounterSnapshot(
             keyDown: count(.keyDown),
@@ -1021,15 +1155,14 @@ public actor TelemetrySampler {
         return BatteryReading(percent: nil, source: source, charging: nil)
     }
 
-    private func readNetwork() -> NetworkCounter? {
+    private func readNetwork() -> [UInt16: DeviceByteCounters]? {
         var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0]
         var byteCount = 0
         guard sysctl(&mib, u_int(mib.count), nil, &byteCount, nil, 0) == 0, byteCount > 0 else { return nil }
         var buffer = [UInt8](repeating: 0, count: byteCount)
         guard sysctl(&mib, u_int(mib.count), &buffer, &byteCount, nil, 0) == 0 else { return nil }
 
-        var received: UInt64 = 0
-        var sent: UInt64 = 0
+        var counters: [UInt16: DeviceByteCounters] = [:]
         var offset = 0
         buffer.withUnsafeBytes { bytes in
             while offset + 4 <= byteCount {
@@ -1040,35 +1173,42 @@ public actor TelemetrySampler {
                    messageLength >= MemoryLayout<if_msghdr2>.size {
                     let message = bytes.loadUnaligned(fromByteOffset: offset, as: if_msghdr2.self)
                     if message.ifm_flags & IFF_UP != 0, message.ifm_flags & IFF_LOOPBACK == 0 {
-                        received &+= message.ifm_data.ifi_ibytes
-                        sent &+= message.ifm_data.ifi_obytes
+                        counters[message.ifm_index] = DeviceByteCounters(
+                            read: message.ifm_data.ifi_ibytes,
+                            written: message.ifm_data.ifi_obytes
+                        )
                     }
                 }
                 offset += messageLength
             }
         }
-        return NetworkCounter(received: received, sent: sent)
+        return counters
     }
 
-    private func readDisk() -> DiskCounter? {
+    private func readDisk() -> [UInt64: DeviceByteCounters]? {
         guard let matching = IOServiceMatching("IOBlockStorageDriver") else { return nil }
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
             return nil
         }
         defer { IOObjectRelease(iterator) }
-        var read: UInt64 = 0
-        var written: UInt64 = 0
+        var counters: [UInt64: DeviceByteCounters] = [:]
         while true {
             let service = IOIteratorNext(iterator)
             guard service != 0 else { break }
             defer { IOObjectRelease(service) }
+            var entryID: UInt64 = 0
+            guard IORegistryEntryGetRegistryEntryID(service, &entryID) == KERN_SUCCESS else { continue }
             guard let value = IORegistryEntryCreateCFProperty(service, "Statistics" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue(),
-                  let statistics = value as? [String: Any] else { continue }
-            read &+= (statistics["Bytes (Read)"] as? NSNumber)?.uint64Value ?? 0
-            written &+= (statistics["Bytes (Write)"] as? NSNumber)?.uint64Value ?? 0
+                  let statistics = value as? [String: Any],
+                  let read = statistics["Bytes (Read)"] as? NSNumber,
+                  let written = statistics["Bytes (Write)"] as? NSNumber else { continue }
+            counters[entryID] = DeviceByteCounters(
+                read: read.uint64Value,
+                written: written.uint64Value
+            )
         }
-        return DiskCounter(read: read, written: written)
+        return counters
     }
 
     private func currentProcessMemoryFallback() -> UInt64 {
@@ -1082,11 +1222,11 @@ public actor TelemetrySampler {
         return result == KERN_SUCCESS ? UInt64(info.resident_size) : 0
     }
 
-    private func adaptiveInterval(base: TimeInterval, isIdle: Bool, battery: BatteryReading, monitorCPU: Double) -> TimeInterval {
+    private func adaptiveInterval(base: TimeInterval, isIdle: Bool, battery: BatteryReading, monitorCPU: Double?) -> TimeInterval {
         var interval = min(60, max(10, base))
         if isIdle { interval = max(interval, 60) }
         if battery.source == .battery && ProcessInfo.processInfo.isLowPowerModeEnabled { interval = max(interval, 30) }
-        if monitorCPU > 1.5 { interval = min(60, max(interval, base * 2)) }
+        if let monitorCPU, monitorCPU > 1.5 { interval = min(60, max(interval, base * 2)) }
         return interval
     }
 

@@ -154,6 +154,9 @@ public struct SystemSample: Identifiable, Codable, Equatable, Sendable {
     public let networkReceivedBytes: UInt64
     public let networkSentBytes: UInt64
     public let monitorCPUPercent: Double
+    /// Applies only to the monitoring process's CPU footprint, not whole-machine CPU.
+    /// Absent in legacy JSON; version 1 uses the calibrated Mach timebase.
+    public let monitorCPUMeasurementVersion: Int?
     public let monitorMemoryBytes: UInt64
     public let monitorDiskWriteBytes: UInt64
     public let samplingInterval: TimeInterval
@@ -173,7 +176,7 @@ public struct SystemSample: Identifiable, Codable, Equatable, Sendable {
         powerSource: PowerSource, isCharging: Bool?, diskReadBytes: UInt64, diskWriteBytes: UInt64,
         networkReceivedBytes: UInt64, networkSentBytes: UInt64, monitorCPUPercent: Double,
         monitorMemoryBytes: UInt64, monitorDiskWriteBytes: UInt64, samplingInterval: TimeInterval,
-        manualActivity: ManualActivityCounts? = nil
+        manualActivity: ManualActivityCounts? = nil, monitorCPUMeasurementVersion: Int? = 1
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -202,6 +205,7 @@ public struct SystemSample: Identifiable, Codable, Equatable, Sendable {
         self.networkReceivedBytes = networkReceivedBytes
         self.networkSentBytes = networkSentBytes
         self.monitorCPUPercent = monitorCPUPercent
+        self.monitorCPUMeasurementVersion = monitorCPUMeasurementVersion
         self.monitorMemoryBytes = monitorMemoryBytes
         self.monitorDiskWriteBytes = monitorDiskWriteBytes
         self.samplingInterval = samplingInterval
@@ -249,6 +253,9 @@ public struct ProcessSample: Identifiable, Codable, Equatable, Sendable {
     public let diskReadBytes: UInt64
     public let diskWriteBytes: UInt64
     public let energyNanojoules: UInt64?
+    /// Version 1 uses calibrated Mach time units. Nil/0 are legacy readings
+    /// whose stored CPU values must not be used for absolute attribution.
+    public let cpuMeasurementVersion: Int?
 
     public init(
         id: UUID = UUID(), timestamp: Date, processID: Int32, processStart: UInt64,
@@ -256,7 +263,7 @@ public struct ProcessSample: Identifiable, Codable, Equatable, Sendable {
         memoryBytes: UInt64, diskReadBytes: UInt64, diskWriteBytes: UInt64,
         energyNanojoules: UInt64?, parentProcessID: Int32? = nil,
         ownerName: String? = nil, ownerBundleID: String? = nil,
-        ownerRelation: ProcessOwnerRelation? = nil
+        ownerRelation: ProcessOwnerRelation? = nil, cpuMeasurementVersion: Int? = 1
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -274,6 +281,7 @@ public struct ProcessSample: Identifiable, Codable, Equatable, Sendable {
         self.diskReadBytes = diskReadBytes
         self.diskWriteBytes = diskWriteBytes
         self.energyNanojoules = energyNanojoules
+        self.cpuMeasurementVersion = cpuMeasurementVersion
     }
 }
 
@@ -295,13 +303,14 @@ public struct AppResourceSample: Identifiable, Codable, Equatable, Sendable {
     public let workerCount: Int
     public let agentWorkerCount: Int
     public let workerNames: [String]
+    public let cpuMeasurementVersion: Int?
 
     public init(
         id: UUID = UUID(), timestamp: Date, duration: TimeInterval,
         ownerName: String, ownerBundleID: String?, isForeground: Bool,
         cpuPercent: Double, memoryBytes: UInt64, diskReadBytes: UInt64,
         diskWriteBytes: UInt64, processCount: Int, workerCount: Int,
-        agentWorkerCount: Int = 0, workerNames: [String]
+        agentWorkerCount: Int = 0, workerNames: [String], cpuMeasurementVersion: Int? = 1
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -317,6 +326,7 @@ public struct AppResourceSample: Identifiable, Codable, Equatable, Sendable {
         self.workerCount = workerCount
         self.agentWorkerCount = agentWorkerCount
         self.workerNames = workerNames
+        self.cpuMeasurementVersion = cpuMeasurementVersion
     }
 }
 
@@ -527,7 +537,9 @@ public struct ReportInsight: Identifiable, Codable, Equatable, Sendable {
 }
 
 public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendable {
+    case today
     case oneHour
+    case fourHours
     case sixHours
     case twelveHours
     case twentyFourHours
@@ -536,9 +548,17 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
 
     public var id: String { rawValue }
 
+    /// User-facing scales. Keep legacy cases decodable without offering them.
+    public static let selectableRanges: [MonitoringRange] = [
+        .oneHour, .fourHours, .sixHours, .twelveHours, .twentyFourHours, .fortyEightHours
+    ]
+
+    /// Nominal span. Use `interval(endingAt:)` for calendar-aware Today bounds.
     public var duration: TimeInterval {
         switch self {
+        case .today: return 24 * 3_600
         case .oneHour: return 3_600
+        case .fourHours: return 4 * 3_600
         case .sixHours: return 6 * 3_600
         case .twelveHours: return 12 * 3_600
         case .twentyFourHours: return 24 * 3_600
@@ -549,7 +569,9 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
 
     public var label: String {
         switch self {
+        case .today: return "Today"
         case .oneHour: return "1 hour"
+        case .fourHours: return "4 hours"
         case .sixHours: return "6 hours"
         case .twelveHours: return "12 hours"
         case .twentyFourHours: return "24 hours"
@@ -560,7 +582,9 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
 
     public var compactLabel: String {
         switch self {
+        case .today: return "Today"
         case .oneHour: return "1h"
+        case .fourHours: return "4h"
         case .sixHours: return "6h"
         case .twelveHours: return "12h"
         case .twentyFourHours: return "24h"
@@ -569,9 +593,11 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
         }
     }
 
-    public func interval(endingAt end: Date) -> DateInterval {
-        DateInterval(start: end.addingTimeInterval(-duration), end: end)
+    public func interval(endingAt end: Date, calendar: Calendar = .autoupdatingCurrent) -> DateInterval {
+        let start = self == .today ? calendar.startOfDay(for: end) : end.addingTimeInterval(-duration)
+        return DateInterval(start: start, end: end)
     }
+
 }
 
 /// The menu timeline defaults to a context-aware window, while still allowing
@@ -579,6 +605,27 @@ public enum MonitoringRange: String, Codable, CaseIterable, Identifiable, Sendab
 public enum MonitoringRangePreference: Equatable, Sendable {
     case smart
     case fixed(MonitoringRange)
+
+    public static let navigationOrder: [MonitoringRangePreference] =
+        [.smart] + MonitoringRange.selectableRanges.map { .fixed($0) }
+
+    public var compactLabel: String {
+        switch self {
+        case .smart: return "Auto"
+        case .fixed(let range): return range.compactLabel
+        }
+    }
+
+    /// Arrows follow the visible choices, including Auto, and stop at the ends.
+    public var previous: MonitoringRangePreference? {
+        guard let index = Self.navigationOrder.firstIndex(of: self), index > 0 else { return nil }
+        return Self.navigationOrder[index - 1]
+    }
+
+    public var next: MonitoringRangePreference? {
+        guard let index = Self.navigationOrder.firstIndex(of: self), index + 1 < Self.navigationOrder.count else { return nil }
+        return Self.navigationOrder[index + 1]
+    }
 
     public var isSmart: Bool {
         if case .smart = self { return true }
@@ -754,6 +801,9 @@ public struct DailyReport: Identifiable, Codable, Equatable, Sendable {
     public let limitations: [String]
     public let sampleCount: Int
     public let longestContinuousCoverage: TimeInterval?
+    /// Content-free long-view metrics survive the shorter detailed-data retention.
+    /// Nil on reports written before this format was introduced.
+    public let resourceSummary: DailyResourceSummary?
 }
 
 public struct ProcessImpact: Identifiable, Codable, Equatable, Sendable {

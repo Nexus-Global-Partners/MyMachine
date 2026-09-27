@@ -91,7 +91,7 @@ enum DiagnosisHandoffState: Equatable {
 
 /// Everything required to render one monitoring timeline, committed as a
 /// single value so views never briefly mix readings from different refreshes.
-struct MonitoringDisplayState: Equatable {
+struct MonitoringDisplayState: Equatable, Sendable {
     let snapshot: MonitoringSnapshot
     let samples: [SystemSample]
     let backgroundPoints: [BackgroundActivityPoint]
@@ -99,6 +99,8 @@ struct MonitoringDisplayState: Equatable {
     let appContributors: [AppComputeContribution]
     let dataThrough: Date?
     let refreshedAt: Date
+    var dailySummaries: [MonitoringDaySummary] = []
+    var appResourceSamples: [AppResourceSample] = []
 }
 
 @MainActor
@@ -108,12 +110,18 @@ final class AppModel: ObservableObject {
     @Published var todayReport: DailyReport?
     @Published private(set) var currentActivitySession: CurrentActivitySession?
     @Published var todaySamples: [SystemSample] = []
+    /// Every saved reading needed for the live two-minute icon average. Daily
+    /// reports refresh less often and must not be the source of live history.
+    @Published private(set) var recentSystemSamples: [SystemSample] = []
     @Published var todayChartSamples: [SystemSample] = []
+    @Published private(set) var fanReadings: [FanReading]?
+    @Published private(set) var fanReadingsAt: Date?
     @Published var monitoringRange: MonitoringRange = .twentyFourHours
     @Published private(set) var monitoringContent: MonitoringDisplayState?
     @Published var monitoringIsRefreshing = false
     @Published private(set) var menuBarMonitoringRangePreference: MonitoringRangePreference = .smart
     @Published private(set) var menuBarMonitoringRange: MonitoringRange = .oneHour
+    @Published private(set) var menuBarSelectedDayStart: Date?
     @Published private(set) var menuBarMonitoringContent: MonitoringDisplayState?
     @Published private(set) var menuBarIsRefreshing = false
     @Published private(set) var menuBarRefreshMessage: String?
@@ -154,6 +162,8 @@ final class AppModel: ObservableObject {
     private var monitoringRefreshGeneration = 0
     private var menuBarRefreshGeneration = 0
     private var menuBarRefreshTask: Task<Void, Never>?
+    private var menuBarLiveRefreshTask: Task<Void, Never>?
+    private var menuBarIsPresented = false
     private var diagnosisTask: Task<Void, Never>?
     private var diagnosisFeedbackTask: Task<Void, Never>?
     private var diagnosisClipboardClearTask: Task<Void, Never>?
@@ -176,6 +186,18 @@ final class AppModel: ObservableObject {
     var monitoringAppContributors: [AppComputeContribution] { monitoringContent?.appContributors ?? [] }
     var monitoringDataThrough: Date? { monitoringContent?.dataThrough }
 
+    func setFanReadings(_ readings: [FanReading]?, at readAt: Date = Date()) {
+        fanReadings = readings
+        fanReadingsAt = readings == nil ? nil : readAt
+    }
+
+    private func retainRecentSystemSample(_ sample: SystemSample) {
+        let cutoff = sample.timestamp.addingTimeInterval(-180)
+        recentSystemSamples = Array((recentSystemSamples + [sample])
+            .filter { $0.timestamp >= cutoff }
+            .suffix(32))
+    }
+
     init() {
         do {
             let opened = try SQLiteStore()
@@ -197,6 +219,7 @@ final class AppModel: ObservableObject {
     deinit {
         monitorTask?.cancel()
         menuBarRefreshTask?.cancel()
+        menuBarLiveRefreshTask?.cancel()
         diagnosisTask?.cancel()
         diagnosisFeedbackTask?.cancel()
         diagnosisClipboardClearTask?.cancel()
@@ -424,7 +447,7 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 try await refreshTodayReport(force: true)
-                try await refreshMonitoring(force: true)
+                restartMenuBarRefresh(endingAt: Date())
             }
             catch { await show(error) }
         }
@@ -449,7 +472,25 @@ final class AppModel: ObservableObject {
     /// Called for every menu-bar presentation. Existing content stays visible
     /// while one coalesced, database-only refresh prepares the selected range.
     func menuBarDidOpen() {
+        menuBarIsPresented = true
         beginMenuBarRefreshIfNeeded(endingAt: Date())
+        guard menuBarLiveRefreshTask == nil else { return }
+        // Reuse recorded telemetry while the panel is visible. This never
+        // forces a hardware sample, and does no chart work with the panel shut.
+        menuBarLiveRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 30_000_000_000) }
+                catch { return }
+                guard let self, self.menuBarIsPresented, !Task.isCancelled else { return }
+                self.beginMenuBarRefreshIfNeeded(endingAt: Date(), showProgress: false)
+            }
+        }
+    }
+
+    func menuBarDidClose() {
+        menuBarIsPresented = false
+        menuBarLiveRefreshTask?.cancel()
+        menuBarLiveRefreshTask = nil
     }
 
     func refreshMenuBarNow() {
@@ -457,15 +498,54 @@ final class AppModel: ObservableObject {
     }
 
     func selectSmartMenuBarMonitoringRange() {
+        menuBarSelectedDayStart = nil
         menuBarMonitoringRangePreference = .smart
         restartMenuBarRefresh(endingAt: Date())
     }
 
     func selectMenuBarMonitoringRange(_ range: MonitoringRange) {
         let wasFixedToRange = menuBarMonitoringRangePreference == .fixed(range)
-        guard !wasFixedToRange else { return }
+        guard !wasFixedToRange || menuBarSelectedDayStart != nil else { return }
+        menuBarSelectedDayStart = nil
         menuBarMonitoringRangePreference = .fixed(range)
         menuBarMonitoringRange = range
+        restartMenuBarRefresh(endingAt: Date())
+    }
+
+    var canBrowsePreviousMenuBarDay: Bool {
+        let calendar = Calendar.autoupdatingCurrent
+        let today = calendar.startOfDay(for: Date())
+        let current = menuBarSelectedDayStart ?? today
+        guard let previous = calendar.date(byAdding: .day, value: -1, to: current),
+              let oldest = calendar.date(byAdding: .day, value: -max(1, settings.rawRetentionDays), to: today) else {
+            return false
+        }
+        return previous >= oldest
+    }
+
+    func browsePreviousMenuBarDay() {
+        guard canBrowsePreviousMenuBarDay else { return }
+        let calendar = Calendar.autoupdatingCurrent
+        let current = menuBarSelectedDayStart ?? calendar.startOfDay(for: Date())
+        guard let previous = calendar.date(byAdding: .day, value: -1, to: current) else { return }
+        menuBarSelectedDayStart = previous
+        menuBarMonitoringContent = nil
+        restartMenuBarRefresh(endingAt: Date())
+    }
+
+    func browseNextMenuBarDay() {
+        guard let selected = menuBarSelectedDayStart else { return }
+        let calendar = Calendar.autoupdatingCurrent
+        guard let next = calendar.date(byAdding: .day, value: 1, to: selected) else { return }
+        menuBarSelectedDayStart = next >= calendar.startOfDay(for: Date()) ? nil : next
+        menuBarMonitoringContent = nil
+        restartMenuBarRefresh(endingAt: Date())
+    }
+
+    func returnToLiveMenuBarDay() {
+        guard menuBarSelectedDayStart != nil else { return }
+        menuBarSelectedDayStart = nil
+        menuBarMonitoringContent = nil
         restartMenuBarRefresh(endingAt: Date())
     }
 
@@ -548,6 +628,9 @@ final class AppModel: ObservableObject {
             latestSystem = try await store.latestSample()
             lastSampleTimestamp = latestSystem?.timestamp
             lastUpdated = latestSystem?.timestamp
+            recentSystemSamples = Array(try await store.samples(
+                in: DateInterval(start: Date().addingTimeInterval(-180), end: Date())
+            ).suffix(32))
             processImpacts = try await store.latestProcessImpacts()
 
             // Warm the small one-hour panel first so the menu-bar experience is
@@ -560,7 +643,6 @@ final class AppModel: ObservableObject {
             }
             lastRetentionDate = Date()
             try await refreshTodayReport(force: true)
-            try await refreshMonitoring(force: true)
             databaseSize = await store.databaseSizeBytes()
             collectionReady = true
             persistCriticalPreferencesSynchronously()
@@ -676,6 +758,7 @@ final class AppModel: ObservableObject {
                 ifDataGeneration: storeGeneration
             )
             guard saved, sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
+            retainRecentSystemSample(result.system)
             latestSystem = result.system
             currentActivitySession = TimelineSemantics.updatingCurrentActivitySession(
                 currentActivitySession,
@@ -700,9 +783,6 @@ final class AppModel: ObservableObject {
                 try await refreshTodayReport(force: true)
             } else if todayReport?.sampleCount == 0 || lastReportRefresh == nil || Date().timeIntervalSince(lastReportRefresh!) >= 120 {
                 try await refreshTodayReport(force: true)
-            }
-            if lastMonitoringRefresh == nil || Date().timeIntervalSince(lastMonitoringRefresh!) >= 120 {
-                try await refreshMonitoring(force: true)
             }
             if lastRetentionDate == nil || Date().timeIntervalSince(lastRetentionDate!) >= 86_400 {
                 try await RetentionCoordinator.finalizeThenRetain(store: store, settings: settings) {
@@ -754,52 +834,85 @@ final class AppModel: ObservableObject {
     private func makeMonitoringContent(
         range: MonitoringRange,
         endingAt now: Date,
-        limit: Int
+        limit: Int,
+        intervalOverride: DateInterval? = nil,
+        preloadedSamples: [SystemSample]? = nil
     ) async throws -> MonitoringDisplayState {
         guard let store else { throw StoreError.cannotOpen("local history is unavailable") }
-        let interval = range.interval(endingAt: now)
-        let samples = try await store.samples(in: interval)
+        let overviewInterval = MonitoringHistory.overviewInterval(for: range, endingAt: now)
+        let interval = intervalOverride ?? overviewInterval ?? range.interval(endingAt: now)
+        // Auto has already read a containing window to discover the day's
+        // boundary. Reuse those rows instead of decoding the same history twice.
+        let samples: [SystemSample]
+        if let preloadedSamples {
+            samples = preloadedSamples.filter {
+                $0.timestamp > interval.start && $0.timestamp <= interval.end
+            }
+        } else {
+            samples = try await store.samples(in: interval)
+        }
         let appResources = try await store.appResourceSamples(in: interval)
         let sleepWakeEvents = try await store.sleepWakeEvents(in: interval, includingPrevious: true)
-        let snapshot = insights.makeMonitoringSnapshot(
-            range: range,
-            endingAt: now,
-            samples: samples,
-            appResourceSamples: appResources
-        )
-        let backgroundActivityPoints = insights.makeBackgroundActivityPoints(
-            samples: appResources,
-            systemSamples: samples,
-            in: interval,
-            limit: limit
-        )
-        let appContributors = insights.makeAppComputeContributors(
-            samples: appResources,
-            in: interval,
-            limit: 3
-        )
-        let visibleEventDates = sleepWakeEvents
-            .map(\.timestamp)
-            .filter { interval.contains($0) }
-        let dataThrough = (
-            samples.map(\.timestamp)
-                + appResources.map(\.timestamp)
-                + visibleEventDates
-        ).max()
+        let retainedReports = overviewInterval == nil ? [] : try await store.reports(limit: 8)
+        // Aggregating multi-day telemetry is pure work. Keep it off the main
+        // actor so opening a range never blocks pointer or mode interactions.
+        let preparation = Task.detached(priority: .userInitiated) {
+            let insights = InsightEngine()
+            let snapshot = insights.makeMonitoringSnapshot(
+                range: range,
+                endingAt: now,
+                samples: samples,
+                appResourceSamples: appResources,
+                intervalOverride: intervalOverride ?? overviewInterval
+            )
+            let backgroundActivityPoints = insights.makeBackgroundActivityPoints(
+                samples: appResources,
+                systemSamples: samples,
+                in: interval,
+                limit: limit
+            )
+            let appContributors = insights.makeAppComputeContributors(
+                samples: appResources,
+                in: interval,
+                limit: 3
+            )
+            let visibleEventDates = sleepWakeEvents
+                .map(\.timestamp)
+                .filter { interval.contains($0) }
+            let dataThrough = (
+                samples.map(\.timestamp)
+                    + appResources.map(\.timestamp)
+                    + visibleEventDates
+            ).max()
 
-        return MonitoringDisplayState(
-            snapshot: snapshot,
-            samples: samples,
-            backgroundPoints: backgroundActivityPoints,
-            events: sleepWakeEvents,
-            appContributors: appContributors,
-            dataThrough: dataThrough,
-            refreshedAt: Date()
-        )
+            return MonitoringDisplayState(
+                snapshot: snapshot,
+                samples: samples,
+                backgroundPoints: backgroundActivityPoints,
+                events: sleepWakeEvents,
+                appContributors: appContributors,
+                dataThrough: dataThrough,
+                refreshedAt: Date(),
+                dailySummaries: overviewInterval.map {
+                    MonitoringHistory.daySummaries(
+                        in: $0,
+                        samples: samples,
+                        reports: retainedReports,
+                        events: sleepWakeEvents
+                    )
+                } ?? [],
+                appResourceSamples: appResources
+            )
+        }
+        return await withTaskCancellationHandler {
+            await preparation.value
+        } onCancel: {
+            preparation.cancel()
+        }
     }
 
     @discardableResult
-    private func beginMenuBarRefreshIfNeeded(endingAt now: Date) -> Task<Void, Never>? {
+    private func beginMenuBarRefreshIfNeeded(endingAt now: Date, showProgress: Bool = true) -> Task<Void, Never>? {
         if let menuBarRefreshTask { return menuBarRefreshTask }
         guard let store, !dataEraseInProgress else { return nil }
 
@@ -807,39 +920,57 @@ final class AppModel: ObservableObject {
         let generation = menuBarRefreshGeneration
         let refreshEpoch = dataEpoch
         let requestedPreference = menuBarMonitoringRangePreference
-        menuBarIsRefreshing = true
+        let requestedDayStart = menuBarSelectedDayStart
+        menuBarIsRefreshing = showProgress
         menuBarRefreshMessage = nil
 
         let task = Task { [weak self] in
             guard let self else { return }
             do {
-                // Smart is resolved from the same private history used by the
-                // graph, so first launch does not depend on a report cache.
-                let recentSamples = try await store.samples(
-                    in: DateInterval(start: now.addingTimeInterval(-86_400), end: now)
+                // Auto follows the current observed day across midnight rather
+                // than silently dropping late work into a calendar-day cutoff.
+                let autoSearch = DateInterval(
+                    start: now.addingTimeInterval(-36 * 60 * 60), end: now
                 )
-                let range = TimelineSemantics.monitoringRange(
-                    for: requestedPreference,
-                    at: now,
-                    recentSamples: recentSamples
-                )
+                let recentSamples = requestedDayStart == nil && requestedPreference.isSmart ? try await store.samples(
+                    in: autoSearch
+                ) : []
+                let autoEvents = requestedDayStart == nil && requestedPreference.isSmart
+                    ? try await store.sleepWakeEvents(in: autoSearch, includingPrevious: true)
+                    : []
+                let range: MonitoringRange = requestedDayStart == nil
+                    ? TimelineSemantics.monitoringRange(for: requestedPreference, at: now, recentSamples: recentSamples)
+                    : .today
+                let autoInterval = requestedDayStart == nil && requestedPreference.isSmart
+                    ? TimelineSemantics.automaticDayWindow(
+                        at: now, recentSamples: recentSamples, sleepWakeEvents: autoEvents
+                    )
+                    : nil
+                let historicalInterval = requestedDayStart.flatMap { start -> DateInterval? in
+                    guard let end = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: start) else { return nil }
+                    return DateInterval(start: start, end: end)
+                }
                 let content = try await self.makeMonitoringContent(
                     range: range,
                     endingAt: now,
-                    limit: 720
+                    limit: 720,
+                    intervalOverride: historicalInterval ?? autoInterval,
+                    preloadedSamples: autoInterval == nil ? nil : recentSamples
                 )
-                let currentSession = TimelineSemantics.currentActivitySession(
-                    from: recentSamples,
-                    endingAt: now
-                )
+                let currentSession = requestedDayStart == nil && requestedPreference.isSmart
+                    ? TimelineSemantics.currentActivitySession(from: recentSamples, endingAt: now)
+                    : nil
                 guard !Task.isCancelled,
                       generation == self.menuBarRefreshGeneration,
                       refreshEpoch == self.dataEpoch,
                       !self.dataEraseInProgress,
-                      requestedPreference == self.menuBarMonitoringRangePreference else { return }
+                      requestedPreference == self.menuBarMonitoringRangePreference,
+                      requestedDayStart == self.menuBarSelectedDayStart else { return }
                 self.menuBarMonitoringRange = range
                 self.menuBarMonitoringContent = content
-                self.currentActivitySession = currentSession
+                if requestedDayStart == nil && requestedPreference.isSmart {
+                    self.currentActivitySession = currentSession
+                }
             } catch {
                 guard generation == self.menuBarRefreshGeneration else { return }
                 self.menuBarRefreshMessage = self.menuBarMonitoringContent == nil
@@ -865,7 +996,16 @@ final class AppModel: ObservableObject {
         let events = try await store.events(from: interval.start, to: interval.end)
         let history = try await store.reports(limit: 365).filter { $0.dayKey != dayKey }
         guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
-        let report = insights.makeReport(dayKey: dayKey, timezone: .autoupdatingCurrent, samples: samples, processSamples: processes, events: events, historicalReports: history)
+        let report = await Task.detached(priority: .utility) {
+            InsightEngine().makeReport(
+                dayKey: dayKey,
+                timezone: .autoupdatingCurrent,
+                samples: samples,
+                processSamples: processes,
+                events: events,
+                historicalReports: history
+            )
+        }.value
         if !samples.isEmpty {
             let saved = try await store.save(report: report, ifDataGeneration: storeGeneration)
             guard saved else { return }
@@ -900,13 +1040,25 @@ final class AppModel: ObservableObject {
         formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "yyyy-MM-dd"
         var newestByKey: [String: Date] = [:]
+        var countByKey: [String: Int] = [:]
         for timestamp in timestamps {
             let key = formatter.string(from: timestamp)
             newestByKey[key] = max(newestByKey[key] ?? .distantPast, timestamp)
+            countByKey[key, default: 0] += 1
         }
         for key in newestByKey.keys.sorted() {
-            if let existing = try? await store.report(dayKey: key),
-               let newest = newestByKey[key], existing.generatedAt >= newest { continue }
+            if let existing = try? await store.report(dayKey: key) {
+                // Expiring raw history must never replace a fuller retained
+                // report with a partial day. Enrich older reports only while
+                // the complete original sample set is still available.
+                guard countByKey[key, default: 0] >= existing.sampleCount else { continue }
+                let needsResourceSummary = existing.resourceSummary == nil
+                    && TimeZone(identifier: existing.timezoneIdentifier).flatMap {
+                        DayBoundaries.interval(for: key, timezone: $0)
+                    } == DayBoundaries.interval(for: key)
+                if let newest = newestByKey[key], existing.generatedAt >= newest,
+                   !needsResourceSummary { continue }
+            }
             try await generateReport(dayKey: key, publishAsToday: false)
         }
     }
@@ -994,7 +1146,9 @@ final class AppModel: ObservableObject {
                         self.databaseSize = await store.databaseSizeBytes()
                     }
                     try await self.refreshTodayReport(force: true)
-                    try await self.refreshMonitoring(force: true)
+                    if self.menuBarIsPresented {
+                        self.restartMenuBarRefresh(endingAt: Date())
+                    }
                 } catch {
                     await self.show(error)
                 }
@@ -1007,7 +1161,9 @@ final class AppModel: ObservableObject {
                 self.lastDayKey = DayBoundaries.key(for: Date())
                 do {
                     try await self.refreshTodayReport(force: true)
-                    try await self.refreshMonitoring(force: true)
+                    if self.menuBarIsPresented {
+                        self.restartMenuBarRefresh(endingAt: Date())
+                    }
                 }
                 catch { await self.show(error) }
             }
@@ -1017,8 +1173,6 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self, self.collectionReady else { return }
                 self.updateLoginItemStatus()
-                do { try await self.refreshMonitoring(force: false) }
-                catch { await self.show(error) }
                 guard self.settings.briefingNotificationsEnabled != false else { return }
                 await self.configureBriefingNotifications()
             }
@@ -1092,10 +1246,12 @@ final class AppModel: ObservableObject {
         todayReport = nil
         currentActivitySession = nil
         todaySamples = []
+        recentSystemSamples = []
         todayChartSamples = []
         monitoringContent = nil
         monitoringIsRefreshing = false
         menuBarMonitoringContent = nil
+        menuBarSelectedDayStart = nil
         menuBarIsRefreshing = false
         menuBarRefreshMessage = nil
         reports = []

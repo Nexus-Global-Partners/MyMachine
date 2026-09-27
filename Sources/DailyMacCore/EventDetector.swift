@@ -91,7 +91,12 @@ public struct EventDetector: Sendable {
         }
         lastThermal = sample.thermalLevel
 
-        if sample.monitorCPUPercent >= 1.5 {
+        if sample.monitorCPUMeasurementVersion != 1 || sample.duration <= 0 || !sample.monitorCPUPercent.isFinite {
+            // A missing or baseline process counter cannot establish a
+            // continuous high-overhead run, and must not be read as low CPU.
+            overheadSeconds = 0
+            overheadEventOpen = false
+        } else if sample.monitorCPUPercent >= 1.5 {
             overheadSeconds += duration
         } else if sample.monitorCPUPercent < 0.8 {
             overheadSeconds = 0

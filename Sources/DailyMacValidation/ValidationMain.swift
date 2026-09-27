@@ -39,12 +39,207 @@ struct DailyMacValidation {
         print("MY MACHINE validation starting")
         let harness = ValidationHarness()
 
+        await harness.run("physical fan speed is bounded and never inferred from CPU load") {
+            let stopped = try require(FanReading(index: 0, rpm: 0, maximumRPM: 5_000), "zero-RPM reading missing")
+            let fast = try require(FanReading(index: 1, rpm: 4_000, maximumRPM: 5_000), "fast reading missing")
+            try harness.check(stopped.percentOfMaximum == 0 && stopped.speedDescription == "Off", "stopped fan was shown as running")
+            try harness.check(fast.percentOfMaximum == 80 && fast.speedDescription == "Fast", "fast fan was not identified")
+            try harness.check(FanReading(index: 0, rpm: -1, maximumRPM: 5_000) == nil, "negative RPM was accepted")
+            try harness.check(FanReading(index: 0, rpm: 2_000, maximumRPM: 0) == nil, "missing max RPM became a percent")
+            if let live = FanTelemetry.read() {
+                print("      Hardware fan readings: \(live.map { "fan \($0.index + 1) \(Int($0.rpm)) / \(Int($0.maximumRPM)) RPM" }.joined(separator: ", "))")
+                try harness.check(live.allSatisfy { $0.percentOfMaximum >= 0 && $0.percentOfMaximum <= 100 }, "hardware fan level escaped range")
+            } else {
+                print("      Hardware fan reading unavailable; UI must not invent a speed")
+            }
+        }
+
+        await harness.run("menu-bar machine effort follows CPU or GPU without claiming human focus") {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            for (demand, expected) in [
+                (24.9, MachineSignalLevel.low),
+                (25, .moderate),
+                (49.9, .moderate),
+                (50, .high),
+                (74.9, .high),
+                (75, .nearCapacity)
+            ] {
+                let reading = sample(at: now, cpu: demand)
+                try harness.check(MachineStatusSignal.current(sample: reading, at: now)?.effort == expected, "effort threshold failed at \(demand)%")
+            }
+            let gpuLed = sample(at: now, cpu: 18, gpu: 81)
+            let gpuSignal = try require(MachineStatusSignal.current(sample: gpuLed, at: now), "GPU-led machine signal missing")
+            try harness.check(gpuSignal.effort == .nearCapacity && gpuSignal.cpuPercent == 18 && gpuSignal.gpuPercent == 81, "GPU demand did not lead the effort bars")
+            try harness.check(gpuSignal.health == .comfortable, "high machine demand was incorrectly treated as an alert")
+        }
+
+        await harness.run("menu-bar left gauges average measured CPU and GPU independently") {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let old = sample(at: now.addingTimeInterval(-180), duration: 30, cpu: 0, gpu: 0)
+            let first = sample(at: now.addingTimeInterval(-90), duration: 30, cpu: 20, gpu: 40)
+            let second = sample(at: now.addingTimeInterval(-60), duration: 30, cpu: 40)
+            let third = sample(at: now.addingTimeInterval(-30), duration: 30, cpu: 80, gpu: 60)
+            let latest = sample(at: now, duration: 30, cpu: 100, gpu: 80)
+            let average = try require(
+                MachineDemandAverage.current(
+                    sample: latest,
+                    recentSamples: [old, first, second, third, latest],
+                    at: now
+                ),
+                "two-minute menu-bar average missing"
+            )
+            try harness.check(average.cpuPercent == 60, "CPU average included stale or duplicated readings")
+            try harness.check(average.gpuPercent == 60, "missing GPU readings became zero activity")
+            try harness.check(MachineStatusSignal.current(sample: latest, at: now)?.cpuPercent == 100, "original right-hand icon stopped using its live reading")
+            let unavailable = sample(at: now, cpu: 34)
+            try harness.check(MachineDemandAverage.current(sample: unavailable, recentSamples: [], at: now)?.gpuPercent == nil, "unavailable GPU became zero")
+        }
+
+        await harness.run("live icon average includes samples between report refreshes") {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            var readings: [SystemSample] = []
+            for index in 1...8 {
+                let timestamp = now.addingTimeInterval(Double(index - 8) * 15)
+                let cpu: Double = index == 8 ? 100 : 20
+                readings.append(sample(at: timestamp, duration: 15, cpu: cpu, gpu: cpu))
+            }
+            let live = try require(
+                MachineDemandAverage.current(sample: readings[7], recentSamples: readings, at: now),
+                "live two-minute average missing"
+            )
+            try harness.check(live.cpuPercent == 30 && live.gpuPercent == 30,
+                              "two-minute average did not include every saved interval")
+            let reportOnly = try require(
+                MachineDemandAverage.current(sample: readings[7], recentSamples: [readings[0]], at: now),
+                "partial report-backed average missing"
+            )
+            try harness.check(reportOnly.cpuPercent == 60,
+                              "fixture no longer distinguishes live history from a stale report snapshot")
+        }
+
+        await harness.run("menu-bar health distinguishes watch, pressure, and critical") {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let fair = sample(at: now, pressure: .elevated)
+            let brief = sample(at: now, pressure: .high)
+            let hot = sample(at: now, thermal: .serious)
+            try harness.check(MachineStatusSignal.current(sample: fair, at: now)?.health == .watch, "elevated memory should be a watch state")
+            try harness.check(MachineStatusSignal.current(sample: brief, at: now)?.health == .pressured, "brief high memory should be pressure, not critical")
+            try harness.check(MachineStatusSignal.current(sample: hot, at: now)?.health == .critical, "serious thermal state was not critical")
+            let sustained = (-8...0).map { sample(at: now.addingTimeInterval(Double($0) * 15), pressure: .high) }
+            try harness.check(MachineStatusSignal.current(sample: sustained.last, recentSamples: Array(sustained.dropLast()), at: now)?.health == .critical, "sustained high memory was not critical")
+            let interrupted = sustained.filter { $0.timestamp >= now.addingTimeInterval(-45) || $0.timestamp <= now.addingTimeInterval(-90) }
+            try harness.check(MachineStatusSignal.current(sample: interrupted.last, recentSamples: Array(interrupted.dropLast()), at: now)?.health == .pressured, "memory gap should break sustained pressure")
+        }
+
+        await harness.run("menu-bar signal clears missing and stale telemetry") {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            try harness.check(MachineStatusSignal.current(sample: nil, at: now) == nil, "missing telemetry became live")
+            try harness.check(MachineStatusSignal.current(sample: sample(at: now, duration: 0), at: now) == nil, "baseline sample became live")
+            try harness.check(MachineStatusSignal.current(sample: sample(at: now.addingTimeInterval(-45)), at: now) == nil,
+                              "two missed 15-second cycles remained live")
+            try harness.check(MachineStatusSignal.current(sample: sample(at: now.addingTimeInterval(-130), interval: 60), at: now) != nil,
+                              "adaptive 60-second sampling was marked stale too early")
+            try harness.check(MachineStatusSignal.current(sample: sample(at: now.addingTimeInterval(-150), interval: 60), at: now) == nil,
+                              "stalled adaptive sampling remained live")
+            try harness.check(MachineStatusSignal.current(sample: sample(at: now.addingTimeInterval(-121)), at: now) == nil, "stale telemetry remained live")
+        }
+
         await harness.run("DST and local-day boundaries") {
             let timezone = try require(TimeZone(identifier: "America/Los_Angeles"), "timezone unavailable")
             let spring = try require(DayBoundaries.interval(for: "2026-03-08", timezone: timezone), "spring interval unavailable")
             let fall = try require(DayBoundaries.interval(for: "2026-11-01", timezone: timezone), "fall interval unavailable")
             try harness.check(abs(spring.duration - 23 * 60 * 60) < 1, "spring-forward day was not 23 hours")
             try harness.check(abs(fall.duration - 25 * 60 * 60) < 1, "fall-back day was not 25 hours")
+        }
+
+        await harness.run("time guides share the same plot positions as their labels") {
+            let start = Date(timeIntervalSince1970: 1_800_000_000)
+            let window = DateInterval(start: start, duration: 4 * 3_600)
+            let marks = [start, start.addingTimeInterval(3_600), start.addingTimeInterval(2 * 3_600), window.end]
+            let fractions = marks.map { TimelineSemantics.timelineFraction(for: $0, within: window) }
+            try harness.check(fractions == [0, 0.25, 0.5, 1], "guide positions drifted from the time-axis dates")
+            try harness.check(
+                TimelineSemantics.timelineFraction(for: start.addingTimeInterval(-60), within: window) == 0
+                    && TimelineSemantics.timelineFraction(for: window.end.addingTimeInterval(60), within: window) == 1,
+                "out-of-window time guides escaped the plot"
+            )
+        }
+
+        await harness.run("Today starts at local midnight including DST days") {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try require(TimeZone(identifier: "America/Los_Angeles"), "timezone unavailable")
+            for (month, day, hours) in [(9, 7, 12), (3, 8, 11), (11, 1, 13)] {
+                let end = try require(calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12)), "Today fixture unavailable")
+                let interval = MonitoringRange.today.interval(endingAt: end, calendar: calendar)
+                try harness.check(interval.start == calendar.startOfDay(for: end), "Today did not start at local midnight")
+                try harness.check(interval.end == end, "Today did not end now")
+                try harness.check(interval.duration == Double(hours) * 3_600, "Today ignored the calendar's daylight-saving boundary")
+            }
+        }
+
+        await harness.run("Today stays selected and rolls over at midnight") {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try require(TimeZone(identifier: "Europe/Paris"), "timezone unavailable")
+            let midnight = try require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 8)), "midnight fixture unavailable")
+            let before = MonitoringRange.today.interval(endingAt: midnight.addingTimeInterval(-1), calendar: calendar)
+            let atMidnight = MonitoringRange.today.interval(endingAt: midnight, calendar: calendar)
+            let after = MonitoringRange.today.interval(endingAt: midnight.addingTimeInterval(60), calendar: calendar)
+            try harness.check(before.duration == 86_399, "the previous day ended early")
+            try harness.check(atMidnight.start == midnight && atMidnight.duration == 0, "midnight retained yesterday")
+            try harness.check(after.start == midnight && after.duration == 60, "the new day did not grow live")
+            let selected = TimelineSemantics.monitoringRange(for: .fixed(.today), at: midnight, recentSamples: [], calendar: calendar)
+            try harness.check(selected == .today, "Automatic replaced the explicit Today selection")
+            let encoded = try JSONEncoder().encode(MonitoringRange.today)
+            let decoded = try JSONDecoder().decode(MonitoringRange.self, from: encoded)
+            try harness.check(decoded == .today, "Today preference failed to round-trip")
+        }
+
+        await harness.run("Today preserves morning detail in Calm and Precise") {
+            for (hours, equivalent) in [(0.5, MonitoringRange.oneHour), (4, .sixHours), (9, .twelveHours), (20, .twentyFourHours)] {
+                for mode in TimelineDisplayMode.allCases {
+                    let actual = TimelineSemantics.processorTrendBucketDuration(for: .today, displayMode: mode, windowDuration: hours * 3_600)
+                    let expected = TimelineSemantics.processorTrendBucketDuration(for: equivalent, displayMode: mode)
+                    try harness.check(actual == expected, "Today flattened a partial day in \(mode.label)")
+                }
+            }
+            let start = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+            let window = DateInterval(start: start, duration: 30 * 60)
+            let readings = (1...120).map { sample(at: start.addingTimeInterval(Double($0) * 15), cpu: Double($0 % 4) * 20) }
+            for mode in TimelineDisplayMode.allCases {
+                let today = TimelineSemantics.processorTrend(from: readings, within: window, range: .today, displayMode: mode)
+                let close = TimelineSemantics.processorTrend(from: readings, within: window, range: .oneHour, displayMode: mode)
+                try harness.check(today == close, "Today rendering did not use its actual elapsed window")
+            }
+        }
+
+        await harness.run("Today excludes yesterday without inventing missing morning coverage") {
+            let start = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+            let end = start.addingTimeInterval(120)
+            let readings = [sample(at: start.addingTimeInterval(-15), cpu: 99)]
+                + (1...8).map { sample(at: start.addingTimeInterval(Double($0) * 15), cpu: 40) }
+            let snapshot = InsightEngine().makeMonitoringSnapshot(range: .today, endingAt: end, samples: readings)
+            try harness.check(snapshot.interval.start == start && snapshot.interval.end == end, "snapshot did not use Today bounds")
+            try harness.check(snapshot.observedDuration == 120 && snapshot.averageCPU == 40, "yesterday leaked into Today's readings")
+            try harness.check(!snapshot.insights.contains { $0.title == "Part of this window is unrecorded" }, "a fully recorded morning was compared with a nominal 24 hours")
+            let empty = InsightEngine().makeMonitoringSnapshot(range: .today, endingAt: start, samples: readings)
+            try harness.check(empty.sampleCount == 0 && empty.observedDuration == 0, "exact midnight retained old data")
+        }
+
+        await harness.run("range arrows follow menu order and stop at the ends") {
+            let ranges = MonitoringRangePreference.navigationOrder
+            try harness.check(ranges.map(\.compactLabel) == ["Auto", "1h", "4h", "6h", "12h", "24h", "48h"], "range menu choices/order changed")
+            try harness.check(MonitoringRange.selectableRanges.map(\.compactLabel) == ["1h", "4h", "6h", "12h", "24h", "48h"], "legacy Today/week choices leaked into the picker")
+            for (index, range) in ranges.enumerated() {
+                let previous: MonitoringRangePreference? = index == 0 ? nil : ranges[index - 1]
+                let next: MonitoringRangePreference? = index + 1 == ranges.count ? nil : ranges[index + 1]
+                try harness.check(range.previous == previous && range.next == next, "arrows skipped or wrapped \(range.compactLabel)")
+                if let next = range.next {
+                    try harness.check(next.previous == range, "range stepping was not reversible")
+                }
+            }
+            try harness.check(MonitoringRangePreference.fixed(.oneHour).previous == .smart, "the back arrow cannot return to Auto")
+            try harness.check(MonitoringRangePreference.smart.next == .fixed(.oneHour), "Auto did not step to 1h")
+            try harness.check(MonitoringRangePreference.fixed(.oneHour).next == .fixed(.fourHours), "the new 4h range was skipped")
         }
 
         await harness.run("rolling ranges use absolute elapsed time") {
@@ -57,6 +252,7 @@ struct DailyMacValidation {
             )
             let expected: [(MonitoringRange, TimeInterval)] = [
                 (.oneHour, 3_600),
+                (.fourHours, 14_400),
                 (.sixHours, 21_600),
                 (.twelveHours, 43_200),
                 (.twentyFourHours, 86_400),
@@ -70,148 +266,106 @@ struct DailyMacValidation {
             }
         }
 
-        await harness.run("smart monitoring range follows live work context") {
+        await harness.run("Auto follows the waking day across midnight without inventing sleep") {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = try require(TimeZone(identifier: "UTC"), "UTC timezone unavailable")
-            let morning = try require(
-                calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 9)),
-                "morning smart-range fixture unavailable"
-            )
-            let midday = try require(
-                calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 13)),
-                "midday smart-range fixture unavailable"
-            )
-            let evening = try require(
-                calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 18)),
-                "evening smart-range fixture unavailable"
-            )
-
-            let intenseStart = morning.addingTimeInterval(-20 * 60)
-            let intenseSamples = (1...4).map { step in
-                sample(
-                    at: intenseStart.addingTimeInterval(Double(step) * 5 * 60),
-                    duration: 5 * 60,
-                    interval: 5 * 60,
-                    cpu: 78
-                )
+            func moment(_ day: Int, _ hour: Int, _ minute: Int = 0) throws -> Date {
+                try require(calendar.date(from: DateComponents(
+                    year: 2026, month: 9, day: day, hour: hour, minute: minute
+                )), "Auto fixture unavailable")
             }
-            let closeRange = TimelineSemantics.recommendedMonitoringRange(
-                at: morning,
-                recentSamples: intenseSamples,
-                calendar: calendar
+            let now = try moment(26, 10)
+            let lateWork = [
+                sample(at: try moment(25, 23), duration: 300, interval: 300),
+                sample(at: try moment(26, 2), duration: 300, interval: 300),
+                sample(at: try moment(26, 9), duration: 300, interval: 300)
+            ]
+            let sleepStart = try moment(26, 2, 15)
+            let wake = try moment(26, 8)
+            let events = [
+                ActivityEvent(timestamp: sleepStart, type: .sleep, title: "Sleep", explanation: "Fixture", severity: .information),
+                ActivityEvent(timestamp: wake, type: .wake, title: "Wake", explanation: "Fixture", severity: .information)
+            ]
+            let afterWake = TimelineSemantics.automaticDayWindow(
+                at: now, recentSamples: lateWork, sleepWakeEvents: events, calendar: calendar
             )
-            try harness.check(closeRange == .oneHour, "a fresh demanding session did not stay close")
+            try harness.check(afterWake.start == wake, "Auto retained 2am work from before confirmed rest")
+            try harness.check(afterWake.end == now, "Auto did not end live")
 
-            let workStart = midday.addingTimeInterval(-2.5 * 60 * 60)
-            let workSamples = (1...10).map { step in
-                sample(
-                    at: workStart.addingTimeInterval(Double(step) * 15 * 60),
-                    duration: 15 * 60,
-                    interval: 15 * 60,
-                    cpu: 48
-                )
-            }
-            let workStretch = TimelineSemantics.recommendedMonitoringRange(
-                at: midday,
-                recentSamples: workSamples,
-                calendar: calendar
+            let withoutSleep = TimelineSemantics.automaticDayWindow(
+                at: now, recentSamples: lateWork, sleepWakeEvents: [], calendar: calendar
             )
-            try harness.check(workStretch == .sixHours, "an established work stretch lacked useful pause context")
+            let morningActivity = try moment(26, 8, 55)
+            try harness.check(withoutSleep.start == morningActivity,
+                              "Auto did not begin at resumed morning activity")
 
-            let dayStart = evening.addingTimeInterval(-9 * 60 * 60)
-            let fullDaySamples = (1...6).map { step in
-                sample(
-                    at: dayStart.addingTimeInterval(Double(step) * 60 * 60),
-                    duration: 60 * 60,
-                    interval: 60 * 60,
-                    cpu: 35
-                )
-            }
-            let fullDay = TimelineSemantics.recommendedMonitoringRange(
-                at: evening,
-                recentSamples: fullDaySamples,
-                calendar: calendar
+            let overnightNow = try moment(26, 2, 5)
+            let overnight = TimelineSemantics.automaticDayWindow(
+                at: overnightNow, recentSamples: Array(lateWork.prefix(2)),
+                sleepWakeEvents: [], calendar: calendar
             )
-            try harness.check(fullDay == .twelveHours, "a substantial late day was not summarized")
-
-            let resumedSamples = fullDaySamples + (1...2).map { step in
-                sample(
-                    at: evening.addingTimeInterval(Double(step - 2) * 5 * 60),
-                    duration: 5 * 60,
-                    interval: 5 * 60,
-                    cpu: 82
-                )
-            }
-            let resumedIntensity = TimelineSemantics.recommendedMonitoringRange(
-                at: evening,
-                recentSamples: resumedSamples,
-                calendar: calendar
+            let lateStart = try moment(25, 22, 55)
+            try harness.check(overnight.start == lateStart,
+                              "Auto cut continuous late work at midnight")
+            let smart = TimelineSemantics.monitoringRange(
+                for: .smart, at: now, recentSamples: lateWork, calendar: calendar
             )
-            try harness.check(resumedIntensity == .twelveHours, "a newly resumed session hid substantial late-day context")
-
+            try harness.check(smart == .today, "Auto did not use the dynamic day scale")
             let manual = TimelineSemantics.monitoringRange(
                 for: .fixed(.fortyEightHours),
-                at: evening,
-                recentSamples: intenseSamples,
+                at: now,
+                recentSamples: lateWork,
                 calendar: calendar
             )
-            try harness.check(manual == .fortyEightHours, "a manual history window was overwritten by Smart")
+            try harness.check(manual == .fortyEightHours, "Auto overwrote a fixed window")
         }
 
-        await harness.run("menu panel conceals its provisional frame until anchored") {
+        await harness.run("menu panel uses one native anchored non-detachable popover") {
             let validationFile = URL(fileURLWithPath: #filePath)
             let repositoryRoot = validationFile
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
             let sourceURL = repositoryRoot
-                .appendingPathComponent("Sources/DailyMacApp/MenuBarMonitoringView.swift")
+                .appendingPathComponent("Sources/DailyMacApp/DailyMacApp.swift")
             let source = try String(contentsOf: sourceURL, encoding: .utf8)
-            let functionStart = try require(
-                source.range(of: "    private func positionWindow(_ window: NSWindow, under anchor: MenuBarPanelAnchor)"),
-                "menu-panel positioning function was unavailable"
+            try harness.check(
+                source.contains("private let popover = NSPopover()"),
+                "menu presentation no longer retains one native popover"
             )
-            let functionEnd = try require(
-                source.range(
-                    of: "    private func concealWindowForAnchoredPlacement",
-                    range: functionStart.upperBound..<source.endIndex
-                ),
-                "menu-panel concealment boundary was unavailable"
+            try harness.check(
+                source.contains("popoverShouldDetach(_ popover: NSPopover) -> Bool { false }"),
+                "menu presentation can detach into another window"
             )
-            let body = String(source[functionStart.lowerBound..<functionEnd.lowerBound])
-            let conceal = try require(body.range(of: "concealWindowForAnchoredPlacement(window)"), "provisional panel frame was not concealed")
-            let immediatePlacement = try require(body.range(of: "positionWindowImmediately(window, under: anchor)"), "panel was not anchored before deferral")
-            let deferredPlacement = try require(body.range(of: "self.positionWindowImmediately(window, under: anchor)"), "final intrinsic-size placement was unavailable")
-            let reveal = try require(body.range(of: "window.alphaValue = 1"), "panel was not revealed after final placement")
-            try harness.check(conceal.lowerBound < immediatePlacement.lowerBound, "panel was positioned before its provisional frame was concealed")
-            try harness.check(immediatePlacement.lowerBound < deferredPlacement.lowerBound, "final-size stabilization did not follow immediate anchoring")
-            try harness.check(deferredPlacement.lowerBound < reveal.lowerBound, "panel became visible before its final anchored placement")
+            let layout = try require(source.range(of: "content.view.layoutSubtreeIfNeeded()"), "panel layout was not resolved before presentation")
+            let show = try require(source.range(of: "popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)"), "panel was not anchored to the actual status button")
+            try harness.check(layout.lowerBound < show.lowerBound, "panel was shown before resolving its fitting size")
+            try harness.check(source.contains("hosting.sizingOptions = [.preferredContentSize]"), "mode changes cannot resize through native content sizing")
+            try harness.check(source.contains("popover.animates = false"), "mode/open presentation reintroduced an animated provisional transition")
+            try harness.check(
+                !source.contains("setFrame(") && !source.contains("alphaValue") && !source.contains("openWindow"),
+                "menu presentation reintroduced manual window relocation or a second monitoring window"
+            )
+        }
 
-            let resizeStart = try require(
-                source.range(of: "    private func restorePresentationAnchor()"),
-                "menu-panel resize anchoring function was unavailable"
-            )
-            let resizeEnd = try require(
-                source.range(
-                    of: "    private func positionWindow(_ window: NSWindow, under anchor: MenuBarPanelAnchor)",
-                    range: resizeStart.upperBound..<source.endIndex
-                ),
-                "menu-panel initial positioning boundary was unavailable"
-            )
-            let resizeBody = String(source[resizeStart.lowerBound..<resizeEnd.lowerBound])
-            try harness.check(
-                resizeBody.contains("positionWindowImmediately(window, under: anchor)"),
-                "panel resize did not preserve its anchor immediately"
-            )
-            try harness.check(
-                !resizeBody.contains("positionWindow(window, under: anchor)"),
-                "panel resize replayed the opening conceal/reveal cycle"
-            )
+        await harness.run("appearance uses one native owner and System follows live OS changes") {
+            let repositoryRoot = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            let host = try String(contentsOf: repositoryRoot.appendingPathComponent("Sources/DailyMacApp/DailyMacApp.swift"), encoding: .utf8)
+            let appearance = try String(contentsOf: repositoryRoot.appendingPathComponent("Sources/DailyMacApp/AppAppearance.swift"), encoding: .utf8)
+            try harness.check(appearance.contains("case .system: return nil"), "System no longer clears the native appearance override")
+            try harness.check(appearance.contains("NSAppearance(named: .aqua)") && appearance.contains("NSAppearance(named: .darkAqua)"), "explicit Light/Dark appearance mappings changed")
+            try harness.check(host.contains("NSApp.appearance = AppAppearance.resolved(from: rawValue).nativeAppearance"), "the saved preference is not applied to the native app")
+            try harness.check(host.contains("UserDefaults.didChangeNotification"), "appearance changes are not synchronized while the panel is open")
+            try harness.check(host.contains("NSApp.publisher(for: \\.effectiveAppearance"), "System does not observe live OS appearance changes")
+            try harness.check(host.contains("popover.appearance = NSApp.effectiveAppearance"), "the reused popover does not follow the effective app appearance")
+            try harness.check(!host.contains(".preferredColorScheme("), "SwiftUI can retain a competing window appearance override")
         }
 
         await harness.run("calm graph uses longer stable trend windows") {
             let expected: [(MonitoringRange, TimeInterval, TimeInterval)] = [
                 (.oneHour, 30, 2 * 60),
+                (.fourHours, 90, 6 * 60),
                 (.sixHours, 2 * 60, 8 * 60),
                 (.twelveHours, 5 * 60, 16 * 60),
                 (.twentyFourHours, 10 * 60, 30 * 60),
@@ -235,6 +389,101 @@ struct DailyMacValidation {
                     "calm \(range.label) trend became too coarse to explain the window"
                 )
             }
+        }
+
+        await harness.run("processor trends retain short measured runs at every range") {
+            let start = Date(timeIntervalSince1970: 1_800_005_000)
+            let samples = [
+                sample(at: start.addingTimeInterval(15), cpu: 30, gpu: 50),
+                sample(at: start.addingTimeInterval(30), cpu: 50, gpu: 70),
+                sample(at: start.addingTimeInterval(615), cpu: 70, gpu: 90)
+            ]
+            for range in MonitoringRange.allCases {
+                for mode in TimelineDisplayMode.allCases {
+                    let trend = TimelineSemantics.processorTrend(
+                        from: samples.reversed(),
+                        within: DateInterval(start: start, duration: range.duration),
+                        range: range,
+                        displayMode: mode
+                    )
+                    let runs = Dictionary(grouping: trend, by: \.segment).values
+                        .sorted { $0[0].timestamp < $1[0].timestamp }
+                    try harness.check(runs.count == 2, "\(range.label) \(mode.label) joined a recording gap")
+                    try harness.check(runs.allSatisfy { $0.count >= 2 }, "a short \(range.label) \(mode.label) run disappeared into one point")
+                    try harness.check(runs[0].first?.timestamp == start, "the first measured interval was truncated")
+                    try harness.check(runs[0].last?.timestamp == start.addingTimeInterval(30), "the short run extended beyond its evidence")
+                    try harness.check(runs[1].first?.timestamp == start.addingTimeInterval(600), "the isolated sample lost its observed start")
+                    try harness.check(runs[1].last?.timestamp == start.addingTimeInterval(615), "the isolated sample lost its observed end")
+                    if range == .oneWeek {
+                        try harness.check(runs[0].allSatisfy { $0.cpuPercent == 40 && $0.gpuPercent == 60 }, "week averages lost measured duration weighting")
+                    }
+                }
+            }
+        }
+
+        await harness.run("processor averages clip boundaries and split samples across buckets") {
+            let start = Date(timeIntervalSince1970: 1_800_010_000)
+            let clipped = TimelineSemantics.processorTrend(
+                from: [
+                    sample(at: start.addingTimeInterval(30), duration: 30, interval: 30, cpu: 20, gpu: 40),
+                    sample(at: start.addingTimeInterval(90), duration: 60, interval: 60, cpu: 80, gpu: 100)
+                ],
+                within: DateInterval(start: start.addingTimeInterval(20), end: start.addingTimeInterval(80)),
+                range: .oneHour,
+                displayMode: .calm
+            )
+            try harness.check(clipped.count == 2, "one measured bucket did not retain both boundaries")
+            try harness.check(clipped.first?.timestamp == start.addingTimeInterval(20), "trend leaked before the window")
+            try harness.check(clipped.last?.timestamp == start.addingTimeInterval(80), "trend leaked after the window")
+            try harness.check(clipped.allSatisfy { abs($0.cpuPercent - 70) < 0.001 && abs(($0.gpuPercent ?? 0) - 90) < 0.001 }, "boundary weighting used an entire partly visible sample")
+
+            let split = TimelineSemantics.processorTrend(
+                from: [
+                    sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, cpu: 20),
+                    sample(at: start.addingTimeInterval(180), duration: 120, interval: 120, cpu: 80)
+                ],
+                within: DateInterval(start: start, duration: 300),
+                range: .oneHour,
+                displayMode: .calm
+            )
+            try harness.check(split.map(\.cpuPercent) == [50, 50, 80, 80], "a sample crossing an averaging boundary was assigned wholly to one bucket")
+            try harness.check(split.map { $0.timestamp.timeIntervalSince(start) } == [0, 60, 150, 180], "bucket values were not centered within their actual measured time")
+        }
+
+        await harness.run("processor trends bound delayed readings and preserve unavailable telemetry") {
+            let start = Date(timeIntervalSince1970: 1_800_015_000)
+            let window = DateInterval(start: start, duration: 900)
+            let bounded = TimelineSemantics.processorTrend(
+                from: [
+                    sample(at: start.addingTimeInterval(600), duration: 600, interval: 15, cpu: 100),
+                    sample(at: start.addingTimeInterval(615), cpu: 0)
+                ],
+                within: window, range: .oneWeek, displayMode: .calm
+            )
+            try harness.check(bounded.first?.timestamp == start.addingTimeInterval(567), "a delayed reading invented hundreds of seconds of coverage")
+            try harness.check(bounded.allSatisfy { abs($0.cpuPercent - 68.75) < 0.001 }, "a delayed reading dominated the mean with unbounded duration")
+
+            let availability = TimelineSemantics.processorTrend(
+                from: [
+                    sample(at: start.addingTimeInterval(15), gpu: 70, performanceCore: 30, efficiencyCore: 10, performanceContribution: 15),
+                    sample(at: start.addingTimeInterval(30), gpu: .nan),
+                    sample(at: start.addingTimeInterval(45), gpu: 40, performanceCore: 20, efficiencyCore: 10, performanceContribution: 12),
+                    sample(at: start.addingTimeInterval(60), gpu: 60)
+                ],
+                within: window, range: .oneWeek, displayMode: .calm
+            )
+            let runs = Dictionary(grouping: availability, by: \.segment).values
+                .sorted { $0[0].timestamp < $1[0].timestamp }
+            try harness.check(runs.count == 3, "unavailable GPU evidence failed to split the colored run")
+            try harness.check(runs[1].allSatisfy { $0.gpuPercent == nil }, "a non-finite GPU reading became a value")
+            try harness.check(runs[0].allSatisfy { $0.performanceCoreContributionPercent == 15 }, "complete core distribution was lost")
+            try harness.check(runs[2].allSatisfy { $0.performanceCorePercent == nil && $0.efficiencyCorePercent == nil && $0.performanceCoreContributionPercent == nil }, "partial core coverage produced a confident distribution")
+
+            let invalid = TimelineSemantics.processorTrend(
+                from: [sample(at: start.addingTimeInterval(15), cpu: .nan)],
+                within: window, range: .oneHour, displayMode: .precise
+            )
+            try harness.check(invalid.isEmpty, "a non-finite CPU reading reached the renderer")
         }
 
         await harness.run("permission-free manual activity counters use safe deltas") {
@@ -622,8 +871,56 @@ struct DailyMacValidation {
             try harness.check(WorkCategory.research.rawValue == "Browser use", "browser identity was overclaimed as intent")
         }
 
+        await harness.run("software session events cannot restart human presence") {
+            // Reported case: the broad session timer resets while all actual
+            // keyboard, pointer, click and scrolling counters remain quiet.
+            var queriedSession = false
+            let age = TelemetrySemantics.humanInputIdleSeconds(
+                readAge: { source, type in
+                    if source == .combinedSessionState || type.rawValue == UInt32.max {
+                        queriedSession = true
+                        return 1
+                    }
+                    return 900
+                },
+                readCount: { _, _ in 10 }
+            )
+            try harness.check(age == 900 && !queriedSession, "a software/session event restarted the pink You interval")
+        }
+
+        await harness.run("human input ages require valid observed hardware events") {
+            for type in TelemetrySemantics.humanInputEventTypes {
+                let age = TelemetrySemantics.humanInputIdleSeconds(
+                    readAge: { _, candidate in candidate == type ? 12 : 900 },
+                    readCount: { _, _ in 1 }
+                )
+                try harness.check(age == 12, "hardware input type \(type.rawValue) was ignored")
+            }
+            let noEvents = TelemetrySemantics.humanInputIdleSeconds(readAge: { _, _ in 0 }, readCount: { _, _ in 0 })
+            try harness.check(noEvents == nil, "empty counters fabricated recent human input")
+            for invalid in [Double.nan, .infinity, -1] {
+                let age = TelemetrySemantics.humanInputIdleSeconds(readAge: { _, _ in invalid }, readCount: { _, _ in 1 })
+                try harness.check(age == nil, "invalid input age was accepted as human presence")
+            }
+        }
+
+        await harness.run("presence rail expires after hardware input stops despite ongoing session activity") {
+            let start = Date(timeIntervalSince1970: 1_800_290_000)
+            let ages: [Double] = [10, 120, 300, 900]
+            let samples = ages.enumerated().map { index, hardwareAge in
+                let age = TelemetrySemantics.humanInputIdleSeconds(
+                    readAge: { source, _ in source == .hidSystemState ? hardwareAge : 1 },
+                    readCount: { _, _ in 1 }
+                ) ?? .infinity
+                return sample(at: start.addingTimeInterval(Double(index + 1) * 60), duration: 60, interval: 60,
+                              idle: age >= 300,
+                              manualActivity: ManualActivityCounts(keyboardEvents: 0, pointerEvents: 0, clickEvents: 0, scrollEvents: 0))
+            }
+            let presence = TimelineSemantics.presenceContext(from: samples, within: DateInterval(start: start, duration: 240))
+            try harness.check(presence.handsOnIntervals == [DateInterval(start: start, duration: 120)], "background events renewed the pink rail or quiet reading lost its grace period")
+        }
+
         await harness.run("plain-language formatting") {
-            try harness.check(TelemetrySemantics.anyInputEventTypeRawValue == UInt32.max, "idle detection is not configured for any keyboard/mouse/tablet input")
             try harness.check(TelemetrySemantics.isUnexpectedGap(elapsed: 40, expectedInterval: 15), "sampling gap beyond covered duration was not recognized")
             try harness.check(!TelemetrySemantics.isUnexpectedGap(elapsed: 60, expectedInterval: 60), "normal adaptive idle interval was treated as a gap")
             try harness.check(Formatters.duration(30) == "less than a minute", "short duration wording mismatch")
@@ -1010,6 +1307,33 @@ struct DailyMacValidation {
             events += detector.observe(sample(at: start.addingTimeInterval(60), cpu: 70))
             for index in 0..<4 { events += detector.observe(sample(at: start.addingTimeInterval(Double(index + 5) * 15), cpu: 80)) }
             try harness.check(!events.contains { $0.type == .sustainedCPU }, "separate CPU bursts were combined into a sustained event")
+        }
+
+        await harness.run("monitor overhead requires continuous measured process CPU") {
+            var detector = EventDetector()
+            let start = Date(timeIntervalSince1970: 1_800_000_000)
+            var events: [ActivityEvent] = []
+            for index in 0..<7 {
+                events += detector.observe(sample(at: start.addingTimeInterval(Double(index) * 15), monitorCPU: 2))
+            }
+            try harness.check(!events.contains { $0.type == .monitorOverhead }, "monitor overhead fired before two measured minutes")
+            events += detector.observe(sample(at: start.addingTimeInterval(105), monitorCPU: 2))
+            try harness.check(events.filter { $0.type == .monitorOverhead }.count == 1, "sustained measured monitor CPU was not reported")
+            events += detector.observe(sample(at: start.addingTimeInterval(120), monitorCPU: 2))
+            try harness.check(events.filter { $0.type == .monitorOverhead }.count == 1, "open overhead event was duplicated")
+
+            detector.resetAfterGap()
+            events = []
+            for index in 0..<7 {
+                events += detector.observe(sample(at: start.addingTimeInterval(Double(index) * 15), monitorCPU: 2))
+            }
+            events += detector.observe(sample(at: start.addingTimeInterval(105), monitorCPU: 99, monitorCPUMeasurementVersion: nil))
+            events += detector.observe(sample(at: start.addingTimeInterval(120), monitorCPU: 2))
+            try harness.check(!events.contains { $0.type == .monitorOverhead }, "unknown process CPU was counted across a measurement gap")
+            for index in 0..<7 {
+                events += detector.observe(sample(at: start.addingTimeInterval(Double(index + 9) * 15), monitorCPU: 2))
+            }
+            try harness.check(events.filter { $0.type == .monitorOverhead }.count == 1, "monitor overhead did not recover after a complete measured run")
         }
 
         await harness.run("v1 stores migrate app-family ownership without losing rows") {
@@ -1465,7 +1789,7 @@ struct DailyMacValidation {
             try harness.check(insufficient.handsOnShare == nil, "less than two minutes of input evidence produced a confident share")
         }
 
-        await harness.run("presence baseline separates hands-on, awake, and unrecorded time") {
+        await harness.run("presence baseline separates human use, background, and unrecorded time") {
             let start = Date(timeIntervalSince1970: 1_800_275_000)
             let interval = DateInterval(start: start, duration: 6 * 60)
             let active = ManualActivityCounts(
@@ -1483,7 +1807,7 @@ struct DailyMacValidation {
             let presence = TimelineSemantics.presenceContext(
                 from: [
                     sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, manualActivity: active),
-                    sample(at: start.addingTimeInterval(120), duration: 60, interval: 60, manualActivity: quiet),
+                    sample(at: start.addingTimeInterval(120), duration: 60, interval: 60, idle: true, manualActivity: quiet),
                     // Legacy records have no physical-input counters; their
                     // content-free idle bit remains the honest fallback.
                     sample(at: start.addingTimeInterval(300), duration: 60, interval: 60, idle: false)
@@ -1501,6 +1825,23 @@ struct DailyMacValidation {
                 abs(presence.handsOnIntervals.reduce(0) { $0 + $1.duration } - 120) < 0.001,
                 "hands-on duration did not preserve measured and legacy evidence"
             )
+        }
+
+        await harness.run("quiet reading remains human use until the system becomes idle") {
+            let start = Date(timeIntervalSince1970: 1_800_280_000)
+            let window = DateInterval(start: start, duration: 3 * 60)
+            let noInput = ManualActivityCounts(keyboardEvents: 0, pointerEvents: 0, clickEvents: 0, scrollEvents: 0)
+            let presence = TimelineSemantics.presenceContext(
+                from: [
+                    sample(at: start.addingTimeInterval(60), duration: 60, interval: 60, idle: false, manualActivity: noInput),
+                    sample(at: start.addingTimeInterval(120), duration: 60, interval: 60, idle: false, manualActivity: noInput),
+                    sample(at: start.addingTimeInterval(180), duration: 60, interval: 60, idle: true, manualActivity: noInput)
+                ],
+                within: window
+            )
+            try harness.check(presence.handsOnIntervals == [DateInterval(start: start, duration: 120)], "quiet non-idle reading was incorrectly marked background")
+            let away = TimelineSemantics.humanAwayIntervals(presence: presence, sleepIntervals: [], within: window)
+            try harness.check(away == [DateInterval(start: start.addingTimeInterval(120), duration: 60)], "lack of input was incorrectly labeled Away before the system idle threshold")
         }
 
         await harness.run("human-away context excludes hands-on time and unrecorded gaps") {
@@ -1972,7 +2313,15 @@ struct DailyMacValidation {
             )
         }
 
+        await HistoryValidation.run(harness: harness)
+        await WorkAttributionValidation.run(harness: harness)
+        await StorageMaintenanceValidation.run(harness: harness)
+        await ProcessCPUValidation.run(harness: harness)
+        await DeviceCounterValidation.run(harness: harness)
+        await AppCPUCalibrationValidation.run(harness: harness)
+
         if !CommandLine.arguments.contains("--skip-live") {
+            await ProcessCPUValidation.runLive(harness: harness)
             await harness.run("live permission-free telemetry invariants") {
             let sampler = TelemetrySampler()
             let start = Date()
@@ -1990,13 +2339,15 @@ struct DailyMacValidation {
             try harness.check(first.system.memoryUsedBytes > 0 && first.system.memoryUsedBytes <= first.system.memoryTotalBytes, "memory reading implausible")
             try harness.check((0...100).contains(second.system.cpuPercent), "CPU reading out of bounds")
             try harness.check(!second.system.foregroundApp.isEmpty, "foreground app unavailable")
-            let anyInput = CGEventType(rawValue: TelemetrySemantics.anyInputEventTypeRawValue)!
-            let liveIdleSeconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
-            try harness.check(second.system.isIdle == (liveIdleSeconds >= MonitoringSettings.default.idleThreshold), "idle classification did not follow any keyboard/mouse/tablet input")
+            let liveIdleSeconds = TelemetrySemantics.humanInputIdleSeconds() ?? .infinity
+            try harness.check(second.system.isIdle == (liveIdleSeconds >= MonitoringSettings.default.idleThreshold), "idle classification did not follow observed hardware input")
             try harness.check(second.attemptedProcessCount > 0 && second.observedProcessCount > 0, "process extension observed nothing")
             try harness.check(second.observedProcessCount <= second.attemptedProcessCount, "process coverage exceeds attempted count")
+            try harness.check(second.processes.isEmpty && second.system.monitorCPUMeasurementVersion == 1,
+                              "skipping the all-process scan discarded this process's own CPU measurement")
             try harness.check(elapsed < 5, "two live samples took \(elapsed)s")
-            print("INFO  live process coverage: \(second.observedProcessCount)/\(second.attemptedProcessCount); idle input age: \(Int(liveIdleSeconds))s; two-sample wall time: \(String(format: "%.3f", elapsed))s")
+            let inputAgeLabel = liveIdleSeconds.isFinite ? "\(Int(liveIdleSeconds))s" : "unavailable"
+            print("INFO  live process coverage: \(second.observedProcessCount)/\(second.attemptedProcessCount); hardware input age: \(inputAgeLabel); two-sample wall time: \(String(format: "%.3f", elapsed))s")
             }
         }
 
@@ -2026,7 +2377,8 @@ struct DailyMacValidation {
         power: PowerSource = .battery, charging: Bool? = false,
         diskRead: UInt64 = 1_000_000, diskWrite: UInt64 = 500_000,
         networkReceived: UInt64 = 2_000_000, networkSent: UInt64 = 250_000,
-        manualActivity: ManualActivityCounts? = nil
+        manualActivity: ManualActivityCounts? = nil,
+        monitorCPU: Double = 0.2, monitorCPUMeasurementVersion: Int? = 1
     ) -> SystemSample {
         SystemSample(
             timestamp: date, duration: duration, foregroundApp: app, foregroundBundleID: bundle,
@@ -2039,9 +2391,9 @@ struct DailyMacValidation {
             memoryUsedBytes: memory, memoryTotalBytes: totalMemory, memoryPressure: pressure,
             swapUsedBytes: swap, thermalLevel: thermal, batteryPercent: battery, powerSource: power,
             isCharging: charging, diskReadBytes: diskRead, diskWriteBytes: diskWrite,
-            networkReceivedBytes: networkReceived, networkSentBytes: networkSent, monitorCPUPercent: 0.2,
+            networkReceivedBytes: networkReceived, networkSentBytes: networkSent, monitorCPUPercent: monitorCPU,
             monitorMemoryBytes: 60_000_000, monitorDiskWriteBytes: 20_000, samplingInterval: interval,
-            manualActivity: manualActivity
+            manualActivity: manualActivity, monitorCPUMeasurementVersion: monitorCPUMeasurementVersion
         )
     }
 

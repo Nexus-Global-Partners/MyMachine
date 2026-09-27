@@ -17,7 +17,7 @@ struct PreferencesView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    Text("System follows your Mac. Light and Dark apply consistently to the menu and main window.")
+                    Text("System follows your Mac. Light and Dark apply consistently to the monitoring panel and settings.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

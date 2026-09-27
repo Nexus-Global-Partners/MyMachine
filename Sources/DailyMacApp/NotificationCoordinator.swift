@@ -270,22 +270,3 @@ final class NotificationCoordinator: NSObject, @preconcurrency UNUserNotificatio
         completionHandler()
     }
 }
-
-@MainActor
-final class DailyMacApplicationDelegate: NSObject, NSApplicationDelegate {
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        NotificationCoordinator.shared.configureDelegate()
-    }
-
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            AppRoute.shared.requestMonitoring()
-            sender.activate(ignoringOtherApps: true)
-        }
-        return true
-    }
-}

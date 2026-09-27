@@ -2,16 +2,17 @@
 
 MY MACHINE is a native, local-first macOS background monitor that connects foreground and background application activity with whole-machine performance, then turns the result into practical, plain-language understanding.
 
-Repository: [Nexus-Global-Partners/MyMachine](https://github.com/Nexus-Global-Partners/MyMachine) · [Download MY MACHINE 1.3.1](https://github.com/Nexus-Global-Partners/MyMachine/releases/download/v1.3.1/MY-MACHINE-1.3.1.zip) · [All releases](https://github.com/Nexus-Global-Partners/MyMachine/releases)
+Repository: [Nexus-Global-Partners/MyMachine](https://github.com/Nexus-Global-Partners/MyMachine) · [MIT license](LICENSE) · [Older binary releases](https://github.com/Nexus-Global-Partners/MyMachine/releases)
 
-## Install and see your first useful view
+## Install from source with your own agent
 
-1. Download [MY-MACHINE-1.3.1.zip](https://github.com/Nexus-Global-Partners/MyMachine/releases/download/v1.3.1/MY-MACHINE-1.3.1.zip), unzip it, and move **MY MACHINE.app** into **Applications**.
-2. In Finder, Control-click **MY MACHINE.app** and choose **Open**. Confirm **Open** once more if macOS asks. The public build is ad-hoc signed and is not Apple-notarized; this one-time Finder step is expected. If macOS still blocks it, approve it under **System Settings → Privacy & Security** and open it again.
-3. Look for the simple Mac outline in the menu bar or MY MACHINE in the Dock. Click the menu-bar icon to see the last hour immediately; the view fills in as local history is recorded.
-4. Use the Calm/Precise switch and 1h–7d history picker directly in the menu. The small diagnosis icon prepares a private, minimized context brief only when you click it. Nothing is uploaded or sent for you.
+This is the current way to try the latest version on another Mac. Paste this into a coding agent running on that Mac:
 
-The download above is an Apple-silicon build for macOS 15 or later. Intel users and anyone who prefers to inspect the build can compile from source below.
+> Install the open-source MY MACHINE menu-bar app from https://github.com/Nexus-Global-Partners/MyMachine on my Mac. First check that I have macOS 15 or later, Apple Command Line Tools, and Swift 6. Clone the public repository into a new folder without overwriting my files. Inspect its README and packaging script, then run `swift run DailyMacValidation` and `./scripts/package.sh`. Verify the packaged app's code signature. If `/Applications/MY MACHINE.app` already exists, quit it and make a recoverable backup before replacing only that app bundle; do not delete its data or preferences. Install `outputs/MY MACHINE.app` into Applications and open it. If macOS requires a one-time approval because it is ad-hoc signed and not notarized, tell me the normal Finder or System Settings step; do not disable Gatekeeper. Report the installed version and test results.
+
+You can also run the commands yourself under **Build from source** below. The source build is compiled for the host Mac, including supported Intel and Apple-silicon machines. It is ad-hoc signed, not Apple-notarized; Finder may require Control-click → **Open** once.
+
+The menu-bar item shows physical fan speed and macOS thermal pressure at left when available, CPU/GPU demand in blue at center, and machine health/effort at right. Open it for the full-width usage history. Calm smooths the trend; Precise preserves more interval detail. The compact range control includes Auto, 1h, 4h, 6h, 12h, 24h, and 48h, with adjacent arrows for one-click changes and separate past-day browsing. All telemetry stays on the Mac. Diagnosis only prepares a brief after you click; it never sends one automatically.
 
 Documentation: [maintainer handoff](HANDOFF.md) · [contributing](CONTRIBUTING.md) · [security](SECURITY.md) · [privacy boundary](PRIVACY.md) · [changelog](CHANGELOG.md)
 
@@ -29,7 +30,7 @@ swift run DailyMacValidation
 ./scripts/package.sh
 ```
 
-The package script builds an optimized app for the host architecture, constructs a standard `.app` bundle, applies an ad-hoc Hardened Runtime signature, and writes one clean set of versioned artifacts to `outputs/`. The downloadable v1.3.1 app is for Apple-silicon Macs; the public source can be built on any supported Mac.
+The package script builds an optimized app for the host architecture, constructs a standard `.app` bundle, applies an ad-hoc Hardened Runtime signature, and writes one clean set of versioned artifacts to `outputs/`. Older downloads on the Releases page do not contain the latest source changes.
 
 Move `outputs/MY MACHINE.app` into `/Applications`, then use the same one-time Finder **Open** step described above. See [HANDOFF.md](HANDOFF.md) for isolated development, architecture, known follow-ups, and release checks.
 
@@ -40,17 +41,19 @@ Move `outputs/MY MACHINE.app` into `/Applications`, then use the same one-time F
 - Isolated best-effort process extension for significant process CPU, memory footprint, and observed file/disk activity; related helpers and workers are combined under their owning app using local parent relationships, and incomplete coverage never breaks the core
 - Actor-confined SQLite database with WAL transactions, owner-only permissions, bounded raw retention, crash-safe commits, integrity checking, and non-destructive corruption recovery. Private recovery copies follow raw-data retention and are removed by **Delete All Data**.
 - Deterministic insight engine with duration/evidence gates and no AI or network dependency
-- Clicking the menu-bar icon opens a centered, cached view immediately and refreshes it from the local database each time it opens. The complete product stays in that compact Calm/Precise surface; a regular Monitoring window remains available for deeper history and settings.
-- System, Light, and Dark appearances apply consistently to the menu and main app.
+- Clicking the menu-bar icon opens one native AppKit popover anchored to the actual status item. Cached history appears immediately, then refreshes silently every 30 seconds while open. Closing it stops presentation refreshes. App reopening and notifications use this same panel; there is no separate dashboard window.
+- System, Light, and Dark appearances apply consistently to the monitoring panel and settings.
 - The header states both how much non-idle use was observed since the start of today and the length of the current natural session. Brief pauses do not split one session. This is practical time context, never a focus, attention, effort, or productivity score.
 - **Diagnose My Machine** builds a deterministic, privacy-bounded brief from the latest 24 elapsed hours, copies it only after the user clicks, and can open ChatGPT or Claude as a convenience. Copy only is the default. MY MACHINE never reads the clipboard, calls an AI service, inserts the brief into a website, or sends it. Application names can be anonymized in Settings.
-- A graph-first status view keeps whole-Mac CPU demand and the clearly labeled GPU activity estimate as separate lines. The label rail pairs each series identity and percentage with short, evidence-bounded window meaning: demanding duration and practical impact for the machine, plus recorded hands-on share and the longest physical-input stretch. Only genuinely urgent line sections turn red; manageable load keeps the original series color. CPU and GPU are never combined into an invented universal utilization percentage, and hands-on input is never presented as focus or productivity.
-- Rolling Monitoring view for the last 1, 6, 12, 24, or 48 elapsed hours, or the last 7 days, led by one unified time-aligned timeline. Precise mode preserves interval detail; Calm mode uses longer rolling averages for a quieter overview. Both keep CPU and GPU distinct, bridge unrecorded gaps honestly, mark memory and thermal pressure below the core lines, and show whether the Mac was used directly, working in the background, or asleep. Exact power, memory, and network context remains available through selection and diagnosis.
+- A full-width graph keeps whole-Mac CPU and the driver-provided GPU estimate distinct. A small instrument at the graph edge mirrors the menu bar's CPU/GPU, fan, thermal, and health signals without crowding the history. CPU and GPU are never combined into an invented utilization score. Only sustained urgent evidence becomes an alert; high load by itself is not a fault.
+- All selectable ranges use one time-aligned line graph, including 48 hours. Precise preserves interval detail; Calm uses longer averages. Both preserve short observed sessions, distinguish unknown gaps from confirmed sleep, and show recent human use in electric pink, observed awake/background time in neutral silver, and sleep quietly. Presence never proves who caused CPU load.
+- The 48-hour timeline uses day-and-clock labels and recorded CPU/GPU history, not daily-summary bars or invented curves from saved averages. Today and week are no longer picker choices. Existing daily summaries remain stored without changing personal history.
+- Retained app-family evidence distinguishes observed foreground and background CPU capacity from human presence. Capacity is per-process core time divided by the Mac's logical-core count; worker counts are never converted into CPU estimates. GPU has no per-app attribution. Exact app, memory, swap, thermal, and available performance/efficiency-core readings remain available through inspection and diagnosis rather than crowding the first-glance graph.
 - A selected timeline moment has a visible **Now** control and an Escape shortcut; clicking its marker again, the label rail, or the time axis also returns to the current status.
-- App attribution stays contextual: select an exact time to see which foreground and background apps were observed then, or open the full details. The timeline does not use separate per-app mini graphs.
+- App attribution stays contextual rather than becoming separate per-app mini graphs. Presence never proves that the human caused the CPU or GPU demand.
 - Progressive disclosure: practical meaning is shown first, while exact readings, attribution limits, and metric provenance stay available under Details & privacy
 - Privacy-safe local notifications when a reliable briefing is ready; notification text never contains app names, process names, metrics, or report excerpts
-- Daily summaries remain available in History for longer-term review and export
+- Daily summaries remain available for retained reports and evidence, independently of the graph's time-scale choices
 
 The diagnosis brief is capped at 32 KiB and contains selected aggregates, coverage and gap context, confirmed sleep, a representative timeline, and top application-family summaries. It excludes raw samples, PIDs, bundle identifiers, worker names, raw input counts, paths, destinations, and stored event prose. Application labels are sanitized and treated as untrusted data. Clipboard content is limited to the current Mac; while MY MACHINE remains running, it is cleared after roughly ten minutes only if it has not been replaced.
 

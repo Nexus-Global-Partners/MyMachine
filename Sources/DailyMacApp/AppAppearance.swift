@@ -1,4 +1,4 @@
-import SwiftUI
+import AppKit
 
 enum AppAppearance: String, CaseIterable, Identifiable {
     static let storageKey = "appAppearance"
@@ -25,11 +25,12 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         }
     }
 
-    var colorScheme: ColorScheme? {
+    /// A nil override returns ownership to macOS, including scheduled changes.
+    var nativeAppearance: NSAppearance? {
         switch self {
         case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
         }
     }
 

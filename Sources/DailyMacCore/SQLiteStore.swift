@@ -175,7 +175,7 @@ public actor SQLiteStore {
                monitor_cpu, monitor_memory, monitor_disk_write, sampling_interval,
                keyboard_events, pointer_events, click_events, scroll_events,
                gpu_percent, performance_core_percent, efficiency_core_percent,
-               performance_core_contribution
+               performance_core_contribution, monitor_cpu_measurement_version
         FROM system_samples WHERE \(predicate) ORDER BY timestamp;
         """)
         defer { sqlite3_finalize(statement) }
@@ -237,7 +237,8 @@ public actor SQLiteStore {
                 monitorMemoryBytes: uint64(statement, 23),
                 monitorDiskWriteBytes: uint64(statement, 24),
                 samplingInterval: sqlite3_column_double(statement, 25),
-                manualActivity: manualActivity
+                manualActivity: manualActivity,
+                monitorCPUMeasurementVersion: Int(sqlite3_column_int(statement, 34))
             ))
         }
         return result
@@ -255,7 +256,7 @@ public actor SQLiteStore {
         let statement = try prepare("""
         SELECT id, timestamp, pid, process_start, name, bundle_id,
                parent_pid, owner_name, owner_bundle_id, owner_relation, is_foreground,
-               cpu_percent, memory_bytes, disk_read, disk_write, energy_nj
+               cpu_percent, memory_bytes, disk_read, disk_write, energy_nj, cpu_measurement_version
         FROM process_samples WHERE \(predicate) ORDER BY timestamp;
         """)
         defer { sqlite3_finalize(statement) }
@@ -283,7 +284,8 @@ public actor SQLiteStore {
                 parentProcessID: parentPID,
                 ownerName: optionalText(statement, 7),
                 ownerBundleID: optionalText(statement, 8),
-                ownerRelation: relation
+                ownerRelation: relation,
+                cpuMeasurementVersion: Int(sqlite3_column_int(statement, 16))
             ))
         }
         return result
@@ -293,7 +295,7 @@ public actor SQLiteStore {
         let statement = try prepare("""
         SELECT id, timestamp, duration, owner_name, owner_bundle_id, is_foreground,
                cpu_percent, memory_bytes, disk_read, disk_write,
-               process_count, worker_count, agent_worker_count, worker_names
+               process_count, worker_count, agent_worker_count, worker_names, cpu_measurement_version
         FROM app_resource_samples
         WHERE timestamp > ? AND timestamp <= ?
         ORDER BY timestamp;
@@ -325,7 +327,8 @@ public actor SQLiteStore {
                 processCount: Int(sqlite3_column_int(statement, 10)),
                 workerCount: Int(sqlite3_column_int(statement, 11)),
                 agentWorkerCount: Int(sqlite3_column_int(statement, 12)),
-                workerNames: workerNames
+                workerNames: workerNames,
+                cpuMeasurementVersion: Int(sqlite3_column_int(statement, 14))
             ))
         }
         return result
@@ -419,6 +422,7 @@ public actor SQLiteStore {
                cpu_percent, memory_bytes, disk_read + disk_write, is_foreground
         FROM process_samples
         WHERE timestamp = (SELECT MAX(timestamp) FROM process_samples)
+          AND cpu_measurement_version = 1
           AND (cpu_percent >= 50 OR memory_bytes >= 2000000000 OR disk_read + disk_write >= 250000000 OR is_foreground = 1)
         ORDER BY cpu_percent DESC, memory_bytes DESC LIMIT ?;
         """)
@@ -491,6 +495,65 @@ public actor SQLiteStore {
         }
         try removeRecoveryArchives(olderThan: rawCutoff)
         try execute("PRAGMA wal_checkpoint(PASSIVE);")
+        // Retention is already complete. A storage-maintenance problem must
+        // never turn successful deletion into a failed monitoring session.
+        try? reclaimUnusedSpaceIfNeeded(now: now)
+    }
+
+    /// Runs on the store actor, never on the UI actor. Material fragmentation
+    /// gets at most one attempt per week; normal daily reuse costs no rewrite.
+    /// Legacy databases need one VACUUM to enable incremental reclamation.
+    /// Once enabled, future passes release at most 32 MiB without a full copy.
+    private func reclaimUnusedSpaceIfNeeded(now: Date) throws {
+        let pageSize = try integerPragma("page_size")
+        let pageCount = try integerPragma("page_count")
+        let freePages = try integerPragma("freelist_count")
+        let minimumBytes: Int64 = 32 * 1_024 * 1_024
+        guard pageSize > 0, pageCount > 0, freePages > 0,
+              Double(freePages) / Double(pageCount) >= 0.5,
+              freePages >= (minimumBytes + pageSize - 1) / pageSize else { return }
+
+        let timestamp = now.timeIntervalSince1970
+        guard timestamp.isFinite else { return }
+        let key = "storageMaintenanceLastAttempt"
+        let previous = try prepare("SELECT value FROM metadata WHERE key = ? LIMIT 1;")
+        bind(key, to: 1, in: previous)
+        let lastAttempt: Double?
+        if sqlite3_step(previous) == SQLITE_ROW {
+            lastAttempt = Double(text(previous, 0))
+        } else {
+            lastAttempt = nil
+        }
+        sqlite3_finalize(previous)
+        if let lastAttempt, lastAttempt.isFinite,
+           timestamp - lastAttempt < 7 * 86_400 { return }
+
+        // Remember failed attempts too, so a locked or nearly full volume does
+        // not trigger a costly retry on every app launch.
+        let attempt = try prepare("INSERT INTO metadata(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;")
+        bind(key, to: 1, in: attempt)
+        bind(String(timestamp), to: 2, in: attempt)
+        let savedAttempt = sqlite3_step(attempt)
+        sqlite3_finalize(attempt)
+        guard savedAttempt == SQLITE_DONE else { throw StoreError.write(lastError()) }
+
+        if try integerPragma("auto_vacuum") == 0 {
+            // Changing this pragma alone does not migrate an existing store.
+            // SQLite's VACUUM atomically rebuilds it with pointer-map pages.
+            try execute("PRAGMA auto_vacuum=INCREMENTAL;")
+            try execute("VACUUM;")
+        } else {
+            let pageLimit = max(1, minimumBytes / pageSize)
+            try execute("PRAGMA incremental_vacuum(\(pageLimit));")
+        }
+        try execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    private func integerPragma(_ name: String) throws -> Int64 {
+        let statement = try prepare("PRAGMA \(name);")
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw StoreError.statement(lastError()) }
+        return sqlite3_column_int64(statement, 0)
     }
 
     public func eraseAllData() throws {
@@ -543,8 +606,8 @@ public actor SQLiteStore {
           monitor_cpu, monitor_memory, monitor_disk_write, sampling_interval,
           keyboard_events, pointer_events, click_events, scroll_events,
           gpu_percent, performance_core_percent, efficiency_core_percent,
-          performance_core_contribution
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+          performance_core_contribution, monitor_cpu_measurement_version
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """)
         defer { sqlite3_finalize(statement) }
         bind(sample.id.uuidString, to: 1, in: statement)
@@ -589,6 +652,7 @@ public actor SQLiteStore {
         else { sqlite3_bind_null(statement, 33) }
         if let value = sample.performanceCoreContributionPercent { sqlite3_bind_double(statement, 34, value) }
         else { sqlite3_bind_null(statement, 34) }
+        sqlite3_bind_int(statement, 35, Int32(clamping: sample.monitorCPUMeasurementVersion ?? 0))
         guard sqlite3_step(statement) == SQLITE_DONE else { throw StoreError.write(lastError()) }
     }
 
@@ -597,8 +661,8 @@ public actor SQLiteStore {
         INSERT OR IGNORE INTO process_samples(
           id, timestamp, pid, process_start, name, bundle_id,
           parent_pid, owner_name, owner_bundle_id, owner_relation, is_foreground,
-          cpu_percent, memory_bytes, disk_read, disk_write, energy_nj
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+          cpu_percent, memory_bytes, disk_read, disk_write, energy_nj, cpu_measurement_version
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """)
         defer { sqlite3_finalize(statement) }
         bind(sample.id.uuidString, to: 1, in: statement)
@@ -617,6 +681,7 @@ public actor SQLiteStore {
         bind(sample.diskReadBytes, to: 14, in: statement)
         bind(sample.diskWriteBytes, to: 15, in: statement)
         if let value = sample.energyNanojoules { bind(value, to: 16, in: statement) } else { sqlite3_bind_null(statement, 16) }
+        sqlite3_bind_int(statement, 17, Int32(clamping: sample.cpuMeasurementVersion ?? 0))
         guard sqlite3_step(statement) == SQLITE_DONE else { throw StoreError.write(lastError()) }
     }
 
@@ -625,8 +690,8 @@ public actor SQLiteStore {
         INSERT OR IGNORE INTO app_resource_samples(
           id, timestamp, duration, owner_name, owner_bundle_id, is_foreground,
           cpu_percent, memory_bytes, disk_read, disk_write,
-          process_count, worker_count, agent_worker_count, worker_names
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+          process_count, worker_count, agent_worker_count, worker_names, cpu_measurement_version
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """)
         defer { sqlite3_finalize(statement) }
         bind(sample.id.uuidString, to: 1, in: statement)
@@ -644,6 +709,7 @@ public actor SQLiteStore {
         sqlite3_bind_int(statement, 13, Int32(sample.agentWorkerCount))
         let workerJSON = String(data: (try? encoder.encode(sample.workerNames)) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
         bind(workerJSON, to: 14, in: statement)
+        sqlite3_bind_int(statement, 15, Int32(clamping: sample.cpuMeasurementVersion ?? 0))
         guard sqlite3_step(statement) == SQLITE_DONE else { throw StoreError.write(lastError()) }
     }
 
@@ -786,7 +852,8 @@ public actor SQLiteStore {
           gpu_percent REAL,
           performance_core_percent REAL,
           efficiency_core_percent REAL,
-          performance_core_contribution REAL
+          performance_core_contribution REAL,
+          monitor_cpu_measurement_version INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS system_samples_time ON system_samples(timestamp);
         CREATE TABLE IF NOT EXISTS process_samples(
@@ -805,7 +872,8 @@ public actor SQLiteStore {
           memory_bytes INTEGER NOT NULL,
           disk_read INTEGER NOT NULL,
           disk_write INTEGER NOT NULL,
-          energy_nj INTEGER
+          energy_nj INTEGER,
+          cpu_measurement_version INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS process_samples_time ON process_samples(timestamp);
         CREATE TABLE IF NOT EXISTS app_resource_samples(
@@ -822,7 +890,8 @@ public actor SQLiteStore {
           process_count INTEGER NOT NULL,
           worker_count INTEGER NOT NULL,
           agent_worker_count INTEGER NOT NULL DEFAULT 0,
-          worker_names TEXT NOT NULL
+          worker_names TEXT NOT NULL,
+          cpu_measurement_version INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS app_resource_samples_time ON app_resource_samples(timestamp);
         CREATE INDEX IF NOT EXISTS app_resource_samples_owner_time ON app_resource_samples(owner_bundle_id, owner_name, timestamp);
@@ -857,7 +926,12 @@ public actor SQLiteStore {
         try addColumnIfMissing(db, table: "system_samples", column: "performance_core_percent", definition: "REAL")
         try addColumnIfMissing(db, table: "system_samples", column: "efficiency_core_percent", definition: "REAL")
         try addColumnIfMissing(db, table: "system_samples", column: "performance_core_contribution", definition: "REAL")
-        guard sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS process_samples_owner_time ON process_samples(owner_bundle_id, owner_name, timestamp); PRAGMA user_version=5;", nil, nil, nil) == SQLITE_OK else {
+        // Old rows remain byte-for-byte CPU history with an explicit uncalibrated
+        // tag. They are never silently rescaled using this Mac's current timebase.
+        try addColumnIfMissing(db, table: "process_samples", column: "cpu_measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
+        try addColumnIfMissing(db, table: "app_resource_samples", column: "cpu_measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
+        try addColumnIfMissing(db, table: "system_samples", column: "monitor_cpu_measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
+        guard sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS process_samples_owner_time ON process_samples(owner_bundle_id, owner_name, timestamp); PRAGMA user_version=6;", nil, nil, nil) == SQLITE_OK else {
             throw StoreError.cannotOpen(String(cString: sqlite3_errmsg(db)))
         }
     }
