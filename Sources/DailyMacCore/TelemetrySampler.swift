@@ -190,12 +190,21 @@ public struct ResolvedProcessOwner: Equatable, Sendable {
 /// itself, a current parent chain, or a running helper whose OS-provided identity clearly
 /// matches a current user application. Unknown workers stay unknown.
 public enum ProcessOwnershipResolver {
+    /// NSWorkspace can briefly retain terminated applications with PID -1, and a
+    /// racing snapshot can contain the same positive PID more than once. Neither
+    /// is a distinct running process that can be indexed or attributed.
+    public static func validApplications(_ applications: [RunningApplicationIdentity]) -> [RunningApplicationIdentity] {
+        var seen = Set<Int32>()
+        return applications.filter { $0.processID > 0 && seen.insert($0.processID).inserted }
+    }
+
     public static func resolve(
         processes: [ProcessLineageIdentity],
         applications: [RunningApplicationIdentity]
     ) -> [Int32: ResolvedProcessOwner] {
         let processByID = Dictionary(uniqueKeysWithValues: processes.map { ($0.processID, $0) })
-        let regularRoots = applications.filter { $0.role == .regular }
+        let currentApplications = validApplications(applications)
+        let regularRoots = currentApplications.filter { $0.role == .regular }
         var roots = regularRoots
         var resolved: [Int32: ResolvedProcessOwner] = [:]
 
@@ -211,7 +220,7 @@ public enum ProcessOwnershipResolver {
         // Accessory processes can be either helpers or genuine standalone menu-bar apps.
         // Clear bundle/name evidence against a regular app wins; otherwise the accessory
         // remains an independent application root.
-        for accessory in applications where accessory.role == .accessory {
+        for accessory in currentApplications where accessory.role == .accessory {
             if let root = relatedRoot(for: accessory, roots: regularRoots) {
                 resolved[accessory.processID] = ResolvedProcessOwner(
                     processID: root.processID,
@@ -230,7 +239,7 @@ public enum ProcessOwnershipResolver {
             }
         }
 
-        for helper in applications where helper.role == .background {
+        for helper in currentApplications where helper.role == .background {
             guard let root = relatedRoot(for: helper, roots: roots) else { continue }
             resolved[helper.processID] = ResolvedProcessOwner(
                 processID: root.processID,
@@ -528,7 +537,7 @@ public actor TelemetrySampler {
         let context = await MainActor.run { () -> (String, String?, Int32, [RunningApplicationIdentity]) in
             let foreground = NSWorkspace.shared.frontmostApplication
             let running = NSWorkspace.shared.runningApplications
-            let applications = running.map { app in
+            let applications = running.filter { $0.processIdentifier > 0 }.map { app in
                 let role: RunningApplicationRole
                 switch app.activationPolicy {
                 case .regular: role = .regular
@@ -688,7 +697,8 @@ public actor TelemetrySampler {
         }
         guard count > 0 else { return ProcessCollection(retained: [], allDeltas: [], appResources: [], observedCount: 0, attemptedCount: 0) }
 
-        let runningByPID = Dictionary(uniqueKeysWithValues: runningApps.map { ($0.processID, ($0.name, $0.bundleID)) })
+        let validRunningApps = ProcessOwnershipResolver.validApplications(runningApps)
+        let runningByPID = Dictionary(uniqueKeysWithValues: validRunningApps.map { ($0.processID, ($0.name, $0.bundleID)) })
         var current: [ProcessKey: RawProcessCounter] = [:]
         var rawProcesses: [RawProcessCounter] = []
         var observed = 0
@@ -704,7 +714,7 @@ public actor TelemetrySampler {
             processes: rawProcesses.map {
                 ProcessLineageIdentity(processID: $0.processID, parentProcessID: $0.parentProcessID, processStart: $0.start)
             },
-            applications: runningApps
+            applications: validRunningApps
         )
         var deltas: [ProcessSample] = []
         for raw in rawProcesses {

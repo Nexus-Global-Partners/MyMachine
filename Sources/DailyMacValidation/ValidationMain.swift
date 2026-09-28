@@ -798,6 +798,19 @@ struct DailyMacValidation {
             try harness.check(agentCount == 2, "two agent roots were confused with all descendant workers")
         }
 
+        await harness.run("terminated and duplicate workspace apps never crash PID indexing") {
+            let applications = [
+                RunningApplicationIdentity(processID: -1, name: "Quitting A", bundleID: nil, role: .regular),
+                RunningApplicationIdentity(processID: -1, name: "Quitting B", bundleID: nil, role: .regular),
+                RunningApplicationIdentity(processID: 100, name: "Active", bundleID: "example.active", role: .regular),
+                RunningApplicationIdentity(processID: 100, name: "Stale duplicate", bundleID: nil, role: .background)
+            ]
+            let valid = ProcessOwnershipResolver.validApplications(applications)
+            try harness.check(valid.count == 1 && valid[0].processID == 100 && valid[0].name == "Active", "invalid or duplicate workspace PIDs reached the process index")
+            let owners = ProcessOwnershipResolver.resolve(processes: [], applications: applications)
+            try harness.check(owners[-1] == nil && owners[100]?.name == "Active", "terminated workspace apps acquired process ownership")
+        }
+
         await harness.run("accessory helpers attach while standalone menu apps remain roots") {
             let applications = [
                 RunningApplicationIdentity(processID: 100, name: "Conductor", bundleID: "com.conductor.app", role: .regular),

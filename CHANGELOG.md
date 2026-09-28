@@ -16,6 +16,7 @@ All notable user-visible changes are recorded here.
 
 ### Fixed
 
+- Quitting macOS applications with an invalid or repeated PID no longer crash the monitor and make its menu-bar icon disappear.
 - The menu-bar's two-minute CPU/GPU average and sustained memory signal now use every recently saved sample, not just the last report refresh plus one live reading.
 - MY MACHINE's own CPU and disk-write counters are measured on every system sample even when a broader process scan is skipped, so a missing measurement no longer masquerades as zero CPU use or resets sustained-overhead detection.
 - Network and physical-disk counters now baseline each interface or device independently. Newly connected, reset, or reappearing devices no longer contribute old lifetime bytes as a fresh activity spike.
