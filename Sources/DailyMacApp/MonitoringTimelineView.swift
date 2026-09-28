@@ -268,7 +268,7 @@ struct MonitoringTimelineView: View, Equatable {
                     .padding(.top, 8)
                     .padding(.leading, 10)
                 }
-                if !historical && selectedTime == nil {
+                if displayMode == .precise && !historical && selectedTime == nil {
                     HStack {
                         Spacer(minLength: 0)
                         FanSpeedGauge()
@@ -486,24 +486,13 @@ struct MonitoringTimelineView: View, Equatable {
         let tint = calmStatusTint(for: signal.urgency)
 
         return HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                compactProcessorBar(reading.cpuPercent, color: TimelineColors.processor)
-                compactProcessorBar(reading.gpuPercent, color: TimelineColors.graphics)
-            }
-            .accessibilityHidden(true)
-
             Circle()
                 .fill(tint)
-                .frame(width: 5, height: 5)
+                .frame(width: 6, height: 6)
                 .accessibilityHidden(true)
             Text(signal.label)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.primary)
-
-            Rectangle()
-                .fill(Color.primary.opacity(0.14))
-                .frame(width: 1, height: 12)
-                .accessibilityHidden(true)
 
             calmProcessorLegendMetric(
                 title: "CPU",
@@ -530,14 +519,14 @@ struct MonitoringTimelineView: View, Equatable {
                     .monospacedDigit()
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 29)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .strokeBorder(
-                    signal.urgency == .critical ? tint.opacity(0.42) : Color.primary.opacity(0.10),
-                    lineWidth: 0.75
+                    signal.urgency == .critical ? tint.opacity(0.38) : Color.primary.opacity(0.08),
+                    lineWidth: 0.7
                 )
         }
         .accessibilityElement(children: .combine)
@@ -659,20 +648,6 @@ struct MonitoringTimelineView: View, Equatable {
                 .font(.caption2.monospacedDigit().weight(.semibold))
                 .foregroundStyle(color)
         }
-    }
-
-    private func compactProcessorBar(_ value: Double?, color: Color) -> some View {
-        ZStack(alignment: .leading) {
-            Capsule()
-                .fill(Color.primary.opacity(0.16))
-                .frame(width: 34, height: 5)
-            if let value {
-                Capsule()
-                    .fill(color.opacity(value > 0 ? 1 : 0.35))
-                    .frame(width: max(2, 34 * CGFloat(min(100, value)) / 100), height: 5)
-            }
-        }
-        .frame(width: 34, height: 5)
     }
 
     private var labelWidth: CGFloat {

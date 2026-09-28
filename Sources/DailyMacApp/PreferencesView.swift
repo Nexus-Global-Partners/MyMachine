@@ -22,6 +22,8 @@ struct PreferencesView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                MenuBarIconSettingsView()
+
                 Section("Monitoring") {
                     Toggle("Collect activity and performance locally", isOn: Binding(
                         get: { model.collectionState != .paused },

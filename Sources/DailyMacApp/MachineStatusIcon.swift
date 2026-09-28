@@ -24,12 +24,14 @@ enum MachineStatusIcon {
         }
     }
 
-    static func image(for state: State) -> NSImage {
+    static func image(for state: State, framed: Bool = true) -> NSImage {
         let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
-            let frame = NSBezierPath(roundedRect: NSRect(x: 1, y: 1, width: 18, height: 18), xRadius: 3.3, yRadius: 3.3)
-            frame.lineWidth = 1.25
-            NSColor.labelColor.withAlphaComponent(0.94).setStroke()
-            frame.stroke()
+            if framed {
+                let frame = NSBezierPath(roundedRect: NSRect(x: 1, y: 1, width: 18, height: 18), xRadius: 3.3, yRadius: 3.3)
+                frame.lineWidth = 1.25
+                NSColor.labelColor.withAlphaComponent(0.94).setStroke()
+                frame.stroke()
+            }
 
             let healthColor: NSColor
             let effort: MachineSignalLevel?
@@ -71,42 +73,80 @@ enum MachineStatusIcon {
         for state: State,
         average: MachineDemandAverage?,
         fanPercent: Double? = nil,
-        thermalLevel: ThermalLevel? = nil
+        thermalLevel: ThermalLevel? = nil,
+        configuration: MenuBarIconConfiguration = .standard
     ) -> NSImage {
-        let image = NSImage(size: NSSize(width: 81, height: 20), flipped: false) { _ in
-            let physicalFrame = NSBezierPath(
-                roundedRect: NSRect(x: 0.8, y: 0.8, width: 16.4, height: 18.4),
-                xRadius: 4.5, yRadius: 4.5
-            )
-            physicalFrame.lineWidth = 1.15
-            NSColor.labelColor.withAlphaComponent(0.78).setStroke()
-            physicalFrame.stroke()
-            physicalBar(
-                fraction: fanPercent.map { min(1, max(0, $0 / 100)) },
-                x: 3.4,
-                color: NSColor.labelColor.withAlphaComponent(0.87)
-            )
-            physicalBar(
-                fraction: thermalFraction(thermalLevel),
-                x: 10.0,
-                color: thermalColor(thermalLevel)
-            )
+        var placements: [(MenuBarInstrument, CGFloat)] = []
+        var width: CGFloat = 0
+        for (index, instrument) in configuration.displayedInstruments.enumerated() {
+            if index > 0 {
+                // Preserve Gabriel's original spacing byte-for-byte. Other
+                // orders use the same optical gaps between instrument groups.
+                width += placements.last?.0 == .physical ? 1.6 : 2.8
+            }
+            placements.append((instrument, width))
+            width += instrumentWidth(instrument)
+        }
+        let image = NSImage(size: NSSize(width: width, height: 20), flipped: false) { _ in
+            for (instrument, x) in placements {
+                switch instrument {
+                case .physical:
+                    drawPhysical(at: x, fanPercent: fanPercent, thermalLevel: thermalLevel, framed: configuration.style == .original)
+                case .compute:
+                    drawCompute(at: x, average: average, framed: configuration.style == .original)
+                case .state:
+                    self.image(for: state, framed: configuration.style == .original)
+                        .draw(in: NSRect(x: x, y: 0, width: 20, height: 20))
+                }
+            }
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
 
+    private static func instrumentWidth(_ instrument: MenuBarInstrument) -> CGFloat {
+        switch instrument {
+        case .physical: 17.2
+        case .compute: 39.4
+        case .state: 20
+        }
+    }
+
+    private static func drawPhysical(at x: CGFloat, fanPercent: Double?, thermalLevel: ThermalLevel?, framed: Bool) {
+        if framed {
             let frame = NSBezierPath(
-                roundedRect: NSRect(x: 18.8, y: 0.8, width: 39.4, height: 18.4),
+                roundedRect: NSRect(x: x + 0.8, y: 0.8, width: 16.4, height: 18.4),
                 xRadius: 4.5, yRadius: 4.5
             )
             frame.lineWidth = 1.15
             NSColor.labelColor.withAlphaComponent(0.78).setStroke()
             frame.stroke()
-
-            gauge(percent: average?.cpuPercent, x: 21.6, y: 11.2, color: adaptive(dark: 0x4F91FF, light: 0x236BE8))
-            gauge(percent: average?.gpuPercent, x: 21.6, y: 4.6, color: adaptive(dark: 0x80D9FF, light: 0x149CE3))
-            self.image(for: state).draw(in: NSRect(x: 61, y: 0, width: 20, height: 20))
-            return true
         }
-        image.isTemplate = false
-        return image
+        physicalBar(
+            fraction: fanPercent.map { min(1, max(0, $0 / 100)) },
+            x: x + 3.4,
+            color: NSColor.labelColor.withAlphaComponent(0.87)
+        )
+        physicalBar(
+            fraction: thermalFraction(thermalLevel),
+            x: x + 10,
+            color: thermalColor(thermalLevel)
+        )
+    }
+
+    private static func drawCompute(at x: CGFloat, average: MachineDemandAverage?, framed: Bool) {
+        if framed {
+            let frame = NSBezierPath(
+                roundedRect: NSRect(x: x, y: 0.8, width: 39.4, height: 18.4),
+                xRadius: 4.5, yRadius: 4.5
+            )
+            frame.lineWidth = 1.15
+            NSColor.labelColor.withAlphaComponent(0.78).setStroke()
+            frame.stroke()
+        }
+        gauge(percent: average?.cpuPercent, x: x + 2.8, y: 11.2, color: adaptive(dark: 0x4F91FF, light: 0x236BE8))
+        gauge(percent: average?.gpuPercent, x: x + 2.8, y: 4.6, color: adaptive(dark: 0x80D9FF, light: 0x149CE3))
     }
 
     private static func gauge(percent: Int?, x: CGFloat, y: CGFloat, color: NSColor) {

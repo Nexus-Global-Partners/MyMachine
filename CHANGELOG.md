@@ -6,10 +6,12 @@ All notable user-visible changes are recorded here.
 
 ### Added
 
+- Settings now previews the live menu-bar icon, explains what each physical, compute, and state bar measures, and lets you reorder or hide the three instruments. Your existing arrangement remains the one-click original preset; an optional open style removes only the outlines.
 - A source-first install handoff that a friend can paste to their own coding agent, including local validation, safe replacement, and the one-time ad-hoc-signature approval boundary.
 
 ### Changed
 
+- The popover opens with a single compact header and the history graph. Refresh and diagnosis remain in the overflow menu; Calm drops the extra fan/heat overlay while Precise retains it, and the live status pill no longer repeats miniature CPU/GPU bars.
 - The graph-edge live readout now echoes the menu-bar instruments: blue CPU/GPU rails, a compact health signal, and the same measured fan / categorical thermal bars. Auto shows its current elapsed span, while one-click arrows remain adjacent to the time-range menu.
 - Menu-bar and popover fan readouts share one best-effort AppleSMC measurement instead of polling twice; the hardware poll now follows a 15-second cadence. Stale readings drop to unavailable instead of looking live.
 - The popover reuses Auto's already-loaded system history and skips battery computations it never draws. Background-pressure interval lookup is indexed instead of scanning every interval for every app row.

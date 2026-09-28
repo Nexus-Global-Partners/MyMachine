@@ -37,7 +37,7 @@ struct MenuBarMonitoringView: View {
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 5)
                 } else if model.menuBarIsRefreshing {
                     loadingState
                         .padding(.horizontal, 16)
@@ -56,21 +56,10 @@ struct MenuBarMonitoringView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Monitoring")
-                    .font(.headline)
-                if let day = model.menuBarSelectedDayStart {
-                    Text(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    MenuBarActivitySummaryLabel(
-                        activeTodayDuration: model.todayReport?.activeDuration,
-                        currentSessionDuration: model.currentSessionDuration
-                    )
-                }
-            }
+        HStack(spacing: 12) {
+            Text("Monitoring")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
 
             Spacer(minLength: 12)
 
@@ -114,30 +103,11 @@ struct MenuBarMonitoringView: View {
 
                 TimelineDisplayModeControl()
 
-                DiagnosisIconButton()
-
-                Button {
-                    model.refreshMenuBarNow()
-                } label: {
-                    if model.menuBarIsRefreshing {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 14, height: 14)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .frame(width: 14, height: 14)
-                    }
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh monitoring")
-                .accessibilityLabel("Refresh monitoring")
-                .disabled(model.menuBarIsRefreshing)
-
                 moreOptionsMenu
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
     }
 
     private var staleReadingLabel: String? {
@@ -251,6 +221,19 @@ struct MenuBarMonitoringView: View {
 
     private var moreOptionsMenu: some View {
         Menu {
+            Button {
+                model.refreshMenuBarNow()
+            } label: {
+                Label("Refresh now", systemImage: "arrow.clockwise")
+            }
+            .disabled(model.menuBarIsRefreshing)
+            Button {
+                model.diagnoseMachine()
+            } label: {
+                Label("Diagnose My Machine", systemImage: "stethoscope")
+            }
+            .disabled(model.diagnosisState.isPreparing)
+            Divider()
             if model.collectionState == .paused {
                 Button("Resume Monitoring") { model.startMonitoring() }
             } else {

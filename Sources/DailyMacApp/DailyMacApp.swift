@@ -39,6 +39,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
     private var fanIconTimer: AnyCancellable?
     private var fanReadInFlight = false
     private var appearanceSubscription: AnyCancellable?
+    private var iconConfigurationSubscription: AnyCancellable?
     private var effectiveAppearanceSubscription: AnyCancellable?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -71,6 +72,9 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.applyStoredAppearance() }
+        iconConfigurationSubscription = NotificationCenter.default.publisher(for: MenuBarIconConfiguration.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshStatusIcon() }
         effectiveAppearanceSubscription = NSApp.publisher(for: \.effectiveAppearance, options: [.initial, .new])
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.synchronizePopoverAppearance() }
@@ -203,12 +207,16 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
             ? model.fanReadings : nil
         let fanPercent = freshFans?.map(\.percentOfMaximum).max()
         let thermalLevel = isLive ? model.latestSystem?.thermalLevel : nil
-        button.image = MachineStatusIcon.image(
+        let configuration = MenuBarIconConfiguration.load()
+        let icon = MachineStatusIcon.image(
             for: state,
             average: average,
             fanPercent: fanPercent,
-            thermalLevel: thermalLevel
+            thermalLevel: thermalLevel,
+            configuration: configuration
         )
+        statusItem?.length = icon.size.width + 4
+        button.image = icon
         let averageDescription = average.map { reading in
             "Two-minute average: CPU \(reading.cpuPercent)%, "
                 + (reading.gpuPercent.map { "GPU \($0)%" } ?? "GPU unavailable") + ". "
@@ -223,7 +231,14 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
         }
         let thermalDescription = thermalLevel.map { "macOS thermal pressure: \($0.rawValue). " } ?? "Thermal pressure unavailable. "
         button.setAccessibilityValue(fanDescription + thermalDescription + averageDescription + state.accessibilityValue)
-        button.toolTip = "MY MACHINE — \(fanDescription)\(thermalDescription)\(averageDescription)\(state.accessibilityValue) Left bars: fan RPM relative to its reported maximum, then categorical macOS thermal pressure (blue nominal; yellow, orange, red as pressure rises). Center: CPU and GPU averages. Right: health and effort."
+        let instrumentHelp = configuration.displayedInstruments.map { instrument in
+            switch instrument {
+            case .physical: "Fan speed relative to reported maximum; categorical thermal pressure."
+            case .compute: "Two-minute CPU and GPU averages."
+            case .state: "Machine health above, four-step effort below."
+            }
+        }.joined(separator: " ")
+        button.toolTip = "MY MACHINE — \(fanDescription)\(thermalDescription)\(averageDescription)\(state.accessibilityValue) Icon order: \(instrumentHelp)"
     }
 
     private func refreshFanReadings() {
