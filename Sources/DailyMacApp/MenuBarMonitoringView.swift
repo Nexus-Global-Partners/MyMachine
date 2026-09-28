@@ -56,58 +56,142 @@ struct MenuBarMonitoringView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Text("Monitoring")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
+        VStack(spacing: 5) {
+            HStack(spacing: 12) {
+                Text("Monitoring")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
 
-            Spacer(minLength: 12)
+                Spacer(minLength: 12)
 
-            HStack(alignment: .center, spacing: 9) {
-                HStack(spacing: 8) {
-                    if model.menuBarIsRefreshing {
-                        Text("Updating")
-                            .foregroundStyle(.secondary)
-                    } else if model.menuBarRefreshMessage != nil {
-                        Label("Cached", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
-                            .foregroundStyle(.secondary)
-                            .help(model.menuBarRefreshMessage ?? "")
-                    } else if let staleReadingLabel {
-                        Text(staleReadingLabel)
-                            .foregroundStyle(.secondary)
-                            .help("The graph stays available, but no fresh machine reading is being claimed.")
+                HStack(alignment: .center, spacing: 9) {
+                    if model.menuBarSelectedDayStart != nil {
+                        historicalDayControl
+                    } else {
+                        MenuBarMonitoringRangeControl(
+                            preference: model.menuBarMonitoringRangePreference,
+                            effectiveRange: model.menuBarMonitoringContent?.snapshot.range
+                                ?? model.menuBarMonitoringRange,
+                            effectiveInterval: model.menuBarMonitoringContent?.snapshot.interval,
+                            onSelectSmart: model.selectSmartMenuBarMonitoringRange,
+                            onSelectRange: model.selectMenuBarMonitoringRange
+                        )
+                        Button(action: model.browsePreviousMenuBarDay) {
+                            Image(systemName: "calendar.badge.clock")
+                                .frame(width: 16, height: 16)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(!model.canBrowsePreviousMenuBarDay)
+                        .help("Browse yesterday")
+                        .accessibilityLabel("Browse yesterday")
                     }
+
+                    TimelineDisplayModeControl()
+
+                    moreOptionsMenu
                 }
-                .font(.caption)
+            }
 
-                if model.menuBarSelectedDayStart != nil {
-                    historicalDayControl
-                } else {
-                    MenuBarMonitoringRangeControl(
-                        preference: model.menuBarMonitoringRangePreference,
-                        effectiveRange: model.menuBarMonitoringContent?.snapshot.range
-                            ?? model.menuBarMonitoringRange,
-                        effectiveInterval: model.menuBarMonitoringContent?.snapshot.interval,
-                        onSelectSmart: model.selectSmartMenuBarMonitoringRange,
-                        onSelectRange: model.selectMenuBarMonitoringRange
-                    )
-                    Button(action: model.browsePreviousMenuBarDay) {
-                        Image(systemName: "calendar.badge.clock")
-                            .frame(width: 16, height: 16)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(!model.canBrowsePreviousMenuBarDay)
-                    .help("Browse yesterday")
-                    .accessibilityLabel("Browse yesterday")
-                }
-
-                TimelineDisplayModeControl()
-
-                moreOptionsMenu
+            HStack(spacing: 10) {
+                dayActivitySummary
+                Spacer(minLength: 8)
+                liveMachineSummary
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.top, 7)
+        .padding(.bottom, 8)
+    }
+
+    private var dayActivitySummary: some View {
+        let historical = model.menuBarSelectedDayStart != nil
+        let active = historical
+            ? model.menuBarMonitoringContent?.snapshot.activeDuration
+            : model.todayReport?.activeDuration
+        let observed = historical
+            ? model.menuBarMonitoringContent?.snapshot.observedDuration
+            : model.todayReport.map { $0.resourceSummary?.observedDuration ?? ($0.activeDuration + $0.idleDuration) }
+        return HStack(spacing: 7) {
+            Text(historical ? "You" : "You today")
+                .foregroundStyle(.secondary)
+            Text(active.map(compactDuration) ?? "—")
+                .foregroundStyle(.primary)
+            Text("·")
+                .foregroundStyle(.tertiary)
+            Text(historical ? "Mac recorded" : "Mac today")
+                .foregroundStyle(.secondary)
+            Text(observed.map(compactDuration) ?? "—")
+                .foregroundStyle(.primary)
+        }
+        .font(.caption.weight(.medium))
+        .monospacedDigit()
+        .lineLimit(1)
+        .help("You is observed non-idle use, not attention or productivity. Mac is recorded awake time, including idle and background activity; sleep and missing readings are excluded.")
+    }
+
+    @ViewBuilder
+    private var liveMachineSummary: some View {
+        if model.collectionState == .monitoring,
+           model.menuBarSelectedDayStart == nil,
+           let signal = MachineStatusSignal.current(
+                sample: model.latestSystem,
+                recentSamples: model.recentSystemSamples
+           ) {
+            let average = MachineDemandAverage.current(
+                sample: model.latestSystem,
+                recentSamples: model.recentSystemSamples
+            )
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(statusColor(for: signal))
+                    .frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+                Text(statusLabel(for: signal))
+                    .foregroundStyle(.primary)
+                Text("CPU \(average?.cpuPercent ?? signal.cpuPercent)%")
+                    .foregroundStyle(MachinePalette.processor)
+                if let gpu = average?.gpuPercent ?? signal.gpuPercent {
+                    Text("GPU \(gpu)%")
+                        .foregroundStyle(MachinePalette.graphics)
+                }
+                if selectedTimelineDisplayMode == .precise {
+                    FanSpeedGauge()
+                }
+            }
+            .font(.caption.weight(.medium))
+            .monospacedDigit()
+            .lineLimit(1)
+            .help("Live machine status and latest two-minute average demand. CPU and GPU are whole-machine readings, not a measure of your focus.")
+        } else if model.menuBarSelectedDayStart == nil {
+            Text(model.collectionState == .paused
+                 ? "Monitoring paused"
+                 : model.menuBarIsRefreshing ? "Updating" : (staleReadingLabel ?? "Waiting for live reading"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func compactDuration(_ duration: TimeInterval) -> String {
+        let minutes = max(0, Int(duration / 60))
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours == 0 { return "\(minutes)m" }
+        return remainder == 0 ? "\(hours)h" : "\(hours)h \(remainder)m"
+    }
+
+    private func statusLabel(for signal: MachineStatusSignal) -> String {
+        if signal.health != .comfortable { return signal.health.label }
+        return signal.effort == .nearCapacity || signal.effort == .high ? "Busy" : "Comfortable"
+    }
+
+    private func statusColor(for signal: MachineStatusSignal) -> Color {
+        switch signal.health {
+        case .critical: MachinePalette.critical
+        case .pressured: .orange
+        case .watch: .yellow
+        case .comfortable: .green
+        }
     }
 
     private var staleReadingLabel: String? {

@@ -230,53 +230,31 @@ struct MonitoringTimelineView: View, Equatable {
 
     private func menuBarGraphOnlyBody(layout: UnifiedTimelineLayout) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            dataCanvas(layout: layout) {
-                if let reading = contextProcessorReading,
-                   !historical || selectedTime != nil {
-                    HStack(spacing: 8) {
-                        calmProcessorLegend(reading)
-                        if selectedTime != nil {
-                            Button { selectedTime = nil } label: {
-                                Image(systemName: "arrow.uturn.backward.circle.fill")
-                                    .font(.system(size: 14, weight: .medium))
-                            }
-                            .buttonStyle(.plain)
-                            .keyboardShortcut(.cancelAction)
-                            .foregroundStyle(.secondary)
-                            .help("Show current status")
-                            .accessibilityLabel("Return to current status")
+            if selectedTime != nil {
+                HStack(spacing: 8) {
+                    Text(compactContextPrimary)
+                        .foregroundStyle(.secondary)
+                    if let reading = contextProcessorReading {
+                        Text("CPU \(Int(reading.cpuPercent.rounded()))%")
+                            .foregroundStyle(TimelineColors.processor)
+                        if let gpu = reading.gpuPercent {
+                            Text("GPU \(Int(gpu.rounded()))%")
+                                .foregroundStyle(TimelineColors.graphics)
                         }
                     }
-                    .padding(.top, 8)
-                    .padding(.leading, 10)
-                    .padding(.trailing, layout.rightAxisWidth + 10)
-                } else if selectedTime != nil, contextProcessorReading == nil {
-                    HStack(spacing: 7) {
-                        Label(compactContextPrimary, systemImage: compactContextSymbol)
-                        Button { selectedTime = nil } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }
-                        .buttonStyle(.plain)
-                        .keyboardShortcut(.cancelAction)
-                        .accessibilityLabel("Clear selected time")
+                    Spacer(minLength: 0)
+                    Button { selectedTime = nil } label: {
+                        Image(systemName: "xmark.circle.fill")
                     }
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 9)
-                    .frame(height: 24)
-                    .background(.thinMaterial, in: Capsule())
-                    .padding(.top, 8)
-                    .padding(.leading, 10)
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel("Clear selected time")
                 }
-                if displayMode == .precise && !historical && selectedTime == nil {
-                    HStack {
-                        Spacer(minLength: 0)
-                        FanSpeedGauge()
-                    }
-                    .padding(.top, 8)
-                    .padding(.trailing, layout.rightAxisWidth + 10)
-                }
+                .font(.caption2.weight(.medium))
+                .lineLimit(1)
+                .padding(.horizontal, 8)
             }
+            dataCanvas(layout: layout)
             .frame(height: layout.totalHeight)
 
             timeAxis

@@ -11,8 +11,9 @@ All notable user-visible changes are recorded here.
 
 ### Changed
 
-- The popover opens with a single compact header and the history graph. Refresh and diagnosis remain in the overflow menu; Calm drops the extra fan/heat overlay while Precise retains it, and the live status pill no longer repeats miniature CPU/GPU bars.
-- The graph-edge live readout now echoes the menu-bar instruments: blue CPU/GPU rails, a compact health signal, and the same measured fan / categorical thermal bars. Auto shows its current elapsed span, while one-click arrows remain adjacent to the time-range menu.
+- The popover header now pairs **You today** with recorded awake Mac time, and carries live health, CPU and GPU readings outside the plot. The graph no longer has persistent floating pills; selecting a point reveals a slim readout above it. Precise keeps measured fan and categorical heat in the header without an extra container.
+- Refresh and diagnosis remain in the overflow menu, leaving the time-range controls close to the chart.
+- The menu-bar instrument and popover share the same blue CPU/GPU signals and pressure semantics. Auto shows its current elapsed span, while one-click arrows remain adjacent to the time-range menu.
 - Menu-bar and popover fan readouts share one best-effort AppleSMC measurement instead of polling twice; the hardware poll now follows a 15-second cadence. Stale readings drop to unavailable instead of looking live.
 - The popover reuses Auto's already-loaded system history and skips battery computations it never draws. Background-pressure interval lookup is indexed instead of scanning every interval for every app row.
 

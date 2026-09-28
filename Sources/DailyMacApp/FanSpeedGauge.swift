@@ -41,13 +41,7 @@ struct FanSpeedGauge: View {
             .foregroundStyle(.secondary)
             .fixedSize()
         }
-        .padding(.horizontal, 9)
-        .frame(height: 29)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.75)
-        }
+        .frame(height: 18)
         .help(helpText)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(helpText)
