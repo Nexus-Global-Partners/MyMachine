@@ -10,6 +10,7 @@ struct MenuBarMonitoringView: View {
     @State private var selectedInstruments: Set<MachineInstrument> = [.cpu, .gpu]
     @State private var followsRange = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         HStack(alignment: .top, spacing: 19) {
@@ -48,7 +49,14 @@ struct MenuBarMonitoringView: View {
         }
         .padding(20)
         .frame(width: min(980, (NSScreen.main?.visibleFrame.width ?? 1020) - 40), height: 480)
-        .background(colorScheme == .dark ? Color(nsColor: .windowBackgroundColor) : .white)
+        .background {
+            if reduceTransparency {
+                Color(nsColor: .windowBackgroundColor)
+            } else {
+                InstrumentGlassBackdrop()
+                    .overlay(colorScheme == .dark ? Color.black.opacity(0.12) : Color.white.opacity(0.52))
+            }
+        }
         .onChange(of: model.menuBarSelectedDayStart) { _, day in followsRange = day != nil }
     }
 
@@ -56,7 +64,7 @@ struct MenuBarMonitoringView: View {
             HStack(spacing: 12) {
                 dayActivitySummary
                     .padding(.horizontal, 10).frame(height: 29)
-                    .background(Color.primary.opacity(0.035), in: Capsule())
+                    .background(InstrumentGlassSurface(radius: 15))
                 Spacer(minLength: 2)
 
                 HStack(alignment: .center, spacing: 9) {
@@ -82,10 +90,10 @@ struct MenuBarMonitoringView: View {
         let historical = model.menuBarSelectedDayStart != nil
         let active = historical
             ? model.menuBarMonitoringContent?.snapshot.activeDuration
-            : model.todayReport?.activeDuration
+            : model.todayActivityTotals?.you
         let observed = historical
             ? model.menuBarMonitoringContent?.snapshot.observedDuration
-            : model.todayReport.map { $0.resourceSummary?.observedDuration ?? ($0.activeDuration + $0.idleDuration) }
+            : model.todayActivityTotals?.machine
         return HStack(spacing: 4) {
             Text(historical ? "You" : "Today · You")
                 .foregroundStyle(.secondary)
@@ -101,7 +109,7 @@ struct MenuBarMonitoringView: View {
         .font(.system(size: 10, weight: .medium))
         .monospacedDigit()
         .lineLimit(1)
-        .help("You is observed non-idle use, not attention or productivity. Mac is recorded awake time, including idle and background activity; sleep and missing readings are excluded.")
+        .help("Recorded today, refreshed with every saved reading. You is observed non-idle use, not attention or productivity. Mac is recorded awake time, including idle and background activity; sleep and missing readings are excluded.\nLast reading: \(model.todayActivityTotals?.lastReading?.formatted(date: .omitted, time: .standard) ?? "waiting").")
     }
 
     @ViewBuilder
@@ -327,7 +335,7 @@ struct MenuBarMonitoringView: View {
             Image(systemName: "ellipsis")
                 .frame(width: 14, height: 14)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
         .menuIndicator(.hidden)
         .buttonStyle(GlassyIconButtonStyle())
         .fixedSize()

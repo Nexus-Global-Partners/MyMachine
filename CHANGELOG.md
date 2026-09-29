@@ -14,6 +14,8 @@ All notable user-visible changes are recorded here.
 
 ### Changed
 
+- Time guides now use larger clock-aligned labels, with quiet duration annotations distinguishing observed absence, confirmed sleep, and missing readings. Native menus and card selection use cohesive glass controls and shared menu-bar CPU/GPU colors.
+- The minimal instrument panel now uses desktop-backed native frost, quiet glass app rows, and brighter bordered selected metric cards. Graph strokes are slightly thicker; Reduce Transparency keeps the interface opaque.
 - A single activity pill pairs **You** with recorded awake **Mac** time above the graph. Card colors identify selected signals without extra selection icons or duplicate legends. Supporting sensor explanations are available on hover and to assistive technology.
 - Refresh and diagnosis remain in the overflow menu, leaving the time-range controls close to the chart.
 - The menu-bar instrument and popover share the same blue CPU/GPU signals and pressure semantics. Auto shows its current elapsed span, while one-click arrows remain adjacent to the time-range menu.
@@ -22,6 +24,7 @@ All notable user-visible changes are recorded here.
 
 ### Fixed
 
+- Today's You/Mac totals update on each saved reading rather than waiting for the two-minute daily report; overlapping samples are counted once and midnight boundaries are clipped.
 - System-only sampling cycles no longer clear the most recent app-resource readings. The app list still withholds readings after they become stale.
 - Settings now accurately explains measured fan speed separately from unavailable physical temperatures.
 - Quitting macOS applications with an invalid or repeated PID no longer crash the monitor and make its menu-bar icon disappear.

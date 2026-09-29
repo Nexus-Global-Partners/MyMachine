@@ -5,6 +5,41 @@ enum InstrumentHistoryValidation {
     static func run(harness: ValidationHarness) async {
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         let window = DateInterval(start: start, duration: 3_600)
+        await harness.run("activity totals advance per reading without double counting report refreshes") {
+            let first = sample(start.addingTimeInterval(30), duration: 30)
+            let next = sample(start.addingTimeInterval(60), duration: 30)
+            let before = RecordedActivityTotals.measure([first], in: window)
+            let after = RecordedActivityTotals.measure([first, next, first], in: window)
+            try harness.check(before.you == 30 && after.you == 60 && after.machine == 60, "new readings did not advance totals exactly once")
+            let idle = sample(start.addingTimeInterval(120), duration: 30, idle: true)
+            let gap = RecordedActivityTotals.measure([first, next, idle], in: window)
+            try harness.check(gap.you == 60 && gap.machine == 90, "idle or unrecorded gaps counted as human use")
+            let midnight = RecordedActivityTotals.measure([sample(start.addingTimeInterval(10), duration: 30)], in: window)
+            try harness.check(midnight.machine == 10 && midnight.you == 10, "yesterday leaked into today")
+            try harness.check(RecordedActivityTotals.measure([], in: window).lastReading == nil, "missing readings gained freshness")
+        }
+        await harness.run("time guides use readable clock marks and preserve exact endpoints") {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "Europe/Paris")!
+            for hours in [1.0, 4, 6, 12, 24, 48] {
+                let range = DateInterval(start: start.addingTimeInterval(173), duration: hours * 3600)
+                let ticks = InstrumentTimeContext.ticks(in: range, width: 630, calendar: calendar)
+                try harness.check(ticks.first == range.start && ticks.last == range.end, "axis lost exact endpoints")
+                try harness.check(ticks.count >= 3 && ticks.count <= 8, "axis became unreadably sparse or busy")
+                try harness.check(zip(ticks, ticks.dropFirst()).allSatisfy { $1 > $0 }, "time guides overlapped")
+                try harness.check(ticks.dropFirst().dropLast().allSatisfy { calendar.component(.second, from: $0) == 0 }, "interior guides not clock aligned")
+            }
+        }
+        await harness.run("graph absence labels distinguish recorded idle sleep and unknown coverage") {
+            func span(_ offset: Double, _ duration: Double) -> DateInterval {
+                DateInterval(start: start.addingTimeInterval(offset), duration: duration)
+            }
+            let presence = TimelinePresenceContext(awakeIntervals: [span(0, 600)], handsOnIntervals: [span(0, 120)])
+            let regions = InstrumentTimeContext.regions(presence: presence, sleeps: [span(900, 300)], in: span(0, 1800))
+            try harness.check(regions.filter { $0.kind == .away }.reduce(0) { $0 + $1.interval.duration } == 480, "unknown time was labeled away")
+            try harness.check(regions.filter { $0.kind == .sleep }.reduce(0) { $0 + $1.interval.duration } == 300, "sleep lost lifecycle evidence")
+            try harness.check(regions.filter { $0.kind == .missing }.reduce(0) { $0 + $1.interval.duration } == 900, "missing coverage was filled in")
+        }
         await harness.run("instrument means weight recorded time, preserve unknowns, and ignore duplicates") {
             let first = sample(start.addingTimeInterval(30), duration: 30, cpu: 20, rpm: 1_000)
             let second = sample(start.addingTimeInterval(90), duration: 60, cpu: 80, rpm: 4_000)
@@ -48,9 +83,9 @@ enum InstrumentHistoryValidation {
         }
     }
 
-    private static func sample(_ date: Date, duration: Double, cpu: Double = 20, rpm: Double? = nil) -> SystemSample {
+    private static func sample(_ date: Date, duration: Double, cpu: Double = 20, rpm: Double? = nil, idle: Bool = false) -> SystemSample {
         SystemSample(timestamp: date, duration: duration, foregroundApp: "Test", foregroundBundleID: nil,
-                     category: .other, isIdle: false, cpuPercent: cpu, loadAverage1m: 1, loadAverage5m: 1,
+                     category: idle ? .idle : .other, isIdle: idle, cpuPercent: cpu, loadAverage1m: 1, loadAverage5m: 1,
                      memoryUsedBytes: 4_000, memoryTotalBytes: 8_000, memoryPressure: .low,
                      swapUsedBytes: 0, thermalLevel: .nominal, batteryPercent: nil,
                      powerSource: .unknown, isCharging: nil, diskReadBytes: 0, diskWriteBytes: 0,

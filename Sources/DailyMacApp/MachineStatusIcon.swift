@@ -145,8 +145,8 @@ enum MachineStatusIcon {
             NSColor.labelColor.withAlphaComponent(0.78).setStroke()
             frame.stroke()
         }
-        gauge(percent: average?.cpuPercent, x: x + 2.8, y: 11.2, color: adaptive(dark: 0x4F91FF, light: 0x236BE8))
-        gauge(percent: average?.gpuPercent, x: x + 2.8, y: 4.6, color: adaptive(dark: 0x80D9FF, light: 0x149CE3))
+        gauge(percent: average?.cpuPercent, x: x + 2.8, y: 11.2, color: MachinePalette.nativeProcessor)
+        gauge(percent: average?.gpuPercent, x: x + 2.8, y: 4.6, color: MachinePalette.nativeGraphics)
     }
 
     private static func gauge(percent: Int?, x: CGFloat, y: CGFloat, color: NSColor) {

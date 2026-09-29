@@ -7,7 +7,7 @@ extension MachineInstrument {
         switch self {
         case .cpu: MachinePalette.processor
         case .gpu: MachinePalette.graphics
-        case .memory: MachinePalette.normal
+        case .memory: MachinePalette.human
         case .fan: MachinePalette.human
         }
     }
@@ -49,7 +49,7 @@ struct InstrumentPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("My Mac").font(.system(size: 15, weight: .semibold))
                 Spacer(minLength: 4)
@@ -66,7 +66,8 @@ struct InstrumentPanel: View {
                     .padding(.horizontal, 9).frame(height: 25)
                     .background(.quaternary.opacity(0.45), in: Capsule())
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .menuStyle(.button).menuIndicator(.hidden)
+                .buttonStyle(InstrumentControlStyle()).fixedSize()
                 .help("Live: current readings. Period: averages and busiest apps for the graph's selected dates.")
                 .accessibilityLabel("Instrument readings: \(followsRange ? "selected period" : "live")")
             }
@@ -145,12 +146,11 @@ struct InstrumentPanel: View {
                         .font(.system(size: 27, weight: .medium, design: .rounded))
                     if reading != nil { Text("%").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary) }
                 }
-                .monospacedDigit().foregroundStyle(isSelected ? metric.tint : Color.primary)
+                .monospacedDigit().foregroundStyle(metric.tint.opacity(isSelected ? 1 : 0.72))
             }
-            .padding(13).frame(maxWidth: .infinity, alignment: .leading).frame(height: 84)
+            .padding(13).frame(maxWidth: .infinity, alignment: .leading).frame(height: 80)
             .background {
-                RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.027))
+                InstrumentGlassSurface(selectionTint: isSelected ? metric.tint : nil)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 17, style: .continuous)
@@ -181,7 +181,7 @@ struct InstrumentPanel: View {
         case .critical: "Critical"
         case .unknown: "Unavailable"
         }
-        let tint: Color = stage >= 4 ? MachinePalette.critical : stage >= 3 ? .orange : stage == 2 ? .yellow : MachinePalette.normal
+        let tint: Color = stage >= 4 ? Color(nsColor: .systemRed) : stage >= 3 ? Color(nsColor: .systemOrange) : stage == 2 ? Color(nsColor: .systemYellow) : MachinePalette.graphics
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(followsRange ? "Peak thermal pressure" : "Thermal pressure")
@@ -236,7 +236,7 @@ struct InstrumentPanel: View {
     }
 
     private var appList: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text("Using your Mac")
                 Spacer()
@@ -257,7 +257,9 @@ struct InstrumentPanel: View {
                         Text("\(Int(app.percent.rounded()))%").font(.system(size: 11, weight: .medium))
                             .monospacedDigit().foregroundStyle(.secondary)
                     }
-                    .frame(height: 20)
+                    .padding(.horizontal, 8)
+                    .frame(height: 27)
+                    .background(InstrumentGlassSurface(radius: 9))
                     .help("\(app.name)\n\(Int(app.percent.rounded()))% of observed app CPU \(followsRange ? "over this period" : "in the latest reading").")
                 }
             }

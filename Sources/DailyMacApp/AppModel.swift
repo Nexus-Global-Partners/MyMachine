@@ -110,6 +110,7 @@ final class AppModel: ObservableObject {
     @Published var todayReport: DailyReport?
     @Published private(set) var currentActivitySession: CurrentActivitySession?
     @Published var todaySamples: [SystemSample] = []
+    @Published private(set) var todayActivityTotals: RecordedActivityTotals?
     /// Every saved reading needed for the live two-minute icon average. Daily
     /// reports refresh less often and must not be the source of live history.
     @Published private(set) var recentSystemSamples: [SystemSample] = []
@@ -197,6 +198,16 @@ final class AppModel: ObservableObject {
         recentSystemSamples = Array((recentSystemSamples + [sample])
             .filter { $0.timestamp >= cutoff }
             .suffix(32))
+    }
+
+    private func refreshActivityTotals(adding samples: [SystemSample], at now: Date) {
+        let start = Calendar.autoupdatingCurrent.startOfDay(for: now)
+        var unique: [UUID: SystemSample] = [:]
+        for sample in todaySamples + samples where sample.timestamp >= start && sample.timestamp <= now {
+            unique[sample.id] = sample
+        }
+        todaySamples = unique.values.sorted { $0.timestamp < $1.timestamp }
+        todayActivityTotals = RecordedActivityTotals.measure(todaySamples, in: DateInterval(start: start, end: now))
     }
 
     init() {
@@ -761,6 +772,8 @@ final class AppModel: ObservableObject {
             guard saved, sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
             retainRecentSystemSample(result.system)
             latestSystem = result.system
+            // The header follows saved readings, not the two-minute report cache.
+            refreshActivityTotals(adding: [result.system], at: result.system.timestamp)
             // Process collection is intentionally slower than system sampling.
             // An intervening system-only tick isn't an empty process snapshot.
             if !result.appResources.isEmpty { liveAppResources = result.appResources }
@@ -1017,7 +1030,7 @@ final class AppModel: ObservableObject {
         guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
         if publishAsToday {
             todayReport = report
-            todaySamples = samples
+            refreshActivityTotals(adding: samples + recentSystemSamples, at: Date())
             todayChartSamples = downsample(samples, limit: 720)
             lastReportRefresh = Date()
             if notificationDeliveryEnabled {
@@ -1250,6 +1263,7 @@ final class AppModel: ObservableObject {
         todayReport = nil
         currentActivitySession = nil
         todaySamples = []
+        todayActivityTotals = nil
         recentSystemSamples = []
         todayChartSamples = []
         monitoringContent = nil

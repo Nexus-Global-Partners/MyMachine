@@ -43,11 +43,7 @@ struct MenuBarMonitoringRangeControl: View {
             rangeStepButton(preference.next, direction: "Next", symbol: "chevron.right")
         }
         .padding(.horizontal, 2)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.75)
-        }
+        .background(InstrumentGlassSurface(radius: 10))
         .fixedSize()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("History time range")
@@ -67,7 +63,7 @@ struct MenuBarMonitoringRangeControl: View {
                 .frame(width: 26, height: 29)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(InstrumentControlStyle())
         .disabled(choice == nil)
         .help(choice.map { "\(direction) range: \($0.compactLabel)" } ?? "No \(direction.lowercased()) range")
         .accessibilityLabel("\(direction) time range")
@@ -105,9 +101,9 @@ struct MenuBarMonitoringRangeControl: View {
             }
             .frame(minWidth: preference.isSmart ? 83 : 56, minHeight: 29)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(.plain)
+        .buttonStyle(InstrumentControlStyle())
         .fixedSize()
         .help(helpText)
         .accessibilityLabel(accessibilityLabel)
