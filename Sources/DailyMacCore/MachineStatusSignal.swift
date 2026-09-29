@@ -40,6 +40,38 @@ public struct MachineStatusSignal: Equatable, Sendable {
     public let cpuPercent: Int
     public let gpuPercent: Int?
 
+    /// Demand index, not physical power or a fraction of total Mac capacity.
+    public var effortScore: Int { max(cpuPercent, gpuPercent ?? 0) }
+
+    /// Peak observed pressure and average demand are deliberately separate.
+    /// Missing coverage contributes neither zeros nor claims of good health.
+    public static func period(samples: [SystemSample], in interval: DateInterval) -> Self? {
+        guard let cpu = InstrumentHistory.average(.cpu, samples: samples, in: interval) else { return nil }
+        let gpu = InstrumentHistory.average(.gpu, samples: samples, in: interval)
+        let readings = samples.filter {
+            TimelineSemantics.observedInterval(for: $0, within: interval) != nil
+        }.sorted { $0.timestamp < $1.timestamp }
+        var recent: [SystemSample] = []
+        var health = MachineHealthSignal.comfortable
+        func rank(_ value: MachineHealthSignal) -> Int {
+            switch value {
+            case .comfortable: 0
+            case .watch: 1
+            case .pressured: 2
+            case .critical: 3
+            }
+        }
+        for reading in readings {
+            recent.removeAll { $0.timestamp < reading.timestamp.addingTimeInterval(-240) }
+            if let signal = current(sample: reading, recentSamples: recent, at: reading.timestamp),
+               rank(signal.health) > rank(health) { health = signal.health }
+            recent.append(reading)
+        }
+        let demand = max(cpu, gpu ?? 0)
+        return Self(effort: demand < 25 ? .low : demand < 50 ? .moderate : demand < 75 ? .high : .nearCapacity,
+                    health: health, cpuPercent: Int(cpu.rounded()), gpuPercent: gpu.map { Int($0.rounded()) })
+    }
+
     public static func current(
         sample: SystemSample?,
         recentSamples: [SystemSample] = [],

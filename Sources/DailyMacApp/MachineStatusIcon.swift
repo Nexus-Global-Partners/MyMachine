@@ -207,7 +207,7 @@ enum MachineStatusIcon {
         }
     }
 
-    private static func color(for level: MachineSignalLevel) -> NSColor {
+    static func color(for level: MachineSignalLevel) -> NSColor {
         switch level {
         case .low: .systemGreen
         case .moderate: .systemYellow
@@ -216,7 +216,7 @@ enum MachineStatusIcon {
         }
     }
 
-    private static func color(for health: MachineHealthSignal) -> NSColor {
+    static func color(for health: MachineHealthSignal) -> NSColor {
         switch health {
         case .comfortable: .systemGreen
         case .watch: .systemYellow

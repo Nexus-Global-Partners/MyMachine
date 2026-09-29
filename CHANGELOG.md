@@ -6,6 +6,7 @@ All notable user-visible changes are recorded here.
 
 ### Added
 
+- Two compact status and effort signals above the instruments mirror the menu-bar colors and readings. Effort is explicitly the higher CPU/GPU demand, not whole-machine power. Period mode shows peak observed status and average demand; the app list keeps the top three contributors so the graph retains its size.
 - A rebuilt two-column native popover: four selectable CPU, GPU, memory, and fan instruments; a quiet thermal-pressure scale; observed app CPU contributors; and a large unobstructed history graph.
 - A Live / Period selector separates current readings from duration-weighted averages for the selected graph period. Historical-day navigation switches the instruments to Period automatically.
 - Best-effort fan-speed history, saved alongside system readings. Existing records keep their fan fields unknown. The graph uses measured RPM relative to the hardware maximum, never estimated fan power or temperature.

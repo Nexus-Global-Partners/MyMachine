@@ -95,6 +95,22 @@ struct DailyMacValidation {
             try harness.check(MachineDemandAverage.current(sample: unavailable, recentSamples: [], at: now)?.gpuPercent == nil, "unavailable GPU became zero")
         }
 
+        await harness.run("overview separates effort from pressure and preserves missing coverage") {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let busy = sample(at: now, duration: 30, cpu: 18, gpu: 81)
+            let live = try require(MachineStatusSignal.current(sample: busy, at: now), "missing overview")
+            try harness.check(live.effortScore == 81 && live.health == .comfortable,
+                              "busy GPU was confused with health or total capacity")
+            let cpuOnly = sample(at: now, duration: 30, cpu: 34)
+            try harness.check(MachineStatusSignal.current(sample: cpuOnly, at: now)?.effortScore == 34,
+                              "missing GPU prevented an honest CPU-only score")
+            let interval = DateInterval(start: now.addingTimeInterval(-3600), end: now)
+            let period = try require(MachineStatusSignal.period(samples: [busy], in: interval), "missing period overview")
+            try harness.check(period.effortScore == 81, "unrecorded time diluted period effort")
+            try harness.check(MachineStatusSignal.period(samples: [], in: interval) == nil,
+                              "empty period looked healthy or idle")
+        }
+
         await harness.run("live icon average includes samples between report refreshes") {
             let now = Date(timeIntervalSince1970: 1_800_000_000)
             var readings: [SystemSample] = []

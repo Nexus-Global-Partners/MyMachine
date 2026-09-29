@@ -35,6 +35,7 @@ struct InstrumentPanel: View {
     @Binding var selected: Set<MachineInstrument>
     @Binding var followsRange: Bool
     @State private var hoveredApp: String?
+    @State private var periodSignal: MachineStatusSignal?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var content: MonitoringDisplayState? { model.menuBarMonitoringContent }
@@ -73,6 +74,7 @@ struct InstrumentPanel: View {
                 .help("Live: current readings. Period: averages and busiest apps for the graph's selected dates.")
                 .accessibilityLabel("Instrument readings: \(followsRange ? "selected period" : "live")")
             }
+            machineOverview
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 10) {
                 ForEach(MachineInstrument.allCases) { metric in card(metric) }
             }
@@ -81,6 +83,61 @@ struct InstrumentPanel: View {
             Spacer(minLength: 0)
         }
         .frame(width: 214)
+        .task(id: followsRange ? content?.snapshot.interval : nil) {
+            periodSignal = nil
+            guard followsRange, let content else { return }
+            let samples = content.samples
+            let interval = content.snapshot.interval
+            let result = await Task.detached(priority: .userInitiated) {
+                MachineStatusSignal.period(samples: samples, in: interval)
+            }.value
+            guard !Task.isCancelled else { return }
+            periodSignal = result
+        }
+    }
+
+    private var machineOverview: some View {
+        let signal = followsRange ? periodSignal : MachineStatusSignal.current(
+            sample: liveSample, recentSamples: model.recentSystemSamples)
+        let healthTint = signal.map { Color(nsColor: MachineStatusIcon.color(for: $0.health)) } ?? .secondary
+        let effortTint = signal.map { Color(nsColor: MachineStatusIcon.color(for: $0.effort)) } ?? .secondary
+        return VStack(spacing: 9) {
+            overviewBar(title: followsRange ? "Peak status" : "Status",
+                        value: signal?.health.label ?? "Unavailable",
+                        fraction: signal == nil ? nil : 1, tint: healthTint)
+                .help("Same pressure signal as the menu-bar icon: green is comfortable, yellow is watch, orange is memory pressure, and red needs attention. High CPU/GPU demand alone is not an alert.\(followsRange ? " Highest observed status during the selected period." : " Latest measured status.")")
+            overviewBar(title: followsRange ? "Average effort" : "Effort",
+                        value: signal.map { "\($0.effortScore) / 100" } ?? "Unavailable",
+                        fraction: signal.map { Double($0.effortScore) / 100 }, tint: effortTint)
+                .help("Demand index: the higher of CPU and available GPU usage, not an average of all components, energy use, or a measure of your focus.\(followsRange ? " Uses duration-weighted averages over recorded coverage only." : " Matches the latest reading used by the right-hand menu-bar effort signal; the CPU/GPU cards use quieter two-minute averages.")\(signal?.gpuPercent == nil ? " GPU unavailable: CPU only." : "")")
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func overviewBar(title: String, value: String, fraction: Double?, tint: Color) -> some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text(title).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Text(value).monospacedDigit()
+            }
+            .font(.system(size: 10, weight: .medium))
+            GeometryReader { geometry in
+                Capsule().fill(Color.primary.opacity(0.065))
+                    .overlay(alignment: .leading) {
+                        if let fraction, fraction > 0 {
+                            Capsule().fill(tint.gradient)
+                                .overlay { Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5) }
+                                .frame(width: max(5, geometry.size.width * min(1, fraction)))
+                                .shadow(color: tint.opacity(0.16), radius: 3)
+                        }
+                    }
+            }
+            .frame(height: 6)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: fraction)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title): \(value)")
     }
 
     private func value(_ metric: MachineInstrument) -> Double? {
@@ -210,7 +267,7 @@ struct InstrumentPanel: View {
 
     private var apps: [AppRow] {
         if followsRange {
-            return content?.appContributors.prefix(5).map {
+            return content?.appContributors.prefix(3).map {
                 AppRow(id: $0.id, name: $0.ownerName, bundle: $0.ownerBundleID, percent: $0.observedCPUSharePercent)
             } ?? []
         }
@@ -221,7 +278,7 @@ struct InstrumentPanel: View {
         }
         let total = fresh.reduce(0) { $0 + $1.cpuPercent }
         guard total > 0 else { return [] }
-        return fresh.sorted { $0.cpuPercent > $1.cpuPercent }.prefix(5).map {
+        return fresh.sorted { $0.cpuPercent > $1.cpuPercent }.prefix(3).map {
             AppRow(id: $0.ownerBundleID ?? $0.ownerName, name: $0.ownerName, bundle: $0.ownerBundleID, percent: $0.cpuPercent / total * 100)
         }
     }
