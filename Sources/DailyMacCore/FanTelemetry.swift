@@ -31,6 +31,22 @@ public struct FanReading: Equatable, Sendable {
 /// Read-only access to AppleSMC fan keys. A missing key is never interpreted as
 /// zero RPM; zero is shown only when the physical actual-speed key returns zero.
 public enum FanTelemetry {
+    private static let cacheLock = NSLock()
+    private static var cachedAt: TimeInterval = -.infinity
+    private static var cachedReadings: [FanReading]?
+
+    /// The icon and recorder share a short-lived hardware read. Monotonic time
+    /// keeps clock adjustments from extending stale data's lifetime.
+    public static func sharedRead() -> [FanReading]? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - cachedAt < 10 { return cachedReadings }
+        cachedReadings = read()
+        cachedAt = now
+        return cachedReadings
+    }
+
     public static func read() -> [FanReading]? {
         guard let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC")) as io_service_t?,
               service != 0 else { return nil }

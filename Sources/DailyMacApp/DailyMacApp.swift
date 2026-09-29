@@ -250,7 +250,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
         guard !fanReadInFlight else { return }
         fanReadInFlight = true
         Task { @MainActor [weak self] in
-            let readings = await Task.detached(priority: .utility) { FanTelemetry.read() }.value
+            let readings = await Task.detached(priority: .utility) { FanTelemetry.sharedRead() }.value
             guard let self else { return }
             self.fanReadInFlight = false
             guard self.model.collectionState == .monitoring else { return }

@@ -128,6 +128,7 @@ final class AppModel: ObservableObject {
     @Published var reports: [DailyReport] = []
     @Published var processImpacts: [ProcessImpact] = []
     @Published var latestSystem: SystemSample?
+    @Published private(set) var liveAppResources: [AppResourceSample] = []
     @Published var trend7 = TrendSummary(days: 7, activeDuration: 0, averageDailyCPU: 0, mostUsedCategory: nil, notableChange: nil, narrative: "Building a baseline.")
     @Published var trend30 = TrendSummary(days: 30, activeDuration: 0, averageDailyCPU: 0, mostUsedCategory: nil, notableChange: nil, narrative: "Building a baseline.")
     @Published var lastUpdated: Date?
@@ -760,6 +761,9 @@ final class AppModel: ObservableObject {
             guard saved, sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
             retainRecentSystemSample(result.system)
             latestSystem = result.system
+            // Process collection is intentionally slower than system sampling.
+            // An intervening system-only tick isn't an empty process snapshot.
+            if !result.appResources.isEmpty { liveAppResources = result.appResources }
             currentActivitySession = TimelineSemantics.updatingCurrentActivitySession(
                 currentActivitySession,
                 with: result.system
@@ -874,7 +878,7 @@ final class AppModel: ObservableObject {
             let appContributors = insights.makeAppComputeContributors(
                 samples: appResources,
                 in: interval,
-                limit: 3
+                limit: 5
             )
             let visibleEventDates = sleepWakeEvents
                 .map(\.timestamp)
@@ -1257,6 +1261,7 @@ final class AppModel: ObservableObject {
         reports = []
         processImpacts = []
         latestSystem = nil
+        liveAppResources = []
         lastUpdated = nil
         lastReportRefresh = nil
         lastMonitoringRefresh = nil

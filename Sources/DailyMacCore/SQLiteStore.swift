@@ -175,7 +175,7 @@ public actor SQLiteStore {
                monitor_cpu, monitor_memory, monitor_disk_write, sampling_interval,
                keyboard_events, pointer_events, click_events, scroll_events,
                gpu_percent, performance_core_percent, efficiency_core_percent,
-               performance_core_contribution, monitor_cpu_measurement_version
+               performance_core_contribution, monitor_cpu_measurement_version, fan_rpm, fan_maximum_rpm
         FROM system_samples WHERE \(predicate) ORDER BY timestamp;
         """)
         defer { sqlite3_finalize(statement) }
@@ -238,7 +238,9 @@ public actor SQLiteStore {
                 monitorDiskWriteBytes: uint64(statement, 24),
                 samplingInterval: sqlite3_column_double(statement, 25),
                 manualActivity: manualActivity,
-                monitorCPUMeasurementVersion: Int(sqlite3_column_int(statement, 34))
+                monitorCPUMeasurementVersion: Int(sqlite3_column_int(statement, 34)),
+                fanRPM: sqlite3_column_type(statement, 35) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 35),
+                fanMaximumRPM: sqlite3_column_type(statement, 36) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 36)
             ))
         }
         return result
@@ -606,8 +608,8 @@ public actor SQLiteStore {
           monitor_cpu, monitor_memory, monitor_disk_write, sampling_interval,
           keyboard_events, pointer_events, click_events, scroll_events,
           gpu_percent, performance_core_percent, efficiency_core_percent,
-          performance_core_contribution, monitor_cpu_measurement_version
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+          performance_core_contribution, monitor_cpu_measurement_version, fan_rpm, fan_maximum_rpm
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """)
         defer { sqlite3_finalize(statement) }
         bind(sample.id.uuidString, to: 1, in: statement)
@@ -653,6 +655,10 @@ public actor SQLiteStore {
         if let value = sample.performanceCoreContributionPercent { sqlite3_bind_double(statement, 34, value) }
         else { sqlite3_bind_null(statement, 34) }
         sqlite3_bind_int(statement, 35, Int32(clamping: sample.monitorCPUMeasurementVersion ?? 0))
+        if let value = sample.fanRPM { sqlite3_bind_double(statement, 36, value) }
+        else { sqlite3_bind_null(statement, 36) }
+        if let value = sample.fanMaximumRPM { sqlite3_bind_double(statement, 37, value) }
+        else { sqlite3_bind_null(statement, 37) }
         guard sqlite3_step(statement) == SQLITE_DONE else { throw StoreError.write(lastError()) }
     }
 
@@ -931,6 +937,8 @@ public actor SQLiteStore {
         try addColumnIfMissing(db, table: "process_samples", column: "cpu_measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
         try addColumnIfMissing(db, table: "app_resource_samples", column: "cpu_measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
         try addColumnIfMissing(db, table: "system_samples", column: "monitor_cpu_measurement_version", definition: "INTEGER NOT NULL DEFAULT 0")
+        try addColumnIfMissing(db, table: "system_samples", column: "fan_rpm", definition: "REAL")
+        try addColumnIfMissing(db, table: "system_samples", column: "fan_maximum_rpm", definition: "REAL")
         guard sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS process_samples_owner_time ON process_samples(owner_bundle_id, owner_name, timestamp); PRAGMA user_version=6;", nil, nil, nil) == SQLITE_OK else {
             throw StoreError.cannotOpen(String(cString: sqlite3_errmsg(db)))
         }

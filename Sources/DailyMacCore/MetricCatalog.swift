@@ -54,8 +54,8 @@ public enum MetricCatalog {
         ),
         MetricDisclosure(
             metric: "Thermal state", origin: .measured,
-            plainLanguage: "Whether heat was beginning to constrain the Mac, shown as a quiet warm ribbon in the processor graph.",
-            technicalDetail: "Read from ProcessInfo's system thermal state. The ribbon communicates categorical thermal headroom; exact temperatures are intentionally not claimed."
+            plainLanguage: "Whether macOS is managing heat or reporting reduced thermal headroom.",
+            technicalDetail: "Read from ProcessInfo's four system thermal states. The segmented indicator is categorical, not a temperature or a percentage. Period mode shows the highest recorded state."
         ),
         MetricDisclosure(
             metric: "Disk activity", origin: .measured,
@@ -83,9 +83,14 @@ public enum MetricCatalog {
             technicalDetail: "Read without extra permissions from an optional aggregate utilization value exposed by the installed graphics driver. Availability can differ between Macs, so the line is hidden when the value is absent. It is hardware activity only: no screen content, app content, private frameworks, or privileged tracing is used."
         ),
         MetricDisclosure(
-            metric: "Fan speed and temperatures", origin: .unavailable,
-            plainLanguage: "Not shown; supported thermal headroom is used instead.",
-            technicalDetail: "Fan RPM and sensor temperatures would require model-specific or unsupported interfaces, so MY MACHINE does not claim them."
+            metric: "Fan speed", origin: .measured,
+            plainLanguage: "Measured rotation speed relative to the fan's reported maximum, when this Mac exposes it.",
+            technicalDetail: "Best-effort read-only AppleSMC actual and maximum RPM keys. Availability is hardware dependent. The graph records the fan with the highest relative speed; older or unavailable readings remain blank. No fan controls, electrical power, noise, or temperature estimates are used."
+        ),
+        MetricDisclosure(
+            metric: "Sensor temperatures", origin: .unavailable,
+            plainLanguage: "Exact temperatures are not collected.",
+            technicalDetail: "macOS thermal pressure is shown instead of guessing a physical temperature."
         )
     ]
 }

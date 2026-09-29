@@ -161,6 +161,10 @@ public struct SystemSample: Identifiable, Codable, Equatable, Sendable {
     public let monitorDiskWriteBytes: UInt64
     public let samplingInterval: TimeInterval
     public let manualActivity: ManualActivityCounts?
+    /// Measured speed of the fan with the highest fraction of its hardware maximum.
+    /// Nil for unavailable hardware or history recorded before fan collection.
+    public let fanRPM: Double?
+    public let fanMaximumRPM: Double?
 
     public init(
         id: UUID = UUID(), timestamp: Date, duration: TimeInterval,
@@ -176,7 +180,8 @@ public struct SystemSample: Identifiable, Codable, Equatable, Sendable {
         powerSource: PowerSource, isCharging: Bool?, diskReadBytes: UInt64, diskWriteBytes: UInt64,
         networkReceivedBytes: UInt64, networkSentBytes: UInt64, monitorCPUPercent: Double,
         monitorMemoryBytes: UInt64, monitorDiskWriteBytes: UInt64, samplingInterval: TimeInterval,
-        manualActivity: ManualActivityCounts? = nil, monitorCPUMeasurementVersion: Int? = 1
+        manualActivity: ManualActivityCounts? = nil, monitorCPUMeasurementVersion: Int? = 1,
+        fanRPM: Double? = nil, fanMaximumRPM: Double? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -210,6 +215,8 @@ public struct SystemSample: Identifiable, Codable, Equatable, Sendable {
         self.monitorDiskWriteBytes = monitorDiskWriteBytes
         self.samplingInterval = samplingInterval
         self.manualActivity = manualActivity
+        self.fanRPM = fanRPM
+        self.fanMaximumRPM = fanMaximumRPM
     }
 }
 

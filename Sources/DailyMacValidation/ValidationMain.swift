@@ -2331,6 +2331,7 @@ struct DailyMacValidation {
         await StorageMaintenanceValidation.run(harness: harness)
         await ProcessCPUValidation.run(harness: harness)
         await DeviceCounterValidation.run(harness: harness)
+        await InstrumentHistoryValidation.run(harness: harness)
         await AppCPUCalibrationValidation.run(harness: harness)
 
         if !CommandLine.arguments.contains("--skip-live") {

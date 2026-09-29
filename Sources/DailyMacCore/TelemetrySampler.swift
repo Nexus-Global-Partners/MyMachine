@@ -651,6 +651,7 @@ public actor TelemetrySampler {
         let nextInterval = adaptiveInterval(base: settings.baseSamplingInterval, isIdle: isIdle, battery: battery, monitorCPU: ownCPU)
         let category: WorkCategory = isIdle ? .idle : categorizer.category(appName: context.0, bundleID: context.1)
 
+        let fan = FanTelemetry.sharedRead()?.max { $0.percentOfMaximum < $1.percentOfMaximum }
         let sample = SystemSample(
             timestamp: now,
             duration: observedDuration,
@@ -682,7 +683,9 @@ public actor TelemetrySampler {
             monitorDiskWriteBytes: ownDiskWrite,
             samplingInterval: observedInterval,
             manualActivity: manualActivity,
-            monitorCPUMeasurementVersion: ownCPU == nil ? nil : 1
+            monitorCPUMeasurementVersion: ownCPU == nil ? nil : 1,
+            fanRPM: fan?.rpm,
+            fanMaximumRPM: fan?.maximumRPM
         )
         previousInstant = currentInstant
         previousExpectedInterval = nextInterval

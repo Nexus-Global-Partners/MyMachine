@@ -7,37 +7,30 @@ struct MenuBarMonitoringView: View {
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
     @AppStorage(TimelineDisplayMode.storageKey)
     private var timelineDisplayMode = TimelineDisplayMode.precise.rawValue
+    @State private var selectedInstruments: Set<MachineInstrument> = [.cpu, .gpu]
+    @State private var followsRange = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-
-            Group {
+        HStack(alignment: .top, spacing: 19) {
+            InstrumentPanel(selected: $selectedInstruments, followsRange: $followsRange)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.primary.opacity(0.065)).frame(width: 1)
+            VStack(spacing: 13) {
+                header
+                Group {
                 if let content = model.menuBarMonitoringContent {
                     VStack(spacing: 0) {
                         if content.snapshot.sampleCount > 0
                             || (model.menuBarSelectedDayStart != nil && !content.events.isEmpty) {
-                            MonitoringTimelineView(
-                                snapshot: content.snapshot,
-                                samples: content.samples,
-                                backgroundPoints: content.backgroundPoints,
-                                events: content.events,
-                                appContributors: content.appContributors,
-                                appResourceSamples: content.appResourceSamples,
-                                presentation: .menuBar,
-                                displayMode: selectedTimelineDisplayMode,
-                                historical: model.menuBarSelectedDayStart != nil
-                            )
-                            .equatable()
+                            InstrumentHistoryView(content: content, selected: selectedInstruments,
+                                                  mode: selectedTimelineDisplayMode)
                         } else if model.menuBarSelectedDayStart != nil {
                             historicalEmptyState
                         } else {
                             emptyState
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 5)
                 } else if model.menuBarIsRefreshing {
                     loadingState
                         .padding(.horizontal, 16)
@@ -49,20 +42,22 @@ struct MenuBarMonitoringView: View {
                 } else {
                     emptyState
                 }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 760)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .padding(20)
+        .frame(width: min(980, (NSScreen.main?.visibleFrame.width ?? 1020) - 40), height: 480)
+        .background(colorScheme == .dark ? Color(nsColor: .windowBackgroundColor) : .white)
+        .onChange(of: model.menuBarSelectedDayStart) { _, day in followsRange = day != nil }
     }
 
     private var header: some View {
-        VStack(spacing: 5) {
             HStack(spacing: 12) {
-                Text("Monitoring")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-
-                Spacer(minLength: 12)
+                dayActivitySummary
+                    .padding(.horizontal, 10).frame(height: 29)
+                    .background(Color.primary.opacity(0.035), in: Capsule())
+                Spacer(minLength: 2)
 
                 HStack(alignment: .center, spacing: 9) {
                     if model.menuBarSelectedDayStart != nil {
@@ -76,31 +71,11 @@ struct MenuBarMonitoringView: View {
                             onSelectSmart: model.selectSmartMenuBarMonitoringRange,
                             onSelectRange: model.selectMenuBarMonitoringRange
                         )
-                        Button(action: model.browsePreviousMenuBarDay) {
-                            Image(systemName: "calendar.badge.clock")
-                                .frame(width: 16, height: 16)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(!model.canBrowsePreviousMenuBarDay)
-                        .help("Browse yesterday")
-                        .accessibilityLabel("Browse yesterday")
                     }
-
-                    TimelineDisplayModeControl()
 
                     moreOptionsMenu
                 }
             }
-
-            HStack(spacing: 10) {
-                dayActivitySummary
-                Spacer(minLength: 8)
-                liveMachineSummary
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 7)
-        .padding(.bottom, 8)
     }
 
     private var dayActivitySummary: some View {
@@ -111,19 +86,19 @@ struct MenuBarMonitoringView: View {
         let observed = historical
             ? model.menuBarMonitoringContent?.snapshot.observedDuration
             : model.todayReport.map { $0.resourceSummary?.observedDuration ?? ($0.activeDuration + $0.idleDuration) }
-        return HStack(spacing: 7) {
-            Text(historical ? "You" : "You today")
+        return HStack(spacing: 4) {
+            Text(historical ? "You" : "Today · You")
                 .foregroundStyle(.secondary)
             Text(active.map(compactDuration) ?? "—")
                 .foregroundStyle(.primary)
             Text("·")
                 .foregroundStyle(.tertiary)
-            Text(historical ? "Mac recorded" : "Mac today")
+            Text("Mac")
                 .foregroundStyle(.secondary)
             Text(observed.map(compactDuration) ?? "—")
                 .foregroundStyle(.primary)
         }
-        .font(.caption.weight(.medium))
+        .font(.system(size: 10, weight: .medium))
         .monospacedDigit()
         .lineLimit(1)
         .help("You is observed non-idle use, not attention or productivity. Mac is recorded awake time, including idle and background activity; sleep and missing readings are excluded.")
@@ -305,6 +280,13 @@ struct MenuBarMonitoringView: View {
 
     private var moreOptionsMenu: some View {
         Menu {
+            Button("Browse yesterday", systemImage: "calendar.badge.clock", action: model.browsePreviousMenuBarDay)
+                .disabled(!model.canBrowsePreviousMenuBarDay)
+            Picker("Graph detail", selection: $timelineDisplayMode) {
+                Text("Calm · smooth & simple").tag(TimelineDisplayMode.calm.rawValue)
+                Text("Precise · detailed readings").tag(TimelineDisplayMode.precise.rawValue)
+            }
+            Divider()
             Button {
                 model.refreshMenuBarNow()
             } label: {
