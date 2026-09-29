@@ -31,6 +31,30 @@ struct InstrumentHistoryView: View {
 
     private var interval: DateInterval { content.snapshot.interval }
     private var shown: [MachineInstrument] { MachineInstrument.allCases.filter { selected.contains($0) } }
+    // Supporting signals sit behind demand, including at crossings.
+    private var paintOrder: [MachineInstrument] { [.fan, .memory, .cpu, .gpu].filter { selected.contains($0) } }
+    private var hasDemandSignal: Bool { selected.contains(.cpu) || selected.contains(.gpu) }
+
+    private func strokeOpacity(_ metric: MachineInstrument) -> Double {
+        switch metric {
+        case .cpu, .gpu: 1
+        case .memory: hasDemandSignal ? 0.55 : 0.9
+        case .fan: hasDemandSignal ? 0.32 : 0.75
+        }
+    }
+
+    private func strokeWidth(_ metric: MachineInstrument) -> CGFloat {
+        switch metric {
+        case .cpu, .gpu: 2.6
+        case .memory: hasDemandSignal ? 1.8 : 2.2
+        case .fan: hasDemandSignal ? 1.5 : 2
+        }
+    }
+
+    private func fillOpacity(_ metric: MachineInstrument) -> Double {
+        let opacity = metric == .memory ? 0.045 : 0.025
+        return opacity * (hasDemandSignal ? 1 : 2) * (colorScheme == .dark ? 1 : 0.7)
+    }
 
     var body: some View {
         VStack(spacing: 9) {
@@ -41,7 +65,7 @@ struct InstrumentHistoryView: View {
                     drawTimeRegions(context: &context, rect: plot)
                     // Fill each measured run independently, below all strokes.
                     // Quiet depth for the physical signals, never across gaps.
-                    for metric in shown where metric == .fan || metric == .memory {
+                    for metric in paintOrder where metric == .fan || metric == .memory {
                         for run in Dictionary(grouping: series[metric] ?? [], by: \.run).values {
                             let points = run.map { CGPoint(x: x($0.date, plot), y: plot.maxY - $0.value / 100 * plot.height) }
                             guard points.count > 1, let first = points.first, let last = points.last else { continue }
@@ -50,12 +74,12 @@ struct InstrumentHistoryView: View {
                             area.addLine(to: CGPoint(x: first.x, y: plot.maxY))
                             area.closeSubpath()
                             context.fill(area, with: .linearGradient(
-                                Gradient(colors: [metric.tint.opacity(colorScheme == .dark ? 0.13 : 0.085), metric.tint.opacity(0.008)]),
+                                Gradient(colors: [metric.tint.opacity(fillOpacity(metric)), metric.tint.opacity(0.002)]),
                                 startPoint: CGPoint(x: plot.midX, y: plot.minY),
                                 endPoint: CGPoint(x: plot.midX, y: plot.maxY)))
                         }
                     }
-                    for metric in shown {
+                    for metric in paintOrder {
                         let runs = Dictionary(grouping: series[metric] ?? [], by: \.run)
                         for key in runs.keys.sorted() {
                             let points = (runs[key] ?? []).map {
@@ -63,15 +87,17 @@ struct InstrumentHistoryView: View {
                             }
                             guard let first = points.first else { continue }
                             let path = trace(points)
-                            var glow = context
-                            glow.addFilter(.blur(radius: 1.1))
-                            glow.stroke(path, with: .color(metric.tint.opacity(colorScheme == .dark ? 0.22 : 0.12)),
-                                        style: StrokeStyle(lineWidth: 5.5, lineCap: .round, lineJoin: .round))
-                            context.stroke(path, with: .color(metric.tint),
-                                           style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                            if metric == .cpu || metric == .gpu {
+                                var glow = context
+                                glow.addFilter(.blur(radius: 1.1))
+                                glow.stroke(path, with: .color(metric.tint.opacity(colorScheme == .dark ? 0.22 : 0.12)),
+                                            style: StrokeStyle(lineWidth: 5.5, lineCap: .round, lineJoin: .round))
+                            }
+                            context.stroke(path, with: .color(metric.tint.opacity(strokeOpacity(metric))),
+                                           style: StrokeStyle(lineWidth: strokeWidth(metric), lineCap: .round, lineJoin: .round))
                             if points.count == 1 {
                                 context.fill(Path(ellipseIn: CGRect(x: first.x - 2, y: first.y - 2, width: 4, height: 4)),
-                                             with: .color(metric.tint))
+                                             with: .color(metric.tint.opacity(strokeOpacity(metric))))
                             }
                         }
                     }
