@@ -13,20 +13,26 @@ struct InstrumentHistoryView: View {
     private let series: [MachineInstrument: [InstrumentPoint]]
     private let presence: TimelinePresenceContext
     private let timeRegions: [InstrumentTimeRegion]
+    private let timeScale: InstrumentTimeScale
 
     init(content: MonitoringDisplayState, selected: Set<MachineInstrument>, mode: TimelineDisplayMode) {
         self.content = content
         self.selected = selected
         self.mode = mode
-        series = Dictionary(uniqueKeysWithValues: MachineInstrument.allCases.filter { selected.contains($0) }.map {
-            ($0, InstrumentHistory.points($0, samples: content.samples, in: content.snapshot.interval,
-                                          range: content.snapshot.range, mode: mode))
-        })
-        presence = TimelineSemantics.presenceContext(from: content.samples, within: content.snapshot.interval)
-        timeRegions = InstrumentTimeContext.regions(
+        let presence = TimelineSemantics.presenceContext(from: content.samples, within: content.snapshot.interval)
+        let regions = InstrumentTimeContext.regions(
             presence: presence,
             sleeps: TimelineSemantics.sleepIntervals(from: content.events, within: content.snapshot.interval),
             in: content.snapshot.interval)
+        let scale = InstrumentTimeScale(window: content.snapshot.interval, regions: regions, mode: mode)
+        self.presence = presence
+        timeRegions = regions
+        timeScale = scale
+        series = Dictionary(uniqueKeysWithValues: MachineInstrument.allCases.filter { selected.contains($0) }.map {
+            ($0, InstrumentHistory.points($0, samples: content.samples, in: content.snapshot.interval,
+                                          range: content.snapshot.range, mode: mode,
+                                          displayedDuration: scale.displayedDuration))
+        })
     }
 
     private var interval: DateInterval { content.snapshot.interval }
@@ -59,7 +65,8 @@ struct InstrumentHistoryView: View {
     var body: some View {
         VStack(spacing: 9) {
             GeometryReader { geometry in
-                let plot = CGRect(x: 16, y: 23, width: max(1, geometry.size.width - 57), height: max(1, geometry.size.height - 65))
+                let axisSpace: CGFloat = interval.duration >= 23 * 3600 ? 82 : 65
+                let plot = CGRect(x: 16, y: 23, width: max(1, geometry.size.width - 57), height: max(1, geometry.size.height - axisSpace))
                 Canvas { context, _ in
                     drawGrid(context: &context, rect: plot)
                     drawTimeRegions(context: &context, rect: plot)
@@ -82,7 +89,8 @@ struct InstrumentHistoryView: View {
                     for metric in paintOrder {
                         let runs = Dictionary(grouping: series[metric] ?? [], by: \.run)
                         for key in runs.keys.sorted() {
-                            let points = (runs[key] ?? []).map {
+                            let run = runs[key] ?? []
+                            let points = run.map {
                                 CGPoint(x: x($0.date, plot), y: plot.maxY - $0.value / 100 * plot.height)
                             }
                             guard let first = points.first else { continue }
@@ -93,7 +101,7 @@ struct InstrumentHistoryView: View {
                                 glow.stroke(path, with: .color(metric.tint.opacity(colorScheme == .dark ? 0.22 : 0.12)),
                                             style: StrokeStyle(lineWidth: 5.5, lineCap: .round, lineJoin: .round))
                             }
-                            context.stroke(path, with: .color(metric.tint.opacity(strokeOpacity(metric))),
+                            context.stroke(path, with: traceShading(metric, points: points, run: run),
                                            style: StrokeStyle(lineWidth: strokeWidth(metric), lineCap: .round, lineJoin: .round))
                             if points.count == 1 {
                                 context.fill(Path(ellipseIn: CGRect(x: first.x - 2, y: first.y - 2, width: 4, height: 4)),
@@ -101,6 +109,7 @@ struct InstrumentHistoryView: View {
                             }
                         }
                     }
+                    drawCondensedBreaks(context: &context, rect: plot)
                     // Quiet presence rail: observed awake time, then hands-on time.
                     // Unknown coverage stays empty, including overnight gaps.
                     for run in presence.awakeIntervals {
@@ -131,6 +140,11 @@ struct InstrumentHistoryView: View {
                     inspection(at: date(min(plot.maxX, max(plot.minX, inspectionX)), plot))
                         .padding(.horizontal, 16).padding(.top, 5)
                         .allowsHitTesting(false)
+                } else if !timeScale.condensedRegions.isEmpty {
+                    Text("Pauses condensed · //")
+                        .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 16).padding(.top, 5)
+                        .allowsHitTesting(false)
                 }
                 if shown.allSatisfy({ series[$0]?.isEmpty != false }) {
                     VStack(spacing: 6) {
@@ -145,7 +159,7 @@ struct InstrumentHistoryView: View {
             .background(InstrumentGlassSurface(radius: 19))
 
         }
-        .help("Click the instrument cards to choose the graph's signals. Blank sections mean no recorded reading. The thin bottom rail marks recorded awake time; darker sections indicate recent physical input, not focus.")
+        .help("Click cards to choose signals. Calm shortens long sleep and unrecorded gaps, marked // with their actual duration. Precise keeps full elapsed-time spacing. Blank sections are never interpolated. The bottom rail marks recorded awake time and recent physical input, not focus.")
         .onChange(of: content.snapshot.interval) { _, _ in inspectionX = nil }
         .onChange(of: selected) { _, _ in inspectionX = nil }
     }
@@ -183,7 +197,7 @@ struct InstrumentHistoryView: View {
             context.draw(Text("\(value)%").font(.system(size: 9)).foregroundStyle(.secondary),
                          at: CGPoint(x: rect.maxX + 8, y: y), anchor: .leading)
         }
-        let ticks = InstrumentTimeContext.ticks(in: interval, width: rect.width)
+        let ticks = displayTicks(width: rect.width)
         for (index, tick) in ticks.enumerated() {
             let position = x(tick, rect)
             var line = Path()
@@ -226,6 +240,7 @@ struct InstrumentHistoryView: View {
         // Only the three largest readable spans receive persistent labels.
         // Every smaller span remains available through inspection.
         let candidates = timeRegions.filter { region in
+            guard !timeScale.condensedRegions.contains(region) else { return false }
             let width = x(region.interval.end, rect) - x(region.interval.start, rect)
             let text = context.resolve(Text(regionTitle(region)).font(.system(size: 10, weight: .medium)))
             return region.interval.duration >= 60 && width >= text.measure(in: CGSize(width: 400, height: 20)).width + 18
@@ -250,10 +265,65 @@ struct InstrumentHistoryView: View {
     }
 
     private func x(_ date: Date, _ rect: CGRect) -> CGFloat {
-        rect.minX + max(0, min(1, date.timeIntervalSince(interval.start) / max(1, interval.duration))) * rect.width
+        rect.minX + timeScale.fraction(at: date) * rect.width
     }
     private func date(_ x: CGFloat, _ rect: CGRect) -> Date {
-        interval.start.addingTimeInterval(Double((x - rect.minX) / rect.width) * interval.duration)
+        timeScale.date(at: Double((x - rect.minX) / rect.width))
+    }
+
+    private func displayTicks(width: CGFloat) -> [Date] {
+        guard !timeScale.condensedRegions.isEmpty else {
+            return InstrumentTimeContext.ticks(in: interval, width: width)
+        }
+        // Generate clock-aligned candidates at the expanded activity density,
+        // then perform spacing in display coordinates, not elapsed time.
+        let candidates = InstrumentTimeContext.ticks(in: interval,
+            width: width * interval.duration / max(1, timeScale.displayedDuration) * 2)
+            .filter { date in
+                !timeScale.condensedRegions.contains { date > $0.interval.start && date < $0.interval.end }
+            }
+        var ticks = [interval.start]
+        for tick in candidates {
+            let position = timeScale.fraction(at: tick) * width
+            let last = timeScale.fraction(at: ticks.last!) * width
+            if position - last >= 75 && width - position >= 75 { ticks.append(tick) }
+        }
+        ticks.append(interval.end)
+        return ticks
+    }
+
+    private func traceShading(_ metric: MachineInstrument, points: [CGPoint], run: [InstrumentPoint]) -> GraphicsContext.Shading {
+        let color = metric.tint.opacity(strokeOpacity(metric))
+        guard let first = points.first, let last = points.last, last.x - first.x > 16 else { return .color(color) }
+        let fade = min(0.18, 8 / (last.x - first.x))
+        let startsAfterBoundary = (run.first?.date ?? interval.start).timeIntervalSince(interval.start) > 1.5
+        let endsBeforeLive = interval.end.timeIntervalSince(run.last?.date ?? interval.end) > 120
+        return .linearGradient(Gradient(stops: [
+            .init(color: color.opacity(startsAfterBoundary ? 0.25 : 1), location: 0),
+            .init(color: color, location: fade), .init(color: color, location: 1 - fade),
+            .init(color: color.opacity(endsBeforeLive ? 0.25 : 1), location: 1)
+        ]), startPoint: first, endPoint: CGPoint(x: last.x, y: first.y))
+    }
+
+    private func drawCondensedBreaks(context: inout GraphicsContext, rect: CGRect) {
+        for region in timeScale.condensedRegions {
+            let left = x(region.interval.start, rect), right = x(region.interval.end, rect)
+            let band = CGRect(x: left, y: rect.minY, width: right - left, height: rect.height)
+            let glass = Path(roundedRect: band, cornerRadius: min(9, band.width / 3))
+            context.fill(glass, with: .linearGradient(Gradient(colors: [
+                .white.opacity(0.01), .white.opacity(colorScheme == .dark ? 0.055 : 0.35), .white.opacity(0.01)
+            ]), startPoint: CGPoint(x: left, y: rect.midY), endPoint: CGPoint(x: right, y: rect.midY)))
+            let center = (left + right) / 2
+            context.draw(Text("//").font(.system(size: 13, weight: .light)).foregroundStyle(.secondary.opacity(0.65)),
+                         at: CGPoint(x: center, y: rect.midY))
+            let minutes = max(1, Int(region.interval.duration / 60))
+            let duration = minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
+            context.draw(Text(region.kind == .sleep ? "Asleep" : "No data")
+                .font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary),
+                         at: CGPoint(x: center, y: rect.maxY - 29))
+            context.draw(Text(duration).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary),
+                         at: CGPoint(x: center, y: rect.maxY - 16))
+        }
     }
     private func trace(_ points: [CGPoint]) -> Path {
         var path = Path()

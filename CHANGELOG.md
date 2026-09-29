@@ -14,6 +14,7 @@ All notable user-visible changes are recorded here.
 
 ### Changed
 
+- Calm condenses long sleep and unrecorded spans into quiet glass breaks labeled with their true duration, giving recorded sessions more chart space and detail. Precise preserves full elapsed-time spacing. Curves soften at internal recording boundaries without connecting missing readings; CPU no longer breaks merely because GPU telemetry is unavailable.
 - Chart hierarchy prioritizes CPU/GPU with bright foreground strokes. Memory and fan use thinner, lower-opacity background traces without glow and quieter fills; they regain contrast when CPU/GPU are hidden.
 - Memory is now a distinct yellow signal. Fan and memory traces use centered measured buckets instead of artificial stair-step edges, with restrained translucent area fills that stop at every data gap. App rows are lighter at rest and gently brighten on hover.
 - Time guides now use larger clock-aligned labels, with quiet duration annotations distinguishing observed absence, confirmed sleep, and missing readings. Native menus and card selection use cohesive glass controls and shared menu-bar CPU/GPU colors.

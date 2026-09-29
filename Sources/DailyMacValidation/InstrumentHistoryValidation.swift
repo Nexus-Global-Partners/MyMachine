@@ -98,11 +98,83 @@ enum InstrumentHistoryValidation {
             let invalid = sample(start.addingTimeInterval(60), duration: 30, rpm: -1)
             try harness.check(MachineInstrument.fan.value(in: invalid) == nil, "invalid RPM became a graph value")
         }
+        await harness.run("CPU continuity does not depend on GPU sensor availability") {
+            let values = [sample(start.addingTimeInterval(30), duration: 30, gpu: 40),
+                          sample(start.addingTimeInterval(60), duration: 30),
+                          sample(start.addingTimeInterval(90), duration: 30, gpu: 60)]
+            let cpu = InstrumentHistory.points(.cpu, samples: values, in: window, range: .oneHour, mode: .calm)
+            let gpu = InstrumentHistory.points(.gpu, samples: values, in: window, range: .oneHour, mode: .calm)
+            try harness.check(Set(cpu.map(\.run)).count == 1, "continuous CPU split when only GPU was missing")
+            try harness.check(Set(gpu.map(\.run)).count == 2, "missing GPU was bridged")
+        }
+        await harness.run("condensed time preserves dates durations and background work at every scale") {
+            for hours in [1.0, 4, 6, 12, 24, 48] {
+                let duration = hours * 3600
+                let range = DateInterval(start: start, duration: duration)
+                let first = DateInterval(start: start, duration: duration * 0.25)
+                let second = DateInterval(start: start.addingTimeInterval(duration * 0.8), end: range.end)
+                let sleep = DateInterval(start: first.end, end: second.start)
+                let presence = TimelinePresenceContext(awakeIntervals: [first, second], handsOnIntervals: [])
+                let regions = InstrumentTimeContext.regions(presence: presence, sleeps: [sleep], in: range)
+                let scale = InstrumentTimeScale(window: range, regions: regions, mode: .calm)
+                try harness.check(scale.condensedRegions.count == 1, "long sleep not condensed")
+                let gapWidth = scale.fraction(at: sleep.end) - scale.fraction(at: sleep.start)
+                try harness.check(gapWidth < 0.07 && gapWidth > 0, "sleep consumed chart space or disappeared")
+                try harness.check(scale.condensedRegions.first?.interval.duration == sleep.duration, "true gap duration changed")
+                try harness.check(scale.fraction(at: range.start) == 0 && scale.fraction(at: range.end) == 1, "axis endpoints changed")
+                for index in 0...100 {
+                    let date = start.addingTimeInterval(duration * Double(index) / 100)
+                    try harness.check(abs(scale.date(at: scale.fraction(at: date)).timeIntervalSince(date)) < 0.001, "hover date differs from drawn date")
+                }
+                let precise = InstrumentTimeScale(window: range, regions: regions, mode: .precise)
+                try harness.check(precise.condensedRegions.isEmpty && precise.displayedDuration == duration, "Precise no longer shows elapsed time")
+                let background = TimelinePresenceContext(awakeIntervals: [range], handsOnIntervals: [])
+                let backgroundRegions = InstrumentTimeContext.regions(presence: background, sleeps: [], in: range)
+                try harness.check(InstrumentTimeScale(window: range, regions: backgroundRegions, mode: .calm).condensedRegions.isEmpty, "recorded background work was compressed")
+                let empty = InstrumentTimeContext.regions(presence: .init(awakeIntervals: [], handsOnIntervals: []), sleeps: [], in: range)
+                try harness.check(InstrumentTimeScale(window: range, regions: empty, mode: .calm).condensedRegions.isEmpty, "an entirely missing range gained fake activity space")
+            }
+        }
+        await harness.run("condensed long ranges retain short-session curve detail and true gaps") {
+            let range = DateInterval(start: start, duration: 48 * 3600)
+            let firstSession: [SystemSample] = (1...120).map { index in
+                sample(start.addingTimeInterval(Double(index) * 30), duration: 30, cpu: Double(index % 60), gpu: 50)
+            }
+            let secondStart = start.addingTimeInterval(47 * 3600)
+            let secondSession: [SystemSample] = (1...120).map { index in
+                sample(secondStart.addingTimeInterval(Double(index) * 30), duration: 30, cpu: Double(index % 60), gpu: 60)
+            }
+            let values = firstSession + secondSession
+            let points = InstrumentHistory.points(.cpu, samples: values, in: range, range: .fortyEightHours,
+                                                  mode: .calm, displayedDuration: 2 * 3600)
+            try harness.check(points.count >= 48, "long-range buckets flattened short sessions")
+            try harness.check(Set(points.map(\.run)).count == 2, "true multi-hour gap was connected")
+            try harness.check(!points.contains { $0.date > start.addingTimeInterval(3600) && $0.date < start.addingTimeInterval(47 * 3600) }, "points invented inside gap")
+        }
+        await harness.run("multiple condensed gaps preserve leading trailing and interior time") {
+            let range = DateInterval(start: start, duration: 24 * 3600)
+            let awake = [(4.0, 6.0), (12.0, 14.0), (21.0, 22.0)].map {
+                DateInterval(start: start.addingTimeInterval($0.0 * 3600), end: start.addingTimeInterval($0.1 * 3600))
+            }
+            let regions = InstrumentTimeContext.regions(presence: .init(awakeIntervals: awake, handsOnIntervals: []), sleeps: [], in: range)
+            let scale = InstrumentTimeScale(window: range, regions: regions, mode: .calm)
+            try harness.check(scale.condensedRegions.count == 4, "leading or trailing gap not retained")
+            var previous = -1.0
+            for index in 0...240 {
+                let date = start.addingTimeInterval(Double(index) * 360)
+                let fraction = scale.fraction(at: date)
+                try harness.check(fraction > previous, "condensed time reversed or collapsed")
+                try harness.check(abs(scale.date(at: fraction).timeIntervalSince(date)) < 0.001, "multiple-gap inspection date drifted")
+                previous = fraction
+            }
+            let totalGapWidth = scale.condensedRegions.reduce(0.0) { $0 + scale.fraction(at: $1.interval.end) - scale.fraction(at: $1.interval.start) }
+            try harness.check(totalGapWidth <= 0.261, "gaps consume too much plot space")
+        }
     }
 
-    private static func sample(_ date: Date, duration: Double, cpu: Double = 20, rpm: Double? = nil, idle: Bool = false) -> SystemSample {
+    private static func sample(_ date: Date, duration: Double, cpu: Double = 20, rpm: Double? = nil, idle: Bool = false, gpu: Double? = nil) -> SystemSample {
         SystemSample(timestamp: date, duration: duration, foregroundApp: "Test", foregroundBundleID: nil,
-                     category: idle ? .idle : .other, isIdle: idle, cpuPercent: cpu, loadAverage1m: 1, loadAverage5m: 1,
+                     category: idle ? .idle : .other, isIdle: idle, cpuPercent: cpu, gpuPercent: gpu, loadAverage1m: 1, loadAverage5m: 1,
                      memoryUsedBytes: 4_000, memoryTotalBytes: 8_000, memoryPressure: .low,
                      swapUsedBytes: 0, thermalLevel: .nominal, batteryPercent: nil,
                      powerSource: .unknown, isCharging: nil, diskReadBytes: 0, diskWriteBytes: 0,
