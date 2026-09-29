@@ -39,6 +39,22 @@ struct InstrumentHistoryView: View {
                 Canvas { context, _ in
                     drawGrid(context: &context, rect: plot)
                     drawTimeRegions(context: &context, rect: plot)
+                    // Fill each measured run independently, below all strokes.
+                    // Quiet depth for the physical signals, never across gaps.
+                    for metric in shown where metric == .fan || metric == .memory {
+                        for run in Dictionary(grouping: series[metric] ?? [], by: \.run).values {
+                            let points = run.map { CGPoint(x: x($0.date, plot), y: plot.maxY - $0.value / 100 * plot.height) }
+                            guard points.count > 1, let first = points.first, let last = points.last else { continue }
+                            var area = trace(points)
+                            area.addLine(to: CGPoint(x: last.x, y: plot.maxY))
+                            area.addLine(to: CGPoint(x: first.x, y: plot.maxY))
+                            area.closeSubpath()
+                            context.fill(area, with: .linearGradient(
+                                Gradient(colors: [metric.tint.opacity(colorScheme == .dark ? 0.13 : 0.085), metric.tint.opacity(0.008)]),
+                                startPoint: CGPoint(x: plot.midX, y: plot.minY),
+                                endPoint: CGPoint(x: plot.midX, y: plot.maxY)))
+                        }
+                    }
                     for metric in shown {
                         let runs = Dictionary(grouping: series[metric] ?? [], by: \.run)
                         for key in runs.keys.sorted() {

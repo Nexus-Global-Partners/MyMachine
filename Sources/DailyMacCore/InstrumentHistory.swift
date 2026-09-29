@@ -68,6 +68,7 @@ public enum InstrumentHistory {
         }
         let bucket = TimelineSemantics.processorTrendBucketDuration(for: range, displayMode: mode, windowDuration: window.duration)
         var result: [InstrumentPoint] = []
+        var runBounds: [Int: DateInterval] = [:]
         var run = 0
         var previousEnd: Date?
         var bucketIndex: Int?
@@ -75,8 +76,11 @@ public enum InstrumentHistory {
         var start = window.start, end = window.start
         func flush() {
             guard weight > 0 else { return }
-            result.append(InstrumentPoint(date: start, value: sum / weight, run: run))
-            result.append(InstrumentPoint(date: end, value: sum / weight, run: run))
+            // One value at the bucket's temporal center, not two adjacent
+            // plateaus sharing a timestamp (which force vertical stair steps).
+            result.append(InstrumentPoint(date: start.addingTimeInterval(end.timeIntervalSince(start) / 2),
+                                          value: sum / weight, run: run))
+            runBounds[run] = DateInterval(start: runBounds[run]?.start ?? start, end: end)
             weight = 0; sum = 0
         }
         for sample in samples.sorted(by: { $0.timestamp < $1.timestamp }) {
@@ -102,6 +106,13 @@ public enum InstrumentHistory {
             previousEnd = max(previousEnd ?? measured.end, measured.end)
         }
         flush()
-        return result
+        let runs = Dictionary(grouping: result, by: \.run)
+        return runs.keys.sorted().flatMap { key -> [InstrumentPoint] in
+            guard let points = runs[key], let first = points.first, let last = points.last,
+                  let bounds = runBounds[key] else { return [] }
+            // Retain true observed endpoints and never extend into a gap.
+            return [InstrumentPoint(date: bounds.start, value: first.value, run: key)]
+                + points + [InstrumentPoint(date: bounds.end, value: last.value, run: key)]
+        }
     }
 }

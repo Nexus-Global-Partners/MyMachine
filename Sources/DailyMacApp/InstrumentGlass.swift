@@ -18,6 +18,8 @@ struct InstrumentGlassBackdrop: NSViewRepresentable {
 struct InstrumentGlassSurface: View {
     var radius: CGFloat = 17
     var selectionTint: Color? = nil
+    var lifted = false
+    var quiet = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -25,7 +27,7 @@ struct InstrumentGlassSurface: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         shape
             .fill(reduceTransparency ? Color(nsColor: .controlBackgroundColor)
-                  : Color.white.opacity(scheme == .dark ? (selectionTint == nil ? 0.045 : 0.085) : (selectionTint == nil ? 0.46 : 0.72)))
+                  : Color.white.opacity(surfaceOpacity))
             .overlay { shape.fill((selectionTint ?? .clear).opacity(0.045)) }
             .overlay {
                 shape.fill(LinearGradient(
@@ -35,11 +37,18 @@ struct InstrumentGlassSurface: View {
             }
             .overlay {
                 shape.strokeBorder(selectionTint?.opacity(scheme == .dark ? 0.65 : 0.5)
-                                   ?? .white.opacity(scheme == .dark ? 0.09 : 0.65),
+                                   ?? .white.opacity(lifted ? 0.35 : scheme == .dark ? (quiet ? 0.055 : 0.09) : 0.65),
                                    lineWidth: selectionTint == nil ? 0.6 : 1)
             }
             .shadow(color: .black.opacity(scheme == .dark ? 0.12 : 0.035), radius: 7, x: 0, y: 3)
             .allowsHitTesting(false)
+    }
+
+    private var surfaceOpacity: Double {
+        if scheme == .dark {
+            return lifted ? 0.11 : selectionTint != nil ? 0.085 : quiet ? 0.025 : 0.045
+        }
+        return lifted ? 0.8 : selectionTint != nil ? 0.72 : quiet ? 0.30 : 0.46
     }
 }
 

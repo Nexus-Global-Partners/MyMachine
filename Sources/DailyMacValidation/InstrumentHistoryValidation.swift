@@ -65,6 +65,23 @@ enum InstrumentHistoryValidation {
                 try harness.check(legacy.isEmpty, "legacy fan readings were fabricated")
             }
         }
+        await harness.run("physical curves use ordered bucket centers without vertical step edges") {
+            let values = (1...24).map { index in
+                sample(start.addingTimeInterval(Double(index) * 30), duration: 30,
+                       rpm: index < 12 ? 1_000 : 4_000)
+            }
+            for metric in [MachineInstrument.fan, .memory] {
+                for mode in [TimelineDisplayMode.calm, .precise] {
+                    let points = InstrumentHistory.points(metric, samples: values, in: window, range: .oneHour, mode: mode)
+                    try harness.check(points.first?.date == start && points.last?.date == start.addingTimeInterval(720), "smoothed signal lost observed endpoints")
+                    try harness.check(zip(points, points.dropFirst()).allSatisfy { $0.date < $1.date }, "duplicate-time step edge remains")
+                    try harness.check(points.allSatisfy { (0...100).contains($0.value) }, "physical curve exceeds measured scale")
+                    if metric == .fan {
+                        try harness.check(points.contains { $0.value == 20 } && points.contains { $0.value == 80 }, "measured fan levels lost")
+                    }
+                }
+            }
+        }
         await harness.run("fan history survives SQLite and legacy JSON remains readable") {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("machine-instrument-validation-\(UUID().uuidString)")
             defer { try? FileManager.default.removeItem(at: directory) }

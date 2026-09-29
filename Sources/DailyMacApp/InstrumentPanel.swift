@@ -7,7 +7,7 @@ extension MachineInstrument {
         switch self {
         case .cpu: MachinePalette.processor
         case .gpu: MachinePalette.graphics
-        case .memory: MachinePalette.human
+        case .memory: MachinePalette.memory
         case .fan: MachinePalette.human
         }
     }
@@ -34,6 +34,8 @@ struct InstrumentPanel: View {
     @Environment(\.colorScheme) private var colorScheme
     @Binding var selected: Set<MachineInstrument>
     @Binding var followsRange: Bool
+    @State private var hoveredApp: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var content: MonitoringDisplayState? { model.menuBarMonitoringContent }
     private var liveSample: SystemSample? {
@@ -259,7 +261,13 @@ struct InstrumentPanel: View {
                     }
                     .padding(.horizontal, 8)
                     .frame(height: 27)
-                    .background(InstrumentGlassSurface(radius: 9))
+                    .background(InstrumentGlassSurface(radius: 9, lifted: hoveredApp == app.id, quiet: true))
+                    .contentShape(RoundedRectangle(cornerRadius: 9))
+                    .onHover { inside in
+                        if inside { hoveredApp = app.id }
+                        else if hoveredApp == app.id { hoveredApp = nil }
+                    }
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hoveredApp == app.id)
                     .help("\(app.name)\n\(Int(app.percent.rounded()))% of observed app CPU \(followsRange ? "over this period" : "in the latest reading").")
                 }
             }

@@ -14,6 +14,7 @@ All notable user-visible changes are recorded here.
 
 ### Changed
 
+- Memory is now a distinct yellow signal. Fan and memory traces use centered measured buckets instead of artificial stair-step edges, with restrained translucent area fills that stop at every data gap. App rows are lighter at rest and gently brighten on hover.
 - Time guides now use larger clock-aligned labels, with quiet duration annotations distinguishing observed absence, confirmed sleep, and missing readings. Native menus and card selection use cohesive glass controls and shared menu-bar CPU/GPU colors.
 - The minimal instrument panel now uses desktop-backed native frost, quiet glass app rows, and brighter bordered selected metric cards. Graph strokes are slightly thicker; Reduce Transparency keeps the interface opaque.
 - A single activity pill pairs **You** with recorded awake **Mac** time above the graph. Card colors identify selected signals without extra selection icons or duplicate legends. Supporting sensor explanations are available on hover and to assistive technology.
