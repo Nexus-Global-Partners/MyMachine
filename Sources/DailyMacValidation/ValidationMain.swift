@@ -38,6 +38,7 @@ struct DailyMacValidation {
         setbuf(stderr, nil)
         print("MY MACHINE validation starting")
         let harness = ValidationHarness()
+        await SolarContextValidation.run(harness: harness)
 
         await harness.run("physical fan speed is bounded and never inferred from CPU load") {
             let stopped = try require(FanReading(index: 0, rpm: 0, maximumRPM: 5_000), "zero-RPM reading missing")

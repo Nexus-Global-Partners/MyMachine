@@ -8,6 +8,8 @@ struct InstrumentHistoryView: View {
     let selected: Set<MachineInstrument>
     let mode: TimelineDisplayMode
     @State private var inspectionX: CGFloat?
+    @AppStorage(SolarPreferences.key) private var solarLocation = ""
+    @State private var solarBands: [SolarBand] = []
     @Environment(\.colorScheme) private var colorScheme
 
     private let series: [MachineInstrument: [InstrumentPoint]]
@@ -68,6 +70,7 @@ struct InstrumentHistoryView: View {
                 let axisSpace: CGFloat = interval.duration >= 23 * 3600 ? 82 : 65
                 let plot = CGRect(x: 16, y: 23, width: max(1, geometry.size.width - 57), height: max(1, geometry.size.height - axisSpace))
                 Canvas { context, _ in
+                    drawDaylight(context: &context, rect: plot)
                     drawGrid(context: &context, rect: plot)
                     drawTimeRegions(context: &context, rect: plot)
                     // Fill each measured run independently, below all strokes.
@@ -162,12 +165,56 @@ struct InstrumentHistoryView: View {
         .help("Click cards to choose signals. Calm shortens long sleep and unrecorded gaps, marked // with their actual duration. Precise keeps full elapsed-time spacing. Blank sections are never interpolated. The bottom rail marks recorded awake time and recent physical input, not focus.")
         .onChange(of: content.snapshot.interval) { _, _ in inspectionX = nil }
         .onChange(of: selected) { _, _ in inspectionX = nil }
+        .task(id: "\(solarLocation)|\(interval.start.timeIntervalSince1970)|\(interval.end.timeIntervalSince1970)") {
+            solarBands = []
+            guard let location = SolarPreferences.decode(solarLocation) else { return }
+            let window = interval
+            let bands = await Task.detached(priority: .utility) {
+                SolarContext.bands(in: window, location: location)
+            }.value
+            guard !Task.isCancelled else { return }
+            solarBands = bands
+        }
+    }
+
+    private func drawDaylight(context: inout GraphicsContext, rect: CGRect) {
+        var lastLabelX = -CGFloat.infinity
+        for (index, band) in solarBands.enumerated() {
+            let left = x(band.interval.start, rect)
+            let right = x(band.interval.end, rect)
+            let tint: Color = switch band.phase {
+            case .day: Color.orange.opacity(colorScheme == .dark ? 0.022 : 0.018)
+            case .twilight: Color.indigo.opacity(colorScheme == .dark ? 0.09 : 0.045)
+            case .night: Color.indigo.opacity(colorScheme == .dark ? 0.16 : 0.085)
+            }
+            context.fill(Path(CGRect(x: left, y: rect.minY, width: max(0, right - left), height: rect.height)),
+                         with: .color(tint))
+            guard index > 0 else { continue }
+            var boundary = Path()
+            boundary.move(to: CGPoint(x: left, y: rect.minY))
+            boundary.addLine(to: CGPoint(x: left, y: rect.maxY))
+            context.stroke(boundary, with: .color(.secondary.opacity(0.16)),
+                           style: StrokeStyle(lineWidth: 0.6, dash: [2, 4]))
+            // Actual sunrise/sunset guides use the same (possibly condensed)
+            // coordinate map as the telemetry. Suppress labels, never time, when crowded.
+            let previous = solarBands[index - 1].phase
+            let title = band.phase == .day ? "Sunrise" : previous == .day ? "Sunset" : nil
+            guard let title, inspectionX == nil, left - lastLabelX >= 100,
+                  left > rect.minX + 48, left < rect.maxX - 48 else { continue }
+            context.draw(Text("\(title) \(band.interval.start.formatted(date: .omitted, time: .shortened))")
+                .font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary),
+                         at: CGPoint(x: left, y: rect.minY + 8), anchor: .top)
+            lastLabelX = left
+        }
     }
 
     private func inspection(at date: Date) -> some View {
         HStack(spacing: 9) {
             Text(date.formatted(date: interval.duration > 86400 ? .abbreviated : .omitted, time: .shortened))
                 .foregroundStyle(.secondary)
+            if let band = solarBands.first(where: { $0.interval.contains(date) }) {
+                Text(band.phase.rawValue).foregroundStyle(.secondary)
+            }
             if let region = timeRegions.first(where: { date >= $0.interval.start && date < $0.interval.end }) {
                 Text(regionTitle(region)).foregroundStyle(.secondary)
             }

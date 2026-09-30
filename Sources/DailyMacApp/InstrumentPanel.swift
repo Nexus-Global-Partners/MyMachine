@@ -52,7 +52,7 @@ struct InstrumentPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("My Mac").font(.system(size: 15, weight: .semibold))
                 Spacer(minLength: 4)
@@ -108,32 +108,48 @@ struct InstrumentPanel: View {
         }
         // Demand is not an alarm. Stay in the graph's blue family at every load.
         let effortTint = MachinePalette.processor.opacity(0.7)
-        return VStack(spacing: 5) {
+        let healthStage: Double? = switch signal?.health {
+        case .comfortable: 0.25
+        case .watch: 0.5
+        case .pressured: 0.75
+        case .critical: 1
+        case nil: nil
+        }
+        return VStack(spacing: 10) {
             overviewBar(title: followsRange ? "Peak status" : "Status",
                         value: signal?.health.label ?? "Unavailable",
-                        fraction: signal == nil ? nil : 1, tint: healthTint)
+                        fraction: healthStage, tint: healthTint, segments: 4)
                 .help("\(followsRange ? "Peak status" : "Status"): \(signal?.health.label ?? "Unavailable"). Same pressure assessment as the menu-bar icon, shown quietly here: blue-gray is comfortable, yellow is watch, orange is memory pressure, and red needs attention. High CPU/GPU demand alone is not an alert.\(followsRange ? " Highest observed status during the selected period." : " Latest measured status.")")
             overviewBar(title: followsRange ? "Average effort" : "Effort",
                         value: signal.map { "\($0.effortScore) / 100" } ?? "Unavailable",
-                        fraction: signal.map { Double($0.effortScore) / 100 }, tint: effortTint)
+                        fraction: signal.map { Double($0.effortScore) / 100 }, tint: effortTint, segments: 10)
                 .help("\(followsRange ? "Average effort" : "Effort"): \(signal.map { "\($0.effortScore) / 100" } ?? "Unavailable"). Demand index: the higher of CPU and available GPU usage, not an average of all components, energy use, or a measure of your focus.\(followsRange ? " Uses duration-weighted averages over recorded coverage only." : " Matches the latest reading used by the right-hand menu-bar effort signal; the CPU/GPU cards use quieter two-minute averages.")\(signal?.gpuPercent == nil ? " GPU unavailable: CPU only." : "")")
         }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 2)
         .accessibilityElement(children: .contain)
     }
 
-    private func overviewBar(title: String, value: String, fraction: Double?, tint: Color) -> some View {
-        GeometryReader { geometry in
-            Capsule().fill(Color.primary.opacity(0.055))
-                .overlay(alignment: .leading) {
-                    if let fraction, fraction > 0 {
-                        Capsule().fill(tint)
-                            .frame(width: max(4, geometry.size.width * min(1, fraction)))
+    private func overviewBar(title: String, value: String, fraction: Double?, tint: Color, segments: Int) -> some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer(minLength: 2)
+                Text(value).monospacedDigit()
+            }
+            .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                ForEach(0..<segments, id: \.self) { index in
+                    GeometryReader { geometry in
+                        let fill = max(0, min(1, (fraction ?? 0) * Double(segments) - Double(index)))
+                        Capsule().fill(Color.primary.opacity(0.055))
+                            .overlay(alignment: .leading) {
+                                Capsule().fill(tint).frame(width: geometry.size.width * fill)
+                            }
+                            .clipShape(Capsule())
                     }
+                    .frame(height: 6)
                 }
+            }
         }
-        .frame(height: 4)
         .contentShape(Rectangle())
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: fraction)
         .accessibilityElement(children: .ignore)
@@ -241,19 +257,9 @@ struct InstrumentPanel: View {
         case .unknown: "Unavailable"
         }
         let tint: Color = stage >= 4 ? Color(nsColor: .systemRed) : stage >= 3 ? Color(nsColor: .systemOrange) : stage == 2 ? Color(nsColor: .systemYellow) : MachinePalette.graphics
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(followsRange ? "Peak thermal pressure" : "Thermal pressure")
-                Spacer(minLength: 2)
-                Text(title).foregroundStyle(stage >= 3 ? tint : .secondary)
-            }
-            .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                ForEach(0..<4) { index in
-                    Capsule().fill(index < stage ? tint.opacity(0.8) : Color.primary.opacity(0.055)).frame(height: 6)
-                }
-            }
-        }
+        return overviewBar(title: followsRange ? "Peak thermal pressure" : "Thermal pressure",
+                           value: title, fraction: stage == 0 ? nil : Double(stage) / 4,
+                           tint: tint.opacity(0.8), segments: 4)
         .help("macOS reports four thermal states, not a temperature or a percentage. \(thermal.explanation)")
         .accessibilityElement(children: .ignore).accessibilityLabel("Thermal pressure: \(title)")
     }

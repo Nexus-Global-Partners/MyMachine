@@ -6,6 +6,7 @@ All notable user-visible changes are recorded here.
 
 ### Added
 
+- Optional city-based daylight context: subtle day, civil twilight and night backgrounds with sunrise/sunset guides mapped to the graph's actual time coordinates, including condensed pauses. Choose a city in Settings; calculation is local after an explicit Apple city lookup, with no background location tracking or assumed location.
 - Two compact status and effort signals above the instruments mirror the menu-bar colors and readings. Effort is explicitly the higher CPU/GPU demand, not whole-machine power. Period mode shows peak observed status and average demand; the app list keeps the top three contributors so the graph retains its size.
 - A rebuilt two-column native popover: four selectable CPU, GPU, memory, and fan instruments; a quiet thermal-pressure scale; observed app CPU contributors; and a large unobstructed history graph.
 - A Live / Period selector separates current readings from duration-weighted averages for the selected graph period. Historical-day navigation switches the instruments to Period automatically.
@@ -15,6 +16,7 @@ All notable user-visible changes are recorded here.
 
 ### Changed
 
+- Status, Effort and Thermal pressure now share a labeled segmented scale: four categorical stages for status/heat and ten partially filled steps for the 0–100 demand index.
 - The overview bar pair now uses quiet blue-gray status and graph-blue effort, thinner rounded strokes, and no extra container or glossy shading. Warm status colors appear only for measured pressure; high demand alone stays blue. The menu-bar icon is unchanged.
 - Status and effort now form one compact glass instrument: two rounded luminous bars, with labels and exact values on hover and in accessibility rather than visible rows of text.
 - Calm condenses long sleep and unrecorded spans into quiet glass breaks labeled with their true duration, giving recorded sessions more chart space and detail. Precise preserves full elapsed-time spacing. Curves soften at internal recording boundaries without connecting missing readings; CPU no longer breaks merely because GPU telemetry is unavailable.

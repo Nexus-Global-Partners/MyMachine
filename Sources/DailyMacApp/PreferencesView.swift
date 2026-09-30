@@ -24,6 +24,8 @@ struct PreferencesView: View {
 
                 MenuBarIconSettingsView()
 
+                SolarSettingsView()
+
                 Section("Monitoring") {
                     Toggle("Collect activity and performance locally", isOn: Binding(
                         get: { model.collectionState != .paused },
@@ -107,7 +109,7 @@ struct PreferencesView: View {
                     Text("App-family memory can include shared pages. Its observed file/disk activity is not storage consumed, a list of changed files, or an estimate of SSD wear.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Core monitoring requests no Accessibility, Screen Recording, Input Monitoring, Full Disk Access, Network Extension, or administrator permission. Optional report-ready alerts use only macOS notification permission. MY MACHINE has no analytics service and makes no network request of its own.")
+                    Text("Core monitoring requests no Accessibility, Screen Recording, Input Monitoring, Full Disk Access, Network Extension, or administrator permission. Optional report-ready alerts use only macOS notification permission. There is no analytics service or telemetry upload. Optional Find city sends your entered city to Apple's geocoder; daylight calculations then work offline without location tracking.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
