@@ -15,6 +15,7 @@ All notable user-visible changes are recorded here.
 
 ### Changed
 
+- The overview bar pair now uses quiet blue-gray status and graph-blue effort, thinner rounded strokes, and no extra container or glossy shading. Warm status colors appear only for measured pressure; high demand alone stays blue. The menu-bar icon is unchanged.
 - Status and effort now form one compact glass instrument: two rounded luminous bars, with labels and exact values on hover and in accessibility rather than visible rows of text.
 - Calm condenses long sleep and unrecorded spans into quiet glass breaks labeled with their true duration, giving recorded sessions more chart space and detail. Precise preserves full elapsed-time spacing. Curves soften at internal recording boundaries without connecting missing readings; CPU no longer breaks merely because GPU telemetry is unavailable.
 - Chart hierarchy prioritizes CPU/GPU with bright foreground strokes. Memory and fan use thinner, lower-opacity background traces without glow and quieter fills; they regain contrast when CPU/GPU are hidden.

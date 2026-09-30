@@ -99,40 +99,41 @@ struct InstrumentPanel: View {
     private var machineOverview: some View {
         let signal = followsRange ? periodSignal : MachineStatusSignal.current(
             sample: liveSample, recentSamples: model.recentSystemSamples)
-        let healthTint = signal.map { Color(nsColor: MachineStatusIcon.color(for: $0.health)) } ?? .secondary
-        let effortTint = signal.map { Color(nsColor: MachineStatusIcon.color(for: $0.effort)) } ?? .secondary
-        return VStack(spacing: 6) {
+        let healthTint: Color = switch signal?.health {
+        case .comfortable: MachinePalette.human.opacity(0.38)
+        case .watch: MachinePalette.memory.opacity(0.65)
+        case .pressured: Color.orange.opacity(0.65)
+        case .critical: MachinePalette.critical
+        case nil: Color.secondary.opacity(0.3)
+        }
+        // Demand is not an alarm. Stay in the graph's blue family at every load.
+        let effortTint = MachinePalette.processor.opacity(0.7)
+        return VStack(spacing: 5) {
             overviewBar(title: followsRange ? "Peak status" : "Status",
                         value: signal?.health.label ?? "Unavailable",
                         fraction: signal == nil ? nil : 1, tint: healthTint)
-                .help("\(followsRange ? "Peak status" : "Status"): \(signal?.health.label ?? "Unavailable"). Same pressure signal as the menu-bar icon: green is comfortable, yellow is watch, orange is memory pressure, and red needs attention. High CPU/GPU demand alone is not an alert.\(followsRange ? " Highest observed status during the selected period." : " Latest measured status.")")
+                .help("\(followsRange ? "Peak status" : "Status"): \(signal?.health.label ?? "Unavailable"). Same pressure assessment as the menu-bar icon, shown quietly here: blue-gray is comfortable, yellow is watch, orange is memory pressure, and red needs attention. High CPU/GPU demand alone is not an alert.\(followsRange ? " Highest observed status during the selected period." : " Latest measured status.")")
             overviewBar(title: followsRange ? "Average effort" : "Effort",
                         value: signal.map { "\($0.effortScore) / 100" } ?? "Unavailable",
                         fraction: signal.map { Double($0.effortScore) / 100 }, tint: effortTint)
                 .help("\(followsRange ? "Average effort" : "Effort"): \(signal.map { "\($0.effortScore) / 100" } ?? "Unavailable"). Demand index: the higher of CPU and available GPU usage, not an average of all components, energy use, or a measure of your focus.\(followsRange ? " Uses duration-weighted averages over recorded coverage only." : " Matches the latest reading used by the right-hand menu-bar effort signal; the CPU/GPU cards use quieter two-minute averages.")\(signal?.gpuPercent == nil ? " GPU unavailable: CPU only." : "")")
         }
-        .padding(10)
-        .background(InstrumentGlassSurface(radius: 13, quiet: true))
+        .padding(.vertical, 7)
+        .padding(.horizontal, 2)
         .accessibilityElement(children: .contain)
     }
 
     private func overviewBar(title: String, value: String, fraction: Double?, tint: Color) -> some View {
         GeometryReader { geometry in
-            Capsule().fill(Color.primary.opacity(0.075))
+            Capsule().fill(Color.primary.opacity(0.055))
                 .overlay(alignment: .leading) {
                     if let fraction, fraction > 0 {
                         Capsule().fill(tint)
-                            .overlay {
-                                Capsule().fill(LinearGradient(
-                                    colors: [.white.opacity(0.24), .clear, .black.opacity(0.08)],
-                                    startPoint: .top, endPoint: .bottom))
-                            }
-                            .frame(width: max(8, geometry.size.width * min(1, fraction)))
-                            .shadow(color: tint.opacity(0.18), radius: 3)
+                            .frame(width: max(4, geometry.size.width * min(1, fraction)))
                     }
                 }
         }
-        .frame(height: 8)
+        .frame(height: 4)
         .contentShape(Rectangle())
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: fraction)
         .accessibilityElement(children: .ignore)
