@@ -123,6 +123,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var menuBarMonitoringRangePreference: MonitoringRangePreference = .smart
     @Published private(set) var menuBarMonitoringRange: MonitoringRange = .oneHour
     @Published private(set) var menuBarSelectedDayStart: Date?
+    @Published private(set) var menuBarHistoryEnd: Date?
+    var menuBarIsHistorical: Bool { menuBarSelectedDayStart != nil || menuBarHistoryEnd != nil }
     @Published private(set) var menuBarMonitoringContent: MonitoringDisplayState?
     @Published private(set) var menuBarIsRefreshing = false
     @Published private(set) var menuBarRefreshMessage: String?
@@ -511,16 +513,51 @@ final class AppModel: ObservableObject {
 
     func selectSmartMenuBarMonitoringRange() {
         menuBarSelectedDayStart = nil
+        menuBarHistoryEnd = nil
         menuBarMonitoringRangePreference = .smart
+        menuBarMonitoringContent = nil
         restartMenuBarRefresh(endingAt: Date())
     }
 
     func selectMenuBarMonitoringRange(_ range: MonitoringRange) {
         let wasFixedToRange = menuBarMonitoringRangePreference == .fixed(range)
-        guard !wasFixedToRange || menuBarSelectedDayStart != nil else { return }
+        guard !wasFixedToRange || menuBarIsHistorical else { return }
         menuBarSelectedDayStart = nil
+        menuBarHistoryEnd = nil
         menuBarMonitoringRangePreference = .fixed(range)
         menuBarMonitoringRange = range
+        menuBarMonitoringContent = nil
+        restartMenuBarRefresh(endingAt: Date())
+    }
+
+    private func shiftedMenuBarInterval(_ direction: Int) -> DateInterval? {
+        guard let window = menuBarMonitoringContent?.snapshot.interval else { return nil }
+        let range: MonitoringRange? = if case .fixed(let range) = menuBarMonitoringRangePreference { range } else { nil }
+        return HistoryNavigation.shifted(window, by: direction, range: range, now: Date())
+    }
+
+    var canBrowsePreviousMenuBarWindow: Bool {
+        guard let previous = shiftedMenuBarInterval(-1) else { return false }
+        let oldest = Calendar.autoupdatingCurrent.date(byAdding: .day, value: -max(1, settings.rawRetentionDays),
+                                                      to: Calendar.autoupdatingCurrent.startOfDay(for: Date())) ?? Date()
+        return previous.end > oldest
+    }
+
+    func browseMenuBarWindow(_ direction: Int) {
+        guard !menuBarIsRefreshing, direction == -1 || menuBarIsHistorical else { return }
+        if direction == -1 && !canBrowsePreviousMenuBarWindow { return }
+        guard let interval = shiftedMenuBarInterval(direction) else {
+            if direction == 1 { returnToLiveMenuBarDay() }
+            return
+        }
+        if menuBarMonitoringRangePreference.isSmart || menuBarMonitoringRangePreference == .fixed(.today) {
+            menuBarSelectedDayStart = interval.start
+            menuBarHistoryEnd = nil
+        } else {
+            menuBarSelectedDayStart = nil
+            menuBarHistoryEnd = interval.end
+        }
+        menuBarMonitoringContent = nil
         restartMenuBarRefresh(endingAt: Date())
     }
 
@@ -541,6 +578,8 @@ final class AppModel: ObservableObject {
         let current = menuBarSelectedDayStart ?? calendar.startOfDay(for: Date())
         guard let previous = calendar.date(byAdding: .day, value: -1, to: current) else { return }
         menuBarSelectedDayStart = previous
+        menuBarHistoryEnd = nil
+        menuBarMonitoringRangePreference = .smart
         menuBarMonitoringContent = nil
         restartMenuBarRefresh(endingAt: Date())
     }
@@ -555,8 +594,9 @@ final class AppModel: ObservableObject {
     }
 
     func returnToLiveMenuBarDay() {
-        guard menuBarSelectedDayStart != nil else { return }
+        guard menuBarIsHistorical else { return }
         menuBarSelectedDayStart = nil
+        menuBarHistoryEnd = nil
         menuBarMonitoringContent = nil
         restartMenuBarRefresh(endingAt: Date())
     }
@@ -938,6 +978,8 @@ final class AppModel: ObservableObject {
         let refreshEpoch = dataEpoch
         let requestedPreference = menuBarMonitoringRangePreference
         let requestedDayStart = menuBarSelectedDayStart
+        let requestedHistoryEnd = menuBarHistoryEnd
+        let end = requestedHistoryEnd ?? now
         menuBarIsRefreshing = showProgress
         menuBarRefreshMessage = nil
 
@@ -969,7 +1011,7 @@ final class AppModel: ObservableObject {
                 }
                 let content = try await self.makeMonitoringContent(
                     range: range,
-                    endingAt: now,
+                    endingAt: end,
                     limit: 720,
                     intervalOverride: historicalInterval ?? autoInterval,
                     preloadedSamples: autoInterval == nil ? nil : recentSamples
@@ -982,6 +1024,7 @@ final class AppModel: ObservableObject {
                       refreshEpoch == self.dataEpoch,
                       !self.dataEraseInProgress,
                       requestedPreference == self.menuBarMonitoringRangePreference,
+                      requestedHistoryEnd == self.menuBarHistoryEnd,
                       requestedDayStart == self.menuBarSelectedDayStart else { return }
                 self.menuBarMonitoringRange = range
                 self.menuBarMonitoringContent = content
@@ -1270,6 +1313,7 @@ final class AppModel: ObservableObject {
         monitoringIsRefreshing = false
         menuBarMonitoringContent = nil
         menuBarSelectedDayStart = nil
+        menuBarHistoryEnd = nil
         menuBarIsRefreshing = false
         menuBarRefreshMessage = nil
         reports = []

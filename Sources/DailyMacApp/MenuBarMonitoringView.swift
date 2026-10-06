@@ -8,13 +8,12 @@ struct MenuBarMonitoringView: View {
     @AppStorage(TimelineDisplayMode.storageKey)
     private var timelineDisplayMode = TimelineDisplayMode.precise.rawValue
     @State private var selectedInstruments: Set<MachineInstrument> = [.cpu, .gpu, .battery]
-    @State private var followsRange = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         HStack(alignment: .top, spacing: 19) {
-            InstrumentPanel(selected: $selectedInstruments, followsRange: $followsRange)
+            InstrumentPanel(selected: $selectedInstruments, followsRange: model.menuBarIsHistorical)
             RoundedRectangle(cornerRadius: 2)
                 .fill(Color.primary.opacity(0.065)).frame(width: 1)
             VStack(spacing: 13) {
@@ -23,10 +22,10 @@ struct MenuBarMonitoringView: View {
                 if let content = model.menuBarMonitoringContent {
                     VStack(spacing: 0) {
                         if content.snapshot.sampleCount > 0
-                            || (model.menuBarSelectedDayStart != nil && !content.events.isEmpty) {
+                            || (model.menuBarIsHistorical && !content.events.isEmpty) {
                             InstrumentHistoryView(content: content, selected: selectedInstruments,
                                                   mode: selectedTimelineDisplayMode)
-                        } else if model.menuBarSelectedDayStart != nil {
+                        } else if model.menuBarIsHistorical {
                             historicalEmptyState
                         } else {
                             emptyState
@@ -36,7 +35,7 @@ struct MenuBarMonitoringView: View {
                     loadingState
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
-                } else if model.menuBarSelectedDayStart != nil {
+                } else if model.menuBarIsHistorical {
                     historicalEmptyState
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
@@ -57,29 +56,16 @@ struct MenuBarMonitoringView: View {
                     .overlay(colorScheme == .dark ? Color.black.opacity(0.12) : Color.white.opacity(0.52))
             }
         }
-        .onChange(of: model.menuBarSelectedDayStart) { _, day in followsRange = day != nil }
     }
 
     private var header: some View {
             HStack(spacing: 12) {
                 dayActivitySummary
-                    .padding(.horizontal, 10).frame(height: 29)
-                    .background(InstrumentGlassSurface(radius: 15))
+                    .frame(height: 29)
                 Spacer(minLength: 2)
 
                 HStack(alignment: .center, spacing: 9) {
-                    if model.menuBarSelectedDayStart != nil {
-                        historicalDayControl
-                    } else {
-                        MenuBarMonitoringRangeControl(
-                            preference: model.menuBarMonitoringRangePreference,
-                            effectiveRange: model.menuBarMonitoringContent?.snapshot.range
-                                ?? model.menuBarMonitoringRange,
-                            effectiveInterval: model.menuBarMonitoringContent?.snapshot.interval,
-                            onSelectSmart: model.selectSmartMenuBarMonitoringRange,
-                            onSelectRange: model.selectMenuBarMonitoringRange
-                        )
-                    }
+                    InstrumentTimeControl()
 
                     moreOptionsMenu
                 }
@@ -87,15 +73,10 @@ struct MenuBarMonitoringView: View {
     }
 
     private var dayActivitySummary: some View {
-        let historical = model.menuBarSelectedDayStart != nil
-        let active = historical
-            ? model.menuBarMonitoringContent?.snapshot.activeDuration
-            : model.todayActivityTotals?.you
-        let observed = historical
-            ? model.menuBarMonitoringContent?.snapshot.observedDuration
-            : model.todayActivityTotals?.machine
+        let active = model.todayActivityTotals?.you
+        let observed = model.todayActivityTotals?.machine
         return HStack(spacing: 4) {
-            Text(historical ? "You" : "Today · You")
+            Text("Today · You")
                 .foregroundStyle(.secondary)
             Text(active.map(compactDuration) ?? "—")
                 .foregroundStyle(.primary)
@@ -228,7 +209,7 @@ struct MenuBarMonitoringView: View {
             Image(systemName: "chart.xyaxis.line")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            Text("No detailed readings for this day")
+            Text("No readings for this period")
                 .font(.subheadline.weight(.medium))
             Text("MY MACHINE keeps detailed readings for \(settingsRetentionDays) days. Unrecorded time isn't treated as sleep or zero activity.")
                 .font(.caption)
@@ -242,7 +223,7 @@ struct MenuBarMonitoringView: View {
     private var loadingState: some View {
         VStack(spacing: 8) {
             ProgressView().controlSize(.small)
-            Text(model.menuBarSelectedDayStart == nil ? "Opening live view…" : "Opening day…")
+            Text(model.menuBarIsHistorical ? "Opening history…" : "Opening live view…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -288,8 +269,6 @@ struct MenuBarMonitoringView: View {
 
     private var moreOptionsMenu: some View {
         Menu {
-            Button("Browse yesterday", systemImage: "calendar.badge.clock", action: model.browsePreviousMenuBarDay)
-                .disabled(!model.canBrowsePreviousMenuBarDay)
             Picker("Graph detail", selection: $timelineDisplayMode) {
                 Text("Calm · smooth & simple").tag(TimelineDisplayMode.calm.rawValue)
                 Text("Precise · detailed readings").tag(TimelineDisplayMode.precise.rawValue)

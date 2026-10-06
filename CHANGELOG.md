@@ -4,6 +4,12 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+### Build 31
+
+- Battery replaces Memory in the four instrument cards, with a green history trace. A subtle green area appears only beneath intervals explicitly recorded as charging; merely being plugged in does not imply charging, and missing readings stay missing. Memory pressure still contributes to machine health.
+- One native time menu replaces the separate Live / Period interaction. Today follows the observed waking day; arrows browse earlier/later windows without changing the selected duration. Now returns to live readings. Historical cards follow the displayed period, with Battery showing its last recorded level rather than an average.
+- Today's You/Mac totals remain visible as quiet header text, without another glass container.
+
 ### Added
 
 - Optional city-based daylight context: subtle day, civil twilight and night backgrounds with sunrise/sunset guides mapped to the graph's actual time coordinates, including condensed pauses. Choose a city in Settings; calculation is local after an explicit Apple city lookup, with no background location tracking or assumed location.

@@ -36,7 +36,7 @@ struct InstrumentPanel: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Binding var selected: Set<MachineInstrument>
-    @Binding var followsRange: Bool
+    let followsRange: Bool
     @State private var hoveredApp: String?
     @State private var periodSignal: MachineStatusSignal?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -59,22 +59,14 @@ struct InstrumentPanel: View {
             HStack {
                 Text("My Mac").font(.system(size: 15, weight: .semibold))
                 Spacer(minLength: 4)
-                Menu {
-                    Button("Live readings") { followsRange = false }
-                    Button("Selected period") { followsRange = true }
-                } label: {
-                    HStack(spacing: 5) {
-                        Circle().fill(followsRange ? Color.secondary : (liveSample == nil ? .gray : MachinePalette.normal))
-                            .frame(width: 5, height: 5)
-                        Text(followsRange ? "Period" : "Live").font(.system(size: 11, weight: .medium))
-                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
-                    }
-                    .padding(.horizontal, 9).frame(height: 25)
-                    .background(.quaternary.opacity(0.45), in: Capsule())
+                HStack(spacing: 5) {
+                    Circle().fill(followsRange || liveSample == nil ? Color.secondary : MachinePalette.normal)
+                        .frame(width: 5, height: 5)
+                    Text(followsRange ? "Earlier" : liveSample == nil ? "Waiting" : "Live")
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
                 }
-                .menuStyle(.button).menuIndicator(.hidden)
-                .buttonStyle(InstrumentControlStyle()).fixedSize()
-                .help("Live: current readings. Period: averages and busiest apps for the graph's selected dates.")
+                .frame(height: 29)
+                .help(followsRange ? "Readings for the displayed period. Battery shows its last recorded level." : "Latest readings. Use the time arrows to explore earlier readings.")
                 .accessibilityLabel("Instrument readings: \(followsRange ? "selected period" : "live")")
             }
             machineOverview
@@ -154,10 +146,6 @@ struct InstrumentPanel: View {
             }
         }
         .contentShape(Rectangle())
-            if metric == .battery {
-                return content.samples.last(where: { TimelineSemantics.observedInterval(for: $0, within: content.snapshot.interval) != nil })
-                    .flatMap { metric.value(in: $0) }
-            }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: fraction)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title): \(value)")
@@ -166,6 +154,10 @@ struct InstrumentPanel: View {
     private func value(_ metric: MachineInstrument) -> Double? {
         if followsRange {
             guard let content else { return nil }
+            if metric == .battery {
+                return content.samples.last(where: { TimelineSemantics.observedInterval(for: $0, within: content.snapshot.interval) != nil })
+                    .flatMap { metric.value(in: $0) }
+            }
             return InstrumentHistory.average(metric, samples: content.samples, in: content.snapshot.interval)
         }
         guard let liveSample else { return nil }
@@ -176,11 +168,6 @@ struct InstrumentPanel: View {
         if metric == .fan, let date = model.fanReadingsAt, Date().timeIntervalSince(date) < 45 {
             return model.fanReadings?.map(\.percentOfMaximum).max()
         }
-        case .battery:
-            if followsRange { return "Last recorded level in this period" }
-            if liveSample?.isCharging == true { return "Charging" }
-            if liveSample?.powerSource == .adapter { return "Plugged in · not charging" }
-            return liveSample?.powerSource == .battery ? "On battery" : "Charge remaining"
         return metric.value(in: liveSample)
     }
 
@@ -189,6 +176,11 @@ struct InstrumentPanel: View {
         switch metric {
         case .cpu: return followsRange ? "Average demand" : "Processing · 2m"
         case .gpu: return followsRange ? "Average demand" : "Graphics · 2m"
+        case .battery:
+            if followsRange { return "Last recorded level in this period" }
+            if liveSample?.isCharging == true { return "Charging" }
+            if liveSample?.powerSource == .adapter { return "Plugged in · not charging" }
+            return liveSample?.powerSource == .battery ? "On battery" : "Charge remaining"
         case .memory:
             switch pressure {
             case .low: return followsRange ? "Pressure normal" : "Normal pressure"
@@ -215,9 +207,6 @@ struct InstrumentPanel: View {
         let reading = value(metric)
         let alert = warning(metric)
         return Button {
-                    if metric == .battery && !followsRange && liveSample?.isCharging == true {
-                        Image(systemName: "bolt.fill").font(.system(size: 10)).foregroundStyle(metric.tint)
-                    }
             if isSelected {
                 if selected.count > 1 { selected.remove(metric) }
             } else { selected.insert(metric) }
@@ -226,6 +215,9 @@ struct InstrumentPanel: View {
                 HStack(spacing: 5) {
                     Text(metric.title).font(.system(size: 11, weight: .medium))
                     Spacer(minLength: 0)
+                    if metric == .battery && !followsRange && liveSample?.isCharging == true {
+                        Image(systemName: "bolt.fill").font(.system(size: 10)).foregroundStyle(metric.tint)
+                    }
                     if metric == .memory && pressure != nil && pressure != .low {
                         Circle().fill(pressure == .high ? MachinePalette.critical : .orange).frame(width: 5, height: 5)
                     }
