@@ -8,6 +8,7 @@ extension MachineInstrument {
         case .cpu: MachinePalette.processor
         case .gpu: MachinePalette.graphics
         case .memory: MachinePalette.memory
+        case .battery: MachinePalette.battery
         case .fan: MachinePalette.human
         }
     }
@@ -16,6 +17,7 @@ extension MachineInstrument {
         case .cpu: "cpu"
         case .gpu: "square.3.layers.3d"
         case .memory: "memorychip"
+        case .battery: "battery.100percent"
         case .fan: "fan"
         }
     }
@@ -24,6 +26,7 @@ extension MachineInstrument {
         case .cpu: "Processing demand across all CPU cores. A high reading means the Mac is working, not necessarily struggling."
         case .gpu: "Graphics-engine activity reported by macOS. Missing readings are not treated as zero."
         case .memory: "Share of physical memory in use. The pressure label, not fullness alone, tells you whether memory is constrained."
+        case .battery: "Measured battery charge remaining, not power consumption. Green fill under the graph marks recorded charging only, not merely being plugged in."
         case .fan: "Measured fan RPM as a share of its hardware maximum. On multi-fan Macs this is the fastest relative fan. This is not power, temperature, or noise."
         }
     }
@@ -76,7 +79,7 @@ struct InstrumentPanel: View {
             }
             machineOverview
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 10) {
-                ForEach(MachineInstrument.allCases) { metric in card(metric) }
+                ForEach(MachineInstrument.panelInstruments) { metric in card(metric) }
             }
             thermalIndicator
             appList
@@ -151,6 +154,10 @@ struct InstrumentPanel: View {
             }
         }
         .contentShape(Rectangle())
+            if metric == .battery {
+                return content.samples.last(where: { TimelineSemantics.observedInterval(for: $0, within: content.snapshot.interval) != nil })
+                    .flatMap { metric.value(in: $0) }
+            }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: fraction)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title): \(value)")
@@ -169,6 +176,11 @@ struct InstrumentPanel: View {
         if metric == .fan, let date = model.fanReadingsAt, Date().timeIntervalSince(date) < 45 {
             return model.fanReadings?.map(\.percentOfMaximum).max()
         }
+        case .battery:
+            if followsRange { return "Last recorded level in this period" }
+            if liveSample?.isCharging == true { return "Charging" }
+            if liveSample?.powerSource == .adapter { return "Plugged in · not charging" }
+            return liveSample?.powerSource == .battery ? "On battery" : "Charge remaining"
         return metric.value(in: liveSample)
     }
 
@@ -203,6 +215,9 @@ struct InstrumentPanel: View {
         let reading = value(metric)
         let alert = warning(metric)
         return Button {
+                    if metric == .battery && !followsRange && liveSample?.isCharging == true {
+                        Image(systemName: "bolt.fill").font(.system(size: 10)).foregroundStyle(metric.tint)
+                    }
             if isSelected {
                 if selected.count > 1 { selected.remove(metric) }
             } else { selected.insert(metric) }
@@ -235,7 +250,7 @@ struct InstrumentPanel: View {
             .contentShape(RoundedRectangle(cornerRadius: 17))
         }
         .buttonStyle(.plain)
-        .help("\(detail(metric)). \(metric.explanation)\n\(followsRange ? "Average over recorded coverage in the selected period." : "Live sensor readings; CPU/GPU are two-minute averages.")\nClick to \(isSelected ? "hide" : "show") on the graph. At least one signal stays visible.")
+        .help("\(detail(metric)). \(metric.explanation)\n\(followsRange ? (metric == .battery ? "Last recorded battery level in the selected period." : "Average over recorded coverage in the selected period.") : "Live sensor readings; CPU/GPU are two-minute averages.")\nClick to \(isSelected ? "hide" : "show") on the graph. At least one signal stays visible.")
         .accessibilityLabel("\(metric.title), \(reading.map { "\(Int($0)) percent" } ?? "not available"), \(detail(metric))")
         .accessibilityValue(isSelected ? "Shown in graph" : "Hidden in graph")
         .accessibilityAddTraits(isSelected ? .isSelected : [])

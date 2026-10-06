@@ -3,13 +3,17 @@ import Foundation
 /// The selectable instruments use measured percentages, not inferred health.
 /// Thermal pressure remains categorical and is deliberately not on this axis.
 public enum MachineInstrument: String, CaseIterable, Identifiable, Sendable {
-    case cpu, gpu, memory, fan
+    case cpu, gpu, memory, battery, fan
+    /// Memory remains available to existing reports; the compact instrument
+    /// shows battery in its place without changing stored telemetry.
+    public static let panelInstruments: [Self] = [.cpu, .gpu, .battery, .fan]
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .cpu: "CPU"
         case .gpu: "GPU"
         case .memory: "Memory"
+        case .battery: "Battery"
         case .fan: "Fan"
         }
     }
@@ -19,6 +23,7 @@ public enum MachineInstrument: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .cpu: value = sample.cpuPercent
         case .gpu: value = sample.gpuPercent
+        case .battery: value = sample.batteryPercent
         case .memory:
             value = sample.memoryTotalBytes > 0
                 ? Double(sample.memoryUsedBytes) / Double(sample.memoryTotalBytes) * 100 : nil
@@ -39,6 +44,21 @@ public struct InstrumentPoint: Equatable, Sendable {
 }
 
 public enum InstrumentHistory {
+    /// Only explicitly measured charging coverage is shaded. Being plugged in
+    /// alone is not charging (full/held batteries must remain unfilled).
+    public static func chargingIntervals(samples: [SystemSample], in window: DateInterval) -> [DateInterval] {
+        var result: [DateInterval] = []
+        for sample in samples.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard sample.isCharging == true, sample.powerSource != .battery,
+                  MachineInstrument.battery.value(in: sample) != nil,
+                  let interval = TimelineSemantics.observedInterval(for: sample, within: window) else { continue }
+            if let last = result.last, interval.start <= last.end {
+                result[result.count - 1] = DateInterval(start: last.start, end: max(last.end, interval.end))
+            } else { result.append(interval) }
+        }
+        return result
+    }
+
     /// Duration-weighted means over actual coverage. No zero fill, no duplicate
     /// interval weighting, and no interpolation across unknown sensor readings.
     public static func average(_ metric: MachineInstrument, samples: [SystemSample], in window: DateInterval) -> Double? {

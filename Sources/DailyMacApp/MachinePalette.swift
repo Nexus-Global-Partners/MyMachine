@@ -9,6 +9,7 @@ enum MachinePalette {
     static let processor = Color(nsColor: nativeProcessor)
     static let graphics = Color(nsColor: nativeGraphics)
     static let memory = adaptive(dark: 0xF6D95C, light: 0x987300)
+    static let battery = adaptive(dark: 0x64F59B, light: 0x078C45)
     static let human = adaptive(dark: 0xDBE3EB, light: 0x4E5D6C)
     static let accent = adaptive(dark: 0xF2DF63, light: 0x816B00)
     static let warm = adaptive(dark: 0xC69C60, light: 0x976A34)

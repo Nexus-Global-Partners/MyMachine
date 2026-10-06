@@ -7,7 +7,7 @@ struct MenuBarMonitoringView: View {
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
     @AppStorage(TimelineDisplayMode.storageKey)
     private var timelineDisplayMode = TimelineDisplayMode.precise.rawValue
-    @State private var selectedInstruments: Set<MachineInstrument> = [.cpu, .gpu]
+    @State private var selectedInstruments: Set<MachineInstrument> = [.cpu, .gpu, .battery]
     @State private var followsRange = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency

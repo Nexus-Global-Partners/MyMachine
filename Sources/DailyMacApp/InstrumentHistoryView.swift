@@ -16,6 +16,7 @@ struct InstrumentHistoryView: View {
     private let presence: TimelinePresenceContext
     private let timeRegions: [InstrumentTimeRegion]
     private let timeScale: InstrumentTimeScale
+    private let chargingIntervals: [DateInterval]
 
     init(content: MonitoringDisplayState, selected: Set<MachineInstrument>, mode: TimelineDisplayMode) {
         self.content = content
@@ -30,6 +31,7 @@ struct InstrumentHistoryView: View {
         self.presence = presence
         timeRegions = regions
         timeScale = scale
+        chargingIntervals = InstrumentHistory.chargingIntervals(samples: content.samples, in: content.snapshot.interval)
         series = Dictionary(uniqueKeysWithValues: MachineInstrument.allCases.filter { selected.contains($0) }.map {
             ($0, InstrumentHistory.points($0, samples: content.samples, in: content.snapshot.interval,
                                           range: content.snapshot.range, mode: mode,
@@ -40,13 +42,14 @@ struct InstrumentHistoryView: View {
     private var interval: DateInterval { content.snapshot.interval }
     private var shown: [MachineInstrument] { MachineInstrument.allCases.filter { selected.contains($0) } }
     // Supporting signals sit behind demand, including at crossings.
-    private var paintOrder: [MachineInstrument] { [.fan, .memory, .cpu, .gpu].filter { selected.contains($0) } }
+    private var paintOrder: [MachineInstrument] { [.fan, .memory, .battery, .cpu, .gpu].filter { selected.contains($0) } }
     private var hasDemandSignal: Bool { selected.contains(.cpu) || selected.contains(.gpu) }
 
     private func strokeOpacity(_ metric: MachineInstrument) -> Double {
         switch metric {
         case .cpu, .gpu: 1
         case .memory: hasDemandSignal ? 0.55 : 0.9
+        case .battery: hasDemandSignal ? 0.72 : 1
         case .fan: hasDemandSignal ? 0.32 : 0.75
         }
     }
@@ -55,6 +58,7 @@ struct InstrumentHistoryView: View {
         switch metric {
         case .cpu, .gpu: 2.6
         case .memory: hasDemandSignal ? 1.8 : 2.2
+        case .battery: hasDemandSignal ? 2 : 2.6
         case .fan: hasDemandSignal ? 1.5 : 2
         }
     }
@@ -73,6 +77,7 @@ struct InstrumentHistoryView: View {
                     drawDaylight(context: &context, rect: plot)
                     drawGrid(context: &context, rect: plot)
                     drawTimeRegions(context: &context, rect: plot)
+                    drawCharging(context: &context, rect: plot)
                     // Fill each measured run independently, below all strokes.
                     // Quiet depth for the physical signals, never across gaps.
                     for metric in paintOrder where metric == .fan || metric == .memory {
@@ -98,7 +103,7 @@ struct InstrumentHistoryView: View {
                             }
                             guard let first = points.first else { continue }
                             let path = trace(points)
-                            if metric == .cpu || metric == .gpu {
+                            if metric == .cpu || metric == .gpu || metric == .battery {
                                 var glow = context
                                 glow.addFilter(.blur(radius: 1.1))
                                 glow.stroke(path, with: .color(metric.tint.opacity(colorScheme == .dark ? 0.22 : 0.12)),
@@ -162,7 +167,7 @@ struct InstrumentHistoryView: View {
             .background(InstrumentGlassSurface(radius: 19))
 
         }
-        .help("Click cards to choose signals. Calm shortens long sleep and unrecorded gaps, marked // with their actual duration. Precise keeps full elapsed-time spacing. Blank sections are never interpolated. The bottom rail marks recorded awake time and recent physical input, not focus.")
+        .help("Click cards to choose signals. Green fill below Battery means charging was recorded there. Calm shortens long sleep and unrecorded gaps, marked // with their actual duration. Precise keeps full elapsed-time spacing. Blank sections are never interpolated. The bottom rail marks recorded awake time and recent physical input, not focus.")
         .onChange(of: content.snapshot.interval) { _, _ in inspectionX = nil }
         .onChange(of: selected) { _, _ in inspectionX = nil }
         .task(id: "\(solarLocation)|\(interval.start.timeIntervalSince1970)|\(interval.end.timeIntervalSince1970)") {
@@ -174,6 +179,29 @@ struct InstrumentHistoryView: View {
             }.value
             guard !Task.isCancelled else { return }
             solarBands = bands
+        }
+    }
+
+    private func drawCharging(context: inout GraphicsContext, rect: CGRect) {
+        guard selected.contains(.battery), !chargingIntervals.isEmpty else { return }
+        for run in Dictionary(grouping: series[.battery] ?? [], by: \.run).values {
+            let points = run.map { CGPoint(x: x($0.date, rect), y: rect.maxY - $0.value / 100 * rect.height) }
+            guard points.count > 1, let first = points.first, let last = points.last else { continue }
+            var area = trace(points)
+            area.addLine(to: CGPoint(x: last.x, y: rect.maxY))
+            area.addLine(to: CGPoint(x: first.x, y: rect.maxY))
+            area.closeSubpath()
+            for charging in chargingIntervals {
+                let left = max(first.x, x(charging.start, rect))
+                let right = min(last.x, x(charging.end, rect))
+                guard right > left else { continue }
+                var layer = context
+                layer.clip(to: Path(CGRect(x: left, y: rect.minY, width: right - left, height: rect.height)))
+                layer.fill(area, with: .linearGradient(
+                    Gradient(colors: [MachinePalette.battery.opacity(colorScheme == .dark ? 0.20 : 0.14),
+                                      MachinePalette.battery.opacity(0.015)]),
+                    startPoint: CGPoint(x: rect.midX, y: rect.minY), endPoint: CGPoint(x: rect.midX, y: rect.maxY)))
+            }
         }
     }
 
@@ -228,6 +256,10 @@ struct InstrumentHistoryView: View {
                 let nearest = containing?.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
                 Text("\(metric.title) \(nearest.map { "\(Int($0.value.rounded()))%" } ?? "—")")
                     .foregroundStyle(metric.tint)
+            }
+            if selected.contains(.battery), chargingIntervals.contains(where: { date >= $0.start && date < $0.end }) {
+                Image(systemName: "bolt.fill").foregroundStyle(MachinePalette.battery)
+                    .accessibilityLabel("Charging")
             }
             Spacer(minLength: 0)
         }
