@@ -40,6 +40,7 @@ struct DailyMacValidation {
         let harness = ValidationHarness()
         await SolarContextValidation.run(harness: harness)
         await BatteryNavigationValidation.run(harness: harness)
+        await InstrumentViewportValidation.run(harness: harness)
 
         await harness.run("physical fan speed is bounded and never inferred from CPU load") {
             let stopped = try require(FanReading(index: 0, rpm: 0, maximumRPM: 5_000), "zero-RPM reading missing")
