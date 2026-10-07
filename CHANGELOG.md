@@ -4,6 +4,12 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+### Build 32
+
+- Drag the history graph horizontally to browse earlier or later readings without a scrollbar. Nearby history is buffered for direct manipulation; Now returns to live.
+- Both Calm and Precise now keep elapsed time evenly spaced. Removed automatic gap compression, break marks and repeated sleep annotations; missing readings stay blank and gap details remain available on hover. Dates appear at midnight boundaries, not below every clock label.
+- Graph lines reveal smoothly on opening with subtly staggered timing. Charging fill follows its battery line. The entrance respects Reduce Motion and does not replay during live refreshes or dragging.
+
 ### Build 31
 
 - Battery replaces Memory in the four instrument cards, with a green history trace. A subtle green area appears only beneath intervals explicitly recorded as charging; merely being plugged in does not imply charging, and missing readings stay missing. Memory pressure still contributes to machine health.

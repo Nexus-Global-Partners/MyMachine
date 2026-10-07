@@ -7,6 +7,9 @@ struct InstrumentTimeControl: View {
     @EnvironmentObject private var model: AppModel
 
     private var title: String {
+        if let window = model.menuBarPannedInterval, model.menuBarMonitoringRangePreference.isSmart {
+            return window.start.formatted(.dateTime.month(.abbreviated).day())
+        }
         if let day = model.menuBarSelectedDayStart {
             return Calendar.autoupdatingCurrent.isDateInYesterday(day)
                 ? "Yesterday" : day.formatted(.dateTime.month(.abbreviated).day())

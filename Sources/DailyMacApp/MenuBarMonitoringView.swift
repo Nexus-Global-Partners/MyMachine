@@ -21,10 +21,11 @@ struct MenuBarMonitoringView: View {
                 Group {
                 if let content = model.menuBarMonitoringContent {
                     VStack(spacing: 0) {
-                        if content.snapshot.sampleCount > 0
-                            || (model.menuBarIsHistorical && !content.events.isEmpty) {
+                        if content.snapshot.sampleCount > 0 || model.menuBarIsHistorical {
                             InstrumentHistoryView(content: content, selected: selectedInstruments,
-                                                  mode: selectedTimelineDisplayMode)
+                                                  mode: selectedTimelineDisplayMode,
+                                                  onPan: model.panMenuBar,
+                                                  onPanStateChange: model.setMenuBarPanning)
                         } else if model.menuBarIsHistorical {
                             historicalEmptyState
                         } else {

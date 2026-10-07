@@ -101,6 +101,9 @@ struct MonitoringDisplayState: Equatable, Sendable {
     let refreshedAt: Date
     var dailySummaries: [MonitoringDaySummary] = []
     var appResourceSamples: [AppResourceSample] = []
+    var graphBuffer: DateInterval? = nil
+    var graphSamples: [SystemSample]? = nil
+    var graphEvents: [ActivityEvent]? = nil
 }
 
 @MainActor
@@ -124,7 +127,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var menuBarMonitoringRange: MonitoringRange = .oneHour
     @Published private(set) var menuBarSelectedDayStart: Date?
     @Published private(set) var menuBarHistoryEnd: Date?
-    var menuBarIsHistorical: Bool { menuBarSelectedDayStart != nil || menuBarHistoryEnd != nil }
+    @Published private(set) var menuBarPannedInterval: DateInterval?
+    private var menuBarIsPanning = false
+    var menuBarIsHistorical: Bool { menuBarSelectedDayStart != nil || menuBarHistoryEnd != nil || menuBarPannedInterval != nil }
     @Published private(set) var menuBarMonitoringContent: MonitoringDisplayState?
     @Published private(set) var menuBarIsRefreshing = false
     @Published private(set) var menuBarRefreshMessage: String?
@@ -512,6 +517,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectSmartMenuBarMonitoringRange() {
+        menuBarPannedInterval = nil
         menuBarSelectedDayStart = nil
         menuBarHistoryEnd = nil
         menuBarMonitoringRangePreference = .smart
@@ -522,6 +528,7 @@ final class AppModel: ObservableObject {
     func selectMenuBarMonitoringRange(_ range: MonitoringRange) {
         let wasFixedToRange = menuBarMonitoringRangePreference == .fixed(range)
         guard !wasFixedToRange || menuBarIsHistorical else { return }
+        menuBarPannedInterval = nil
         menuBarSelectedDayStart = nil
         menuBarHistoryEnd = nil
         menuBarMonitoringRangePreference = .fixed(range)
@@ -532,6 +539,10 @@ final class AppModel: ObservableObject {
 
     private func shiftedMenuBarInterval(_ direction: Int) -> DateInterval? {
         guard let window = menuBarMonitoringContent?.snapshot.interval else { return nil }
+        if menuBarPannedInterval != nil {
+            let end = window.end.addingTimeInterval(Double(direction) * window.duration)
+            return end >= Date() ? nil : DateInterval(start: end.addingTimeInterval(-window.duration), end: end)
+        }
         let range: MonitoringRange? = if case .fixed(let range) = menuBarMonitoringRangePreference { range } else { nil }
         return HistoryNavigation.shifted(window, by: direction, range: range, now: Date())
     }
@@ -550,7 +561,9 @@ final class AppModel: ObservableObject {
             if direction == 1 { returnToLiveMenuBarDay() }
             return
         }
-        if menuBarMonitoringRangePreference.isSmart || menuBarMonitoringRangePreference == .fixed(.today) {
+        if menuBarPannedInterval != nil {
+            menuBarPannedInterval = interval
+        } else if menuBarMonitoringRangePreference.isSmart || menuBarMonitoringRangePreference == .fixed(.today) {
             menuBarSelectedDayStart = interval.start
             menuBarHistoryEnd = nil
         } else {
@@ -574,6 +587,7 @@ final class AppModel: ObservableObject {
 
     func browsePreviousMenuBarDay() {
         guard canBrowsePreviousMenuBarDay else { return }
+        menuBarPannedInterval = nil
         let calendar = Calendar.autoupdatingCurrent
         let current = menuBarSelectedDayStart ?? calendar.startOfDay(for: Date())
         guard let previous = calendar.date(byAdding: .day, value: -1, to: current) else { return }
@@ -595,9 +609,30 @@ final class AppModel: ObservableObject {
 
     func returnToLiveMenuBarDay() {
         guard menuBarIsHistorical else { return }
+        menuBarPannedInterval = nil
         menuBarSelectedDayStart = nil
         menuBarHistoryEnd = nil
         menuBarMonitoringContent = nil
+        restartMenuBarRefresh(endingAt: Date())
+    }
+
+    func setMenuBarPanning(_ active: Bool) {
+        menuBarIsPanning = active
+        if active {
+            menuBarRefreshGeneration &+= 1
+            menuBarRefreshTask?.cancel()
+            menuBarRefreshTask = nil
+            menuBarIsRefreshing = false
+        }
+    }
+
+    func panMenuBar(to interval: DateInterval) {
+        menuBarIsPanning = false
+        guard interval != menuBarMonitoringContent?.snapshot.interval else { return }
+        menuBarSelectedDayStart = nil
+        menuBarHistoryEnd = nil
+        menuBarPannedInterval = interval
+        // Keep the moving plot visible while period cards and the next buffer load.
         restartMenuBarRefresh(endingAt: Date())
     }
 
@@ -893,15 +928,27 @@ final class AppModel: ObservableObject {
         endingAt now: Date,
         limit: Int,
         intervalOverride: DateInterval? = nil,
-        preloadedSamples: [SystemSample]? = nil
+        preloadedSamples: [SystemSample]? = nil,
+        bufferGraph: Bool = false
     ) async throws -> MonitoringDisplayState {
         guard let store else { throw StoreError.cannotOpen("local history is unavailable") }
         let overviewInterval = MonitoringHistory.overviewInterval(for: range, endingAt: now)
         let interval = intervalOverride ?? overviewInterval ?? range.interval(endingAt: now)
+        let retentionStart = Calendar.autoupdatingCurrent.date(byAdding: .day, value: -max(1, settings.rawRetentionDays),
+            to: Calendar.autoupdatingCurrent.startOfDay(for: Date())) ?? interval.start
+        let bufferStart = min(interval.start, max(retentionStart, interval.start.addingTimeInterval(-interval.duration)))
+        let bufferEnd = max(interval.end, min(Date(), interval.end.addingTimeInterval(interval.duration)))
+        let graphBuffer = bufferGraph ? DateInterval(start: bufferStart, end: bufferEnd) : nil
+        let graphSamples: [SystemSample]?
+        let graphEvents: [ActivityEvent]?
+        if let graphBuffer {
+            graphSamples = try await store.samples(in: graphBuffer)
+            graphEvents = try await store.sleepWakeEvents(in: graphBuffer, includingPrevious: true)
+        } else { graphSamples = nil; graphEvents = nil }
         // Auto has already read a containing window to discover the day's
         // boundary. Reuse those rows instead of decoding the same history twice.
         let samples: [SystemSample]
-        if let preloadedSamples {
+        if let preloadedSamples = graphSamples ?? preloadedSamples {
             samples = preloadedSamples.filter {
                 $0.timestamp > interval.start && $0.timestamp <= interval.end
             }
@@ -958,7 +1005,8 @@ final class AppModel: ObservableObject {
                         events: sleepWakeEvents
                     )
                 } ?? [],
-                appResourceSamples: appResources
+                appResourceSamples: appResources,
+                graphBuffer: graphBuffer, graphSamples: graphSamples, graphEvents: graphEvents
             )
         }
         return await withTaskCancellationHandler {
@@ -970,6 +1018,7 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     private func beginMenuBarRefreshIfNeeded(endingAt now: Date, showProgress: Bool = true) -> Task<Void, Never>? {
+        guard !menuBarIsPanning else { return nil }
         if let menuBarRefreshTask { return menuBarRefreshTask }
         guard let store, !dataEraseInProgress else { return nil }
 
@@ -979,6 +1028,8 @@ final class AppModel: ObservableObject {
         let requestedPreference = menuBarMonitoringRangePreference
         let requestedDayStart = menuBarSelectedDayStart
         let requestedHistoryEnd = menuBarHistoryEnd
+        let requestedPannedInterval = menuBarPannedInterval
+        let requestedRange = menuBarMonitoringRange
         let end = requestedHistoryEnd ?? now
         menuBarIsRefreshing = showProgress
         menuBarRefreshMessage = nil
@@ -991,16 +1042,17 @@ final class AppModel: ObservableObject {
                 let autoSearch = DateInterval(
                     start: now.addingTimeInterval(-36 * 60 * 60), end: now
                 )
-                let recentSamples = requestedDayStart == nil && requestedPreference.isSmart ? try await store.samples(
+                let followsToday = requestedDayStart == nil && requestedPannedInterval == nil && requestedPreference.isSmart
+                let recentSamples = followsToday ? try await store.samples(
                     in: autoSearch
                 ) : []
-                let autoEvents = requestedDayStart == nil && requestedPreference.isSmart
+                let autoEvents = followsToday
                     ? try await store.sleepWakeEvents(in: autoSearch, includingPrevious: true)
                     : []
-                let range: MonitoringRange = requestedDayStart == nil
+                let range: MonitoringRange = requestedPannedInterval != nil ? requestedRange : (requestedDayStart == nil
                     ? TimelineSemantics.monitoringRange(for: requestedPreference, at: now, recentSamples: recentSamples)
-                    : .today
-                let autoInterval = requestedDayStart == nil && requestedPreference.isSmart
+                    : .today)
+                let autoInterval = followsToday
                     ? TimelineSemantics.automaticDayWindow(
                         at: now, recentSamples: recentSamples, sleepWakeEvents: autoEvents
                     )
@@ -1013,10 +1065,11 @@ final class AppModel: ObservableObject {
                     range: range,
                     endingAt: end,
                     limit: 720,
-                    intervalOverride: historicalInterval ?? autoInterval,
-                    preloadedSamples: autoInterval == nil ? nil : recentSamples
+                    intervalOverride: requestedPannedInterval ?? historicalInterval ?? autoInterval,
+                    preloadedSamples: autoInterval == nil ? nil : recentSamples,
+                    bufferGraph: true
                 )
-                let currentSession = requestedDayStart == nil && requestedPreference.isSmart
+                let currentSession = followsToday
                     ? TimelineSemantics.currentActivitySession(from: recentSamples, endingAt: now)
                     : nil
                 guard !Task.isCancelled,
@@ -1025,10 +1078,11 @@ final class AppModel: ObservableObject {
                       !self.dataEraseInProgress,
                       requestedPreference == self.menuBarMonitoringRangePreference,
                       requestedHistoryEnd == self.menuBarHistoryEnd,
+                      requestedPannedInterval == self.menuBarPannedInterval,
                       requestedDayStart == self.menuBarSelectedDayStart else { return }
                 self.menuBarMonitoringRange = range
                 self.menuBarMonitoringContent = content
-                if requestedDayStart == nil && requestedPreference.isSmart {
+                if followsToday {
                     self.currentActivitySession = currentSession
                 }
             } catch {
@@ -1314,6 +1368,7 @@ final class AppModel: ObservableObject {
         menuBarMonitoringContent = nil
         menuBarSelectedDayStart = nil
         menuBarHistoryEnd = nil
+        menuBarPannedInterval = nil
         menuBarIsRefreshing = false
         menuBarRefreshMessage = nil
         reports = []
