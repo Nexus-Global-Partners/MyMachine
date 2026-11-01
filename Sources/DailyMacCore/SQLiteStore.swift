@@ -447,6 +447,23 @@ public actor SQLiteStore {
         return result
     }
 
+    /// A bounded, index-backed search used only for an explicit activity jump.
+    /// Counter baselines have no measured interval and cannot be destinations.
+    public func recordedSampleTimestamps(in interval: DateInterval, direction: Int, limit: Int = 64) throws -> [Date] {
+        guard direction == -1 || direction == 1, interval.duration >= 0 else { return [] }
+        let order = direction == -1 ? "DESC" : "ASC"
+        let statement = try prepare("SELECT timestamp FROM system_samples WHERE timestamp >= ? AND timestamp <= ? AND duration > 0 AND sampling_interval > 0 ORDER BY timestamp \(order) LIMIT ?;")
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, interval.start.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 2, interval.end.timeIntervalSince1970)
+        sqlite3_bind_int(statement, 3, Int32(max(1, min(256, limit))))
+        var result: [Date] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            result.append(Date(timeIntervalSince1970: sqlite3_column_double(statement, 0)))
+        }
+        return result
+    }
+
     public func sampleTimestamps(before end: Date) throws -> [Date] {
         let statement = try prepare("SELECT timestamp FROM system_samples WHERE timestamp < ? ORDER BY timestamp;")
         defer { sqlite3_finalize(statement) }

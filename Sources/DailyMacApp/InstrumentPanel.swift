@@ -38,6 +38,7 @@ struct InstrumentPanel: View {
     @Binding var selected: Set<MachineInstrument>
     let followsRange: Bool
     @State private var hoveredApp: String?
+    @State private var lastAverageMode: MachineReadingMode = .average5Minutes
     @State private var periodSignal: MachineStatusSignal?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -55,19 +56,11 @@ struct InstrumentPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 4) {
                 Text("My Mac").font(.system(size: 15, weight: .semibold))
                 Spacer(minLength: 4)
-                HStack(spacing: 5) {
-                    Circle().fill(followsRange || liveSample == nil ? Color.secondary : MachinePalette.normal)
-                        .frame(width: 5, height: 5)
-                    Text(followsRange ? "Earlier" : liveSample == nil ? "Waiting" : "Live")
-                        .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                }
-                .frame(height: 29)
-                .help(followsRange ? "Readings for the displayed period. Battery shows its last recorded level." : "Latest readings. Use the time arrows to explore earlier readings.")
-                .accessibilityLabel("Instrument readings: \(followsRange ? "selected period" : "live")")
+                readingModeControl
             }
             machineOverview
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 10) {
@@ -75,9 +68,11 @@ struct InstrumentPanel: View {
             }
             thermalIndicator
             appList
+            FanControlStrip()
             Spacer(minLength: 0)
         }
         .frame(width: 214)
+        .onAppear { if model.readingMode != .live { lastAverageMode = model.readingMode } }
         .task(id: followsRange ? content?.snapshot.interval : nil) {
             periodSignal = nil
             guard followsRange, let content else { return }
@@ -91,9 +86,71 @@ struct InstrumentPanel: View {
         }
     }
 
+    private var readingModeControl: some View {
+        let averaging = !followsRange && model.readingMode != .live
+        return HStack(spacing: 2) {
+            readingModeButton(symbol: "waveform", label: "Live readings",
+                              active: !followsRange && model.readingMode == .live) {
+                chooseReadingMode(.live)
+            }
+            readingModeButton(symbol: "chart.xyaxis.line", label: "Average readings",
+                              active: averaging) {
+                chooseReadingMode(averaging ? model.readingMode : lastAverageMode)
+            }
+            if averaging {
+                HStack(spacing: 1) {
+                    ForEach(MachineReadingMode.allCases.filter { $0 != .live }) { mode in
+                        Button { chooseReadingMode(mode) } label: {
+                            Text(mode.shortLabel)
+                                .font(.system(size: 9, weight: .medium))
+                                .frame(width: 23, height: 23)
+                                .background {
+                                    if model.readingMode == mode {
+                                        Capsule().fill(MachinePalette.processor.opacity(0.16))
+                                    }
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(model.readingMode == mode ? Color.primary : .secondary)
+                        .accessibilityLabel("Average over \(mode.shortLabel)")
+                        .accessibilityAddTraits(model.readingMode == mode ? .isSelected : [])
+                    }
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .padding(2)
+        .background(InstrumentGlassSurface(radius: 10, quiet: true))
+        .fixedSize()
+        .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: averaging)
+        .help("Live or averaged readings for the cards and menu-bar icon. Battery and safety status stay current. The graph keeps its own time scale.")
+    }
+
+    private func readingModeButton(symbol: String, label: String, active: Bool,
+                                   action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 20, height: 23)
+                .foregroundStyle(active ? MachinePalette.processor : Color.secondary)
+                .background {
+                    if active { RoundedRectangle(cornerRadius: 7).fill(MachinePalette.processor.opacity(0.12)) }
+                }
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(active ? .isSelected : [])
+    }
+
+    private func chooseReadingMode(_ mode: MachineReadingMode) {
+        if mode != .live { lastAverageMode = mode }
+        model.selectReadingMode(mode)
+        if followsRange { model.returnToLiveMenuBarDay() }
+    }
+
     private var machineOverview: some View {
-        let signal = followsRange ? periodSignal : MachineStatusSignal.current(
-            sample: liveSample, recentSamples: model.recentSystemSamples)
+        let signal = followsRange ? periodSignal : model.readingModeSignal
         let healthTint: Color = switch signal?.health {
         case .comfortable: MachinePalette.human.opacity(0.38)
         case .watch: MachinePalette.memory.opacity(0.65)
@@ -115,10 +172,10 @@ struct InstrumentPanel: View {
                         value: signal?.health.label ?? "Unavailable",
                         fraction: healthStage, tint: healthTint, segments: 4)
                 .help("\(followsRange ? "Peak status" : "Status"): \(signal?.health.label ?? "Unavailable"). Same pressure assessment as the menu-bar icon, shown quietly here: blue-gray is comfortable, yellow is watch, orange is memory pressure, and red needs attention. High CPU/GPU demand alone is not an alert.\(followsRange ? " Highest observed status during the selected period." : " Latest measured status.")")
-            overviewBar(title: followsRange ? "Average effort" : "Effort",
+            overviewBar(title: followsRange || model.readingMode != .live ? "Average effort" : "Effort",
                         value: signal.map { "\($0.effortScore) / 100" } ?? "Unavailable",
                         fraction: signal.map { Double($0.effortScore) / 100 }, tint: effortTint, segments: 10)
-                .help("\(followsRange ? "Average effort" : "Effort"): \(signal.map { "\($0.effortScore) / 100" } ?? "Unavailable"). Demand index: the higher of CPU and available GPU usage, not an average of all components, energy use, or a measure of your focus.\(followsRange ? " Uses duration-weighted averages over recorded coverage only." : " Matches the latest reading used by the right-hand menu-bar effort signal; the CPU/GPU cards use quieter two-minute averages.")\(signal?.gpuPercent == nil ? " GPU unavailable: CPU only." : "")")
+                .help("Demand index: the higher of CPU and available GPU usage, not energy use or a measure of focus. \(followsRange ? "Duration-weighted averages over this graph period." : "Matches the menu-bar icon in \(model.readingModeLabel.lowercased()) mode. Averages use recorded coverage only.")\(signal?.gpuPercent == nil ? " GPU unavailable: CPU only." : "")")
         }
         .accessibilityElement(children: .contain)
     }
@@ -160,22 +217,14 @@ struct InstrumentPanel: View {
             }
             return InstrumentHistory.average(metric, samples: content.samples, in: content.snapshot.interval)
         }
-        guard let liveSample else { return nil }
-        if metric == .cpu || metric == .gpu {
-            let reading = MachineDemandAverage.current(sample: liveSample, recentSamples: model.recentSystemSamples)
-            return metric == .cpu ? reading.map { Double($0.cpuPercent) } : reading?.gpuPercent.map(Double.init)
-        }
-        if metric == .fan, let date = model.fanReadingsAt, Date().timeIntervalSince(date) < 45 {
-            return model.fanReadings?.map(\.percentOfMaximum).max()
-        }
-        return metric.value(in: liveSample)
+        return model.instrumentReadingValue(metric)
     }
 
     private func detail(_ metric: MachineInstrument) -> String {
         guard value(metric) != nil else { return followsRange ? "Not recorded" : "Unavailable" }
         switch metric {
-        case .cpu: return followsRange ? "Average demand" : "Processing · 2m"
-        case .gpu: return followsRange ? "Average demand" : "Graphics · 2m"
+        case .cpu: return followsRange ? "Average demand" : "Processing · \(model.readingModeLabel)"
+        case .gpu: return followsRange ? "Average demand" : "Graphics · \(model.readingModeLabel)"
         case .battery:
             if followsRange { return "Last recorded level in this period" }
             if liveSample?.isCharging == true { return "Charging" }
@@ -189,7 +238,7 @@ struct InstrumentPanel: View {
             case nil: return "Memory in use"
             }
         case .fan:
-            if followsRange { return "Average speed" }
+            if followsRange || model.readingMode != .live { return "Average measured speed" }
             if let fans = model.fanReadings, let fan = fans.max(by: { $0.percentOfMaximum < $1.percentOfMaximum }) {
                 return "\(Int(fan.rpm.rounded())) RPM"
             }
@@ -242,7 +291,7 @@ struct InstrumentPanel: View {
             .contentShape(RoundedRectangle(cornerRadius: 17))
         }
         .buttonStyle(.plain)
-        .help("\(detail(metric)). \(metric.explanation)\n\(followsRange ? (metric == .battery ? "Last recorded battery level in the selected period." : "Average over recorded coverage in the selected period.") : "Live sensor readings; CPU/GPU are two-minute averages.")\nClick to \(isSelected ? "hide" : "show") on the graph. At least one signal stays visible.")
+        .help("\(detail(metric)). \(metric.explanation)\n\(followsRange ? (metric == .battery ? "Last recorded battery level in the selected period." : "Average over recorded coverage in the selected period.") : "\(model.readingModeLabel) readings, matching the menu-bar icon. Battery always shows current charge.")\nClick to \(isSelected ? "hide" : "show") on the graph. At least one signal stays visible.")
         .accessibilityLabel("\(metric.title), \(reading.map { "\(Int($0)) percent" } ?? "not available"), \(detail(metric))")
         .accessibilityValue(isSelected ? "Shown in graph" : "Hidden in graph")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -280,19 +329,13 @@ struct InstrumentPanel: View {
 
     private var apps: [AppRow] {
         if followsRange {
-            return content?.appContributors.prefix(3).map {
+            return content?.appContributors.prefix(2).map {
                 AppRow(id: $0.id, name: $0.ownerName, bundle: $0.ownerBundleID, percent: $0.observedCPUSharePercent)
             } ?? []
         }
         guard liveSample != nil else { return [] }
-        let fresh = model.liveAppResources.filter {
-            $0.cpuMeasurementVersion == 1 && $0.cpuPercent.isFinite && $0.cpuPercent > 0
-                && Date().timeIntervalSince($0.timestamp) < 90
-        }
-        let total = fresh.reduce(0) { $0 + $1.cpuPercent }
-        guard total > 0 else { return [] }
-        return fresh.sorted { $0.cpuPercent > $1.cpuPercent }.prefix(3).map {
-            AppRow(id: $0.ownerBundleID ?? $0.ownerName, name: $0.ownerName, bundle: $0.ownerBundleID, percent: $0.cpuPercent / total * 100)
+        return model.readingModeAppContributors.prefix(2).map {
+            AppRow(id: $0.id, name: $0.ownerName, bundle: $0.ownerBundleID, percent: $0.observedCPUSharePercent)
         }
     }
 
@@ -331,14 +374,31 @@ struct InstrumentPanel: View {
                     }
                     .padding(.horizontal, 8)
                     .frame(height: 27)
-                    .background(InstrumentGlassSurface(radius: 9, lifted: hoveredApp == app.id, quiet: true))
+                    .background {
+                        InstrumentGlassSurface(radius: 9, lifted: hoveredApp == app.id, quiet: true)
+                            .overlay(alignment: .leading) {
+                                GeometryReader { geometry in
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(LinearGradient(colors: [
+                                            MachinePalette.processor.opacity(colorScheme == .dark ? 0.22 : 0.14),
+                                            MachinePalette.graphics.opacity(colorScheme == .dark ? 0.12 : 0.07)
+                                        ], startPoint: .leading, endPoint: .trailing))
+                                        .frame(width: geometry.size.width * min(1, max(0, app.percent / 100)))
+                                        .overlay(alignment: .top) {
+                                            Color.white.opacity(0.2).frame(height: 0.5)
+                                        }
+                                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.65), value: app.percent)
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
                     .contentShape(RoundedRectangle(cornerRadius: 9))
                     .onHover { inside in
                         if inside { hoveredApp = app.id }
                         else if hoveredApp == app.id { hoveredApp = nil }
                     }
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hoveredApp == app.id)
-                    .help("\(app.name)\n\(Int(app.percent.rounded()))% of observed app CPU \(followsRange ? "over this period" : "in the latest reading").")
+                    .help("\(app.name)\n\(Int(app.percent.rounded()))% of all observed app CPU \(followsRange ? "over this graph period" : model.readingMode == .live ? "in the latest reading" : "over the last \(model.readingMode.shortLabel)"). The fill shows this share, not total machine capacity.")
                 }
             }
         }

@@ -12,6 +12,27 @@ public enum InstrumentViewport {
         return DateInterval(start: start, duration: window.duration)
     }
 
+    /// Center real recorded coverage while keeping elapsed time and scale intact.
+    public static func focused(_ window: DateInterval, on date: Date,
+                               earliest: Date, latest: Date) -> DateInterval {
+        guard window.duration > 0, latest.timeIntervalSince(earliest) >= window.duration else { return window }
+        let start = min(latest.addingTimeInterval(-window.duration),
+                        max(earliest, date.addingTimeInterval(-window.duration / 2)))
+        return DateInterval(start: start, duration: window.duration)
+    }
+
+    /// Only recorded awake coverage qualifies; a gap never creates activity.
+    public static func activityNeighbor(to gap: DateInterval, direction: Int,
+                                        recorded: [DateInterval]) -> Date? {
+        if direction == -1 {
+            return recorded.filter { $0.duration > 0 && $0.end <= gap.start }.map(\.end).max()
+        }
+        if direction == 1 {
+            return recorded.filter { $0.duration > 0 && $0.start >= gap.end }.map(\.start).min()
+        }
+        return nil
+    }
+
     public static func ticks(in window: DateInterval, width: Double, calendar: Calendar = .autoupdatingCurrent) -> [Date] {
         let base = InstrumentTimeContext.ticks(in: window, width: width, calendar: calendar)
         guard window.duration > 0 else { return base }

@@ -5,6 +5,148 @@ enum InstrumentHistoryValidation {
     static func run(harness: ValidationHarness) async {
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         let window = DateInterval(start: start, duration: 3_600)
+        await harness.run("historical activity summary excludes today and clips the selected period") {
+            let today = sample(start.addingTimeInterval(60), duration: 60)
+            let yesterday = start.addingTimeInterval(-86400)
+            let history = [sample(yesterday.addingTimeInterval(600), duration: 600),
+                           sample(yesterday.addingTimeInterval(900), duration: 300, idle: true), today]
+            let historical = RecordedActivityTotals.measure(history, in: DateInterval(start: yesterday, duration: 86400))
+            let live = RecordedActivityTotals.measure(history, in: window)
+            try harness.check(historical.you == 600 && historical.machine == 900, "history used today's totals or counted idle as human use")
+            try harness.check(live.you == 60 && live.machine == 60, "today includes the prior day")
+            let partial = RecordedActivityTotals.measure(history, in: DateInterval(start: yesterday.addingTimeInterval(500), duration: 400))
+            try harness.check(partial.you == 100 && partial.machine == 400, "selected range duration leaked outside bounds")
+            let missing = RecordedActivityTotals.measure(history, in: DateInterval(start: yesterday.addingTimeInterval(-86400), duration: 86400))
+            try harness.check(missing.lastReading == nil, "missing history appears as a measured zero")
+        }
+        await harness.run("battery gaps connect only bounded readings without changing measured coverage") {
+            let a = sample(start.addingTimeInterval(60), duration: 60, battery: 80)
+            let b = sample(start.addingTimeInterval(1860), duration: 60, battery: 70)
+            let points = InstrumentHistory.points(.battery, samples: [a, b], in: window, range: .oneHour, mode: .calm)
+            let joins = InstrumentHistory.gapJoins(.battery, points: points, sleeps: [])
+            try harness.check(joins.count == 1, "battery still cuts between bounded readings")
+            try harness.check(joins.first?.before.value == 80 && joins.first?.after.value == 70, "join changed battery endpoints")
+            try harness.check(Set(points.map(\.run)).count == 2, "estimated join became measured data")
+            try harness.check(InstrumentHistory.chargingIntervals(samples: [a, b], in: window).isEmpty, "bridge invented charging")
+            try harness.check(InstrumentHistory.gapJoins(.battery, points: [], sleeps: []).isEmpty, "empty battery extrapolated")
+        }
+        await harness.run("processor sleep joins never turn unknown gaps into zero readings") {
+            let points = InstrumentHistory.points(.cpu, samples: [sample(start.addingTimeInterval(60), duration: 60),
+                sample(start.addingTimeInterval(1860), duration: 60)], in: window, range: .oneHour, mode: .calm)
+            let sleep = DateInterval(start: start.addingTimeInterval(70), end: start.addingTimeInterval(1790))
+            let joins = InstrumentHistory.gapJoins(.cpu, points: points, sleeps: [sleep])
+            try harness.check(joins.count == 1 && joins.first?.sleep == sleep, "confirmed sleep still ends in an abrupt cut")
+            try harness.check(InstrumentHistory.gapJoins(.cpu, points: points, sleeps: []).isEmpty, "missing telemetry treated as sleep")
+            let brief = DateInterval(start: start.addingTimeInterval(800), duration: 60)
+            try harness.check(InstrumentHistory.gapJoins(.gpu, points: points, sleeps: [brief]).isEmpty, "brief sleep covered unrelated missing time")
+            try harness.check(InstrumentHistory.gapJoins(.fan, points: points, sleeps: [sleep]).isEmpty, "fan forced to zero without a measurement")
+            try harness.check(points.allSatisfy { $0.value == 20 }, "rendering ramp overwrote processor measurements")
+        }
+        await harness.run("brief missing links remain distinct and cannot cross any sleep") {
+            let values = [sample(start.addingTimeInterval(60), duration: 60, cpu: 80),
+                          sample(start.addingTimeInterval(150), duration: 30, cpu: 40)]
+            let points = InstrumentHistory.points(.cpu, samples: values, in: window, range: .oneHour, mode: .calm)
+            let link = InstrumentHistory.gapJoins(.cpu, points: points, sleeps: [])
+            try harness.check(link.count == 1 && link[0].isBriefMissing && link[0].sleep == nil, "brief missing sample has no distinct presentation link")
+            let sleep = DateInterval(start: start.addingTimeInterval(80), duration: 10)
+            try harness.check(InstrumentHistory.gapJoins(.cpu, points: points, sleeps: [sleep]).isEmpty, "unknown link carried high demand through recorded sleep")
+            try harness.check(InstrumentHistory.measuredValue(.cpu, at: start.addingTimeInterval(90), samples: values, in: window) == nil, "bridge became a measured hover value")
+            try harness.check(Set(points.map(\.run)).count == 2, "brief bridge merged measured coverage")
+            let long = [values[0], sample(start.addingTimeInterval(600), duration: 30, cpu: 40)]
+            let longPoints = InstrumentHistory.points(.cpu, samples: long, in: window, range: .oneHour, mode: .calm)
+            try harness.check(InstrumentHistory.gapJoins(.cpu, points: longPoints, sleeps: []).isEmpty, "long outage acquired invented continuity")
+        }
+        await harness.run("sleep shoulder geometry avoids zero needles at every chart scale") {
+            for hours in [1.0, 6, 8, 24, 48] {
+                let visibleDuration = hours * 3600
+                let span = DateInterval(start: start, duration: visibleDuration)
+                for width in [350.0, 620, 1000] {
+                    let tinyGap = visibleDuration * 4 / width
+                    let tiny = [sample(start.addingTimeInterval(60), duration: 60),
+                                sample(start.addingTimeInterval(60 + tinyGap + 30), duration: 30)]
+                    let points = InstrumentHistory.points(.cpu, samples: tiny, in: span, range: .oneHour, mode: .calm)
+                    let sleep = DateInterval(start: start.addingTimeInterval(60), duration: tinyGap)
+                    let joins = InstrumentHistory.gapJoins(.cpu, points: points, sleeps: [sleep])
+                    try harness.check(joins.count == 1, "confirmed tiny sleep lost evidence")
+                    try harness.check(InstrumentHistory.sleepShoulders(joins[0], visibleDuration: visibleDuration, plotWidth: width) == nil, "four-pixel sleep became a zero needle")
+                    let gapDuration = visibleDuration * 0.3
+                    let long = [tiny[0], sample(start.addingTimeInterval(60 + gapDuration + 30), duration: 30)]
+                    let longPoints = InstrumentHistory.points(.cpu, samples: long, in: span, range: .oneHour, mode: .calm)
+                    let longSleep = DateInterval(start: start.addingTimeInterval(60), duration: gapDuration)
+                    guard let longJoin = InstrumentHistory.gapJoins(.cpu, points: longPoints, sleeps: [longSleep]).first else {
+                        throw ValidationFailure.failed("readable sleep lost its recorded boundaries")
+                    }
+                    guard let shoulders = InstrumentHistory.sleepShoulders(longJoin, visibleDuration: visibleDuration, plotWidth: width) else {
+                        throw ValidationFailure.failed("readable sleep lost its resting transition")
+                    }
+                    let downWidth = shoulders.down.timeIntervalSince(longJoin.before.date) / visibleDuration * width
+                    let upWidth = longJoin.after.date.timeIntervalSince(shoulders.up) / visibleDuration * width
+                    try harness.check(downWidth >= 18 - 0.001 && upWidth >= 18 - 0.001, "sleep shoulder became a narrow spike")
+                    try harness.check(shoulders.down >= longSleep.start && shoulders.up <= longSleep.end && shoulders.down < shoulders.up, "sleep geometry escaped confirmed interval")
+                }
+            }
+        }
+        await harness.run("tiny run suppression is scale dependent and preserves raw hover values") {
+            let samples = [sample(start.addingTimeInterval(30), duration: 30, cpu: 73)]
+            let day = DateInterval(start: start, duration: 86400)
+            let points = InstrumentHistory.points(.cpu, samples: samples, in: day, range: .today, mode: .calm)
+            try harness.check(!InstrumentHistory.shouldDrawRun(points, in: day, plotWidth: 620), "subpixel live fragment still draws a dot")
+            try harness.check(InstrumentHistory.shouldDrawRun(points, in: window, plotWidth: 620), "zoomed measurable run stayed hidden")
+            try harness.check(InstrumentHistory.measuredValue(.cpu, at: start.addingTimeInterval(15), samples: samples, in: day) == 73, "suppressed run lost its exact reading")
+            try harness.check(InstrumentHistory.measuredValue(.cpu, at: start.addingTimeInterval(35), samples: samples, in: day) == nil, "hover extends recording into a gap")
+            let unobserved = [sample(start.addingTimeInterval(60), duration: 0, cpu: 0)]
+            try harness.check(InstrumentHistory.measuredValue(.cpu, at: start.addingTimeInterval(60), samples: unobserved, in: day) == nil, "restart baseline presented as measured zero")
+        }
+        await harness.run("processor curves preserve measured peaks without repeated easing or overshoot") {
+            let points = [CGPoint(x: 0, y: 70), CGPoint(x: 7, y: 30), CGPoint(x: 19, y: 10),
+                          CGPoint(x: 29, y: 45), CGPoint(x: 44, y: 80)]
+            let controls = InstrumentHistory.boundedCurveControls(points)
+            try harness.check(controls.count == points.count - 1, "lost processor curve segments")
+            try harness.check(controls[0].1.y != points[1].y && controls[1].0.y != points[1].y, "processor curve still stops flat at every bucket")
+            try harness.check(controls[1].1.y == points[2].y && controls[2].0.y == points[2].y, "measured turning point moved")
+            for (index, pair) in controls.enumerated() {
+                let a = points[index], b = points[index + 1]
+                let low = min(a.y, b.y), high = max(a.y, b.y)
+                for step in 0...100 {
+                    let t = Double(step) / 100, u = 1 - t
+                    let y = u*u*u*a.y + 3*u*u*t*pair.0.y + 3*u*t*t*pair.1.y + t*t*t*b.y
+                    try harness.check(y >= low - 0.0001 && y <= high + 0.0001, "processor spline invented an out-of-bounds peak")
+                }
+            }
+        }
+        await harness.run("battery curve keeps a steady slope instead of flattening at every reading") {
+            let points = [CGPoint(x: 0, y: 20), CGPoint(x: 10, y: 30), CGPoint(x: 30, y: 50), CGPoint(x: 60, y: 80)]
+            let controls = InstrumentHistory.batteryCurveControls(points)
+            try harness.check(controls.count == points.count - 1, "lost battery segments")
+            for (index, pair) in controls.enumerated() {
+                try harness.check(abs(pair.0.y - pair.0.x - 20) < 0.0001, "battery flattens at each reading instead of following steady charge")
+                try harness.check(abs(pair.1.y - pair.1.x - 20) < 0.0001, "battery introduces repeated easing steps")
+                try harness.check(pair.0.x > points[index].x && pair.1.x < points[index + 1].x, "controls escaped the measured time segment")
+            }
+        }
+        await harness.run("battery curve preserves plateaus peaks bounds and continuous slopes") {
+            let points = [CGPoint(x: 0, y: 0), CGPoint(x: 2, y: 50), CGPoint(x: 11, y: 100),
+                          CGPoint(x: 20, y: 100), CGPoint(x: 30, y: 60), CGPoint(x: 31, y: 59), CGPoint(x: 50, y: 0)]
+            let controls = InstrumentHistory.batteryCurveControls(points)
+            for (index, pair) in controls.enumerated() {
+                let a = points[index], b = points[index + 1]
+                let bounds = min(a.y, b.y)...max(a.y, b.y)
+                for step in 0...100 {
+                    let t = Double(step) / 100, u = 1 - t
+                    let y = u*u*u*a.y + 3*u*u*t*pair.0.y + 3*u*t*t*pair.1.y + t*t*t*b.y
+                    try harness.check(y >= bounds.lowerBound - 0.0001 && y <= bounds.upperBound + 0.0001, "battery overshot measured limits")
+                }
+                if index > 0 {
+                    let prior = controls[index - 1].1
+                    let incoming = (a.y - prior.y) / (a.x - prior.x)
+                    let outgoing = (pair.0.y - a.y) / (pair.0.x - a.x)
+                    try harness.check(abs(incoming - outgoing) < 0.0001, "battery has a corner between segments")
+                }
+            }
+            try harness.check(controls[2].0.y == 100 && controls[2].1.y == 100, "full-charge plateau changed")
+            try harness.check(InstrumentHistory.batteryCurveControls([]).isEmpty, "empty battery gained data")
+            try harness.check(InstrumentHistory.batteryCurveControls([CGPoint(x: 0, y: 50)]).isEmpty, "single reading gained a curve")
+        }
         await harness.run("activity totals advance per reading without double counting report refreshes") {
             let first = sample(start.addingTimeInterval(30), duration: 30)
             let next = sample(start.addingTimeInterval(60), duration: 30)
@@ -172,11 +314,11 @@ enum InstrumentHistoryValidation {
         }
     }
 
-    private static func sample(_ date: Date, duration: Double, cpu: Double = 20, rpm: Double? = nil, idle: Bool = false, gpu: Double? = nil) -> SystemSample {
+    private static func sample(_ date: Date, duration: Double, cpu: Double = 20, rpm: Double? = nil, idle: Bool = false, gpu: Double? = nil, battery: Double? = nil) -> SystemSample {
         SystemSample(timestamp: date, duration: duration, foregroundApp: "Test", foregroundBundleID: nil,
                      category: idle ? .idle : .other, isIdle: idle, cpuPercent: cpu, gpuPercent: gpu, loadAverage1m: 1, loadAverage5m: 1,
                      memoryUsedBytes: 4_000, memoryTotalBytes: 8_000, memoryPressure: .low,
-                     swapUsedBytes: 0, thermalLevel: .nominal, batteryPercent: nil,
+                     swapUsedBytes: 0, thermalLevel: .nominal, batteryPercent: battery,
                      powerSource: .unknown, isCharging: nil, diskReadBytes: 0, diskWriteBytes: 0,
                      networkReceivedBytes: 0, networkSentBytes: 0, monitorCPUPercent: 0,
                      monitorMemoryBytes: 0, monitorDiskWriteBytes: 0, samplingInterval: duration,

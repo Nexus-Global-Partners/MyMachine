@@ -32,7 +32,7 @@ public struct FanReading: Equatable, Sendable {
 /// zero RPM; zero is shown only when the physical actual-speed key returns zero.
 public enum FanTelemetry {
     private static let cacheLock = NSLock()
-    private static var cachedAt: TimeInterval = -.infinity
+    private static var cachedAt: ContinuousClock.Instant?
     private static var cachedReadings: [FanReading]?
 
     /// The icon and recorder share a short-lived hardware read. Monotonic time
@@ -40,11 +40,20 @@ public enum FanTelemetry {
     public static func sharedRead() -> [FanReading]? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        let now = ProcessInfo.processInfo.systemUptime
-        if now - cachedAt < 10 { return cachedReadings }
+        // ContinuousClock advances through sleep; awake-only uptime can reuse a
+        // pre-sleep fan reading immediately after waking.
+        let now = ContinuousClock.now
+        if let cachedAt, cachedAt.duration(to: now) < .seconds(10) { return cachedReadings }
         cachedReadings = read()
         cachedAt = now
         return cachedReadings
+    }
+
+    public static func invalidateCache() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        cachedAt = nil
+        cachedReadings = nil
     }
 
     public static func read() -> [FanReading]? {
@@ -58,7 +67,7 @@ public enum FanTelemetry {
 
         guard let countValue = readKey("FNum", connection: connection),
               let count = decodeNumber(countValue),
-              count >= 0, count <= 8 else { return nil }
+              count >= 0, count <= 8, count.rounded(.towardZero) == count else { return nil }
 
         var readings: [FanReading] = []
         for index in 0..<Int(count) {

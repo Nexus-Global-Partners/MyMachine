@@ -20,7 +20,7 @@ public enum MetricCatalog {
         MetricDisclosure(
             metric: "CPU", origin: .measured,
             plainLanguage: "How much of the Mac's total processing capacity was busy.",
-            technicalDetail: "Calculated from deltas in Mach host CPU tick counters and normalized to the whole machine."
+            technicalDetail: "Calculated from deltas in Mach host CPU tick counters and normalized to the whole machine. Missing, reset, or unchanged counters cannot establish a measured interval. Recovery first establishes a new baseline."
         ),
         MetricDisclosure(
             metric: "CPU core distribution", origin: .derived,
@@ -35,7 +35,7 @@ public enum MetricCatalog {
         MetricDisclosure(
             metric: "Memory pressure", origin: .derived,
             plainLanguage: "Whether memory demand was comfortable or likely to affect responsiveness.",
-            technicalDetail: "Conservatively derived from free/speculative memory, compression, and swap growth. It is not Activity Monitor's private pressure score."
+            technicalDetail: "An app-defined heuristic using free, inactive and purgeable memory, compression, swap use, and swap growth. It is not a measured macOS memory-pressure level or Activity Monitor's pressure score."
         ),
         MetricDisclosure(
             metric: "Swap", origin: .measured,
@@ -45,7 +45,7 @@ public enum MetricCatalog {
         MetricDisclosure(
             metric: "Battery and charging", origin: .measured,
             plainLanguage: "Battery level, power source, and charging state.",
-            technicalDetail: "Read directly from IOKit power-source APIs. No electrical power or per-app battery use is claimed."
+            technicalDetail: "Read from one present internal battery through IOKit; external UPS batteries and invalid capacity readings are excluded. Connected power and active charging are independent states, including when macOS holds charging. No electrical power or per-app battery use is claimed."
         ),
         MetricDisclosure(
             metric: "Battery change", origin: .derived,
@@ -80,12 +80,12 @@ public enum MetricCatalog {
         MetricDisclosure(
             metric: "GPU activity estimate", origin: .estimated,
             plainLanguage: "When this Mac’s graphics driver makes it available, an estimate shows how busy the graphics engine was.",
-            technicalDetail: "Read without extra permissions from an optional aggregate utilization value exposed by the installed graphics driver. Availability can differ between Macs, so the line is hidden when the value is absent. It is hardware activity only: no screen content, app content, private frameworks, or privileged tracing is used."
+            technicalDetail: "Read without extra permissions from an optional Device Utilization % value exposed by a single graphics accelerator. Missing, malformed, or multiple-accelerator readings are withheld because device percentages cannot be combined without capacity weights. The driver provides no measurement timestamp, so its update cadence cannot be independently verified. It is hardware activity only: no screen content, app content, private frameworks, or privileged tracing is used."
         ),
         MetricDisclosure(
             metric: "Fan speed", origin: .measured,
             plainLanguage: "Measured rotation speed relative to the fan's reported maximum, when this Mac exposes it.",
-            technicalDetail: "Best-effort read-only AppleSMC actual and maximum RPM keys. Availability is hardware dependent. The graph records the fan with the highest relative speed; older or unavailable readings remain blank. No fan controls, electrical power, noise, or temperature estimates are used."
+            technicalDetail: "Best-effort read-only AppleSMC actual and maximum RPM keys. Availability is hardware dependent. The graph records the fan with the highest relative speed; older or unavailable readings remain blank. Optional manual control is separate, requires an administrator-approved helper, and never substitutes a requested target for measured speed. This metric does not estimate electrical power, noise, or temperature."
         ),
         MetricDisclosure(
             metric: "Sensor temperatures", origin: .unavailable,

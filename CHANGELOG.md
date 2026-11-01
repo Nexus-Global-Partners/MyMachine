@@ -4,6 +4,36 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+### Build 38
+
+- Replaced the Live/Average dropdown with two compact icons. Average periods expand inline with a short motion; Live collapses them. The selected period still drives both cards and the menu-bar icon.
+
+- Cleaned up narrow sleep spikes and isolated glowing fragments at wider graph scales. Brief missing-data connections are faint and dashed, never drawn through sleep; exact recorded values remain available on hover and when zoomed in.
+- Added a compact optional all-fan target slider and Auto action beneath the app rows. Manual control requires a separate administrator-approved helper setup, stays inside reported per-fan limits, and keeps requested targets separate from measured speed. It never forces a fan off or unlocks protected system thermal control.
+
+### Build 37
+
+- A quiet green-dot clock estimate sits at the graph's 10% level on the right axis, predicting when the battery may reach 10% at its recent discharge rate. It appears only in current history with Battery selected and sufficient consistent recorded discharge; charging, stale, sparse, or unstable readings withhold the estimate. Hover explains its basis and limits.
+
+### Build 36
+
+- Shared Live / Average (5m, 30m, 1h, 4h) readings for the left panel and menu-bar icon. Averages use recorded coverage; battery charge and safety states stay current. Historical cards remain explicitly labeled History.
+- Native calendar and day arrows, three direct graph scales, horizontal trackpad browsing, retention-wide dragging, and activity jumps across sleep or missing readings. Existing graph content stays visible during refresh; no scrollbar or compressed time axis.
+- App rows show restrained animated glass fills proportional to their share of all observed application CPU. Refresh is a direct button; overflow contains only Settings, Diagnose and Quit. Graph appearance/detail controls live in Settings.
+- Corrected CPU counter failure/reset recovery, process census baselines and timing, internal-battery selection, fan cache expiry across sleep, and speculative-memory double counting. Ambiguous GPU measurements are withheld instead of combined into an unsupported whole-machine percentage. Measurement limits are documented in the accuracy audit.
+
+### Build 35
+
+- The activity summary uses quiet person and Mac icons instead of repeated text labels. Browsing history shows the displayed period's recorded activity and date, not today's totals. Midnight endings are attributed to the preceding day; missing history shows dashes. The live view continues updating today's totals with saved readings.
+
+### Build 34
+
+- Battery now connects recorded runs with a quiet dotted curve across unmeasured gaps, without inventing charging fill or hover values. In Calm, CPU/GPU ease down to zero and rise again around confirmed sleep; unknown outages and Precise readings are not zero-filled. Stored readings, summaries, and time positions are unchanged.
+
+### Build 33
+
+- Battery in Calm now flows through readings with continuous, bounded slopes rather than flattening at every plotted point. Real plateaus and turning points remain, charging fill follows the same curve, and gaps and measured percentages are unchanged. CPU/GPU and Precise rendering are unchanged.
+
 ### Build 32
 
 - Drag the history graph horizontally to browse earlier or later readings without a scrollbar. Nearby history is buffered for direct manipulation; Now returns to live.

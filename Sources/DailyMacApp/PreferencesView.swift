@@ -4,6 +4,7 @@ import SwiftUI
 struct PreferencesView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(TimelineDisplayMode.storageKey) private var graphDetail = TimelineDisplayMode.precise.rawValue
     @State private var confirmErase = false
 
     var body: some View {
@@ -17,12 +18,21 @@ struct PreferencesView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    Picker("Graph detail", selection: $graphDetail) {
+                        Text("Calm").tag(TimelineDisplayMode.calm.rawValue)
+                        Text("Precise").tag(TimelineDisplayMode.precise.rawValue)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Calm smooths the presentation. Precise keeps more measured detail. Neither changes recorded data.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text("System follows your Mac. Light and Dark apply consistently to the monitoring panel and settings.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 MenuBarIconSettingsView()
+
+                FanControlSettingsSection()
 
                 SolarSettingsView()
 
@@ -158,7 +168,7 @@ struct PreferencesView: View {
                 }
 
                 Section("Completely remove MY MACHINE") {
-                    Text("First turn off Launch at Login above, then quit the app and move MY MACHINE.app to the Trash. To remove its history and preferences too, delete the data folder shown above and ~/Library/Preferences/local.mymachine.app.plist. MY MACHINE installs no daemon, system extension, privileged helper, kernel component, or configuration profile.")
+                    Text("If you enabled fan control, first use Disable fan control and remove helper above. Then turn off Launch at Login, quit the app and move MY MACHINE.app to the Trash. To remove its history and preferences too, delete the data folder shown above and ~/Library/Preferences/local.mymachine.app.plist. Core monitoring installs no privileged helper; the optional fan-control helper is installed only after your approval. No system extension, kernel component or configuration profile is installed.")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }

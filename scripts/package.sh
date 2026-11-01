@@ -23,6 +23,10 @@ swift build -c release --product DailyMac
 # app bundles and old release archives from quietly consuming disk space.
 /bin/rm -rf "$OUTPUT_DIR"
 /bin/mkdir -p "$CONTENTS_DIR/MacOS" "$CONTENTS_DIR/Resources"
+/bin/cp "Resources/local.mymachine.fancontrol.plist" "$CONTENTS_DIR/Resources/local.mymachine.fancontrol.plist"
+/bin/cp "scripts/install-fan-helper.command" "$CONTENTS_DIR/Resources/Install Fan Control.command"
+/bin/cp "scripts/remove-fan-helper.command" "$CONTENTS_DIR/Resources/Remove Fan Control.command"
+/bin/chmod 755 "$CONTENTS_DIR/Resources/Install Fan Control.command" "$CONTENTS_DIR/Resources/Remove Fan Control.command"
 /bin/cp ".build/release/DailyMac" "$CONTENTS_DIR/MacOS/DailyMac"
 /bin/cp "Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 /bin/cp "Resources/MyMachine.icns" "$CONTENTS_DIR/Resources/MyMachine.icns"

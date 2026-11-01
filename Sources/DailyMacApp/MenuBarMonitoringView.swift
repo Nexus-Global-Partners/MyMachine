@@ -18,14 +18,21 @@ struct MenuBarMonitoringView: View {
                 .fill(Color.primary.opacity(0.065)).frame(width: 1)
             VStack(spacing: 13) {
                 header
+                if let message = model.menuBarRefreshMessage, model.menuBarMonitoringContent != nil {
+                    Text(message).font(.system(size: 10)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 Group {
                 if let content = model.menuBarMonitoringContent {
                     VStack(spacing: 0) {
                         if content.snapshot.sampleCount > 0 || model.menuBarIsHistorical {
                             InstrumentHistoryView(content: content, selected: selectedInstruments,
                                                   mode: selectedTimelineDisplayMode,
+                                                  navigationBounds: model.menuBarNavigationBounds,
+                                                  batteryEstimate: model.menuBarIsHistorical ? nil : model.currentBatteryDischargeEstimate,
                                                   onPan: model.panMenuBar,
-                                                  onPanStateChange: model.setMenuBarPanning)
+                                                  onPanStateChange: model.setMenuBarPanning,
+                                                  onJumpToActivity: model.jumpMenuBarToRecordedActivity)
                         } else if model.menuBarIsHistorical {
                             historicalEmptyState
                         } else {
@@ -67,31 +74,77 @@ struct MenuBarMonitoringView: View {
 
                 HStack(alignment: .center, spacing: 9) {
                     InstrumentTimeControl()
-
+                    Button(action: model.refreshMenuBarNow) {
+                        Group {
+                            if model.menuBarIsRefreshing { ProgressView().controlSize(.mini) }
+                            else { Image(systemName: "arrow.clockwise") }
+                        }.frame(width: 14, height: 14)
+                    }
+                    .buttonStyle(GlassyIconButtonStyle())
+                    .disabled(model.menuBarIsRefreshing)
+                    .help("Refresh readings")
+                    .accessibilityLabel("Refresh readings")
                     moreOptionsMenu
                 }
             }
     }
 
     private var dayActivitySummary: some View {
-        let active = model.todayActivityTotals?.you
-        let observed = model.todayActivityTotals?.machine
-        return HStack(spacing: 4) {
-            Text("Today · You")
+        let historical = model.menuBarIsHistorical
+        let content = model.menuBarMonitoringContent
+        let totals = historical ? content.map {
+            RecordedActivityTotals.measure($0.samples, in: $0.snapshot.interval)
+        } : model.todayActivityTotals
+        let period = activityPeriodTitle
+        let you = totals.flatMap { $0.lastReading == nil ? nil : compactDuration($0.you) } ?? "—"
+        let mac = totals.flatMap { $0.lastReading == nil ? nil : compactDuration($0.machine) } ?? "—"
+        return HStack(spacing: 12) {
+            Text(period)
                 .foregroundStyle(.secondary)
-            Text(active.map(compactDuration) ?? "—")
-                .foregroundStyle(.primary)
-            Text("·")
-                .foregroundStyle(.tertiary)
-            Text("Mac")
-                .foregroundStyle(.secondary)
-            Text(observed.map(compactDuration) ?? "—")
-                .foregroundStyle(.primary)
+            Label(you, systemImage: "person.fill")
+                .help("You: recorded non-idle time. Not attention or productivity.")
+                .accessibilityLabel("You, \(you)")
+            Label(mac, systemImage: "laptopcomputer")
+                .help("Mac: recorded awake time, including background work. Sleep and missing readings are excluded.")
+                .accessibilityLabel("Mac awake, \(mac)")
         }
         .font(.system(size: 10, weight: .medium))
+        .labelStyle(ActivityDurationLabelStyle())
         .monospacedDigit()
         .lineLimit(1)
-        .help("Recorded today, refreshed with every saved reading. You is observed non-idle use, not attention or productivity. Mac is recorded awake time, including idle and background activity; sleep and missing readings are excluded.\nLast reading: \(model.todayActivityTotals?.lastReading?.formatted(date: .omitted, time: .standard) ?? "waiting").")
+        .accessibilityElement(children: .combine)
+        .help(historical
+            ? "Recorded activity in the displayed graph period. Sleep and missing readings are excluded."
+            : "Recorded today, refreshed with every saved reading. Sleep and missing readings are excluded.")
+    }
+
+    private var activityPeriodTitle: String {
+        guard model.menuBarIsHistorical else { return "Today" }
+        guard let interval = model.menuBarMonitoringContent?.snapshot.interval else {
+            return model.menuBarSelectedDayStart.map(activityDayTitle) ?? "History"
+        }
+        // An exact midnight end belongs to the preceding displayed day.
+        let lastDay = interval.end.addingTimeInterval(-0.001)
+        if Calendar.autoupdatingCurrent.isDate(interval.start, inSameDayAs: lastDay) {
+            return activityDayTitle(interval.start)
+        }
+        return "\(interval.start.formatted(.dateTime.day().month(.abbreviated)))–\(lastDay.formatted(.dateTime.day().month(.abbreviated)))"
+    }
+
+    private func activityDayTitle(_ date: Date) -> String {
+        let calendar = Calendar.autoupdatingCurrent
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(.dateTime.day().month(.abbreviated))
+    }
+
+    private struct ActivityDurationLabelStyle: LabelStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            HStack(spacing: 5) {
+                configuration.icon.foregroundStyle(.secondary)
+                configuration.title.foregroundStyle(.primary)
+            }
+        }
     }
 
     @ViewBuilder
@@ -270,45 +323,13 @@ struct MenuBarMonitoringView: View {
 
     private var moreOptionsMenu: some View {
         Menu {
-            Picker("Graph detail", selection: $timelineDisplayMode) {
-                Text("Calm · smooth & simple").tag(TimelineDisplayMode.calm.rawValue)
-                Text("Precise · detailed readings").tag(TimelineDisplayMode.precise.rawValue)
-            }
-            Divider()
-            Button {
-                model.refreshMenuBarNow()
-            } label: {
-                Label("Refresh now", systemImage: "arrow.clockwise")
-            }
-            .disabled(model.menuBarIsRefreshing)
+            SettingsLink { Label("Settings…", systemImage: "gearshape") }
             Button {
                 model.diagnoseMachine()
             } label: {
                 Label("Diagnose My Machine", systemImage: "stethoscope")
             }
             .disabled(model.diagnosisState.isPreparing)
-            Divider()
-            if model.collectionState == .paused {
-                Button("Resume Monitoring") { model.startMonitoring() }
-            } else {
-                Button("Pause for One Hour") { model.pauseForOneHour() }
-                Button("Pause Until Tomorrow") { model.pauseUntilTomorrow() }
-                Button("Pause Until I Resume") { model.pauseIndefinitely() }
-            }
-            Divider()
-            Menu("Appearance") {
-                ForEach(AppAppearance.allCases) { option in
-                    Button {
-                        appearance = option.rawValue
-                    } label: {
-                        Label(option.label, systemImage: appearance == option.rawValue ? "checkmark" : option.symbol)
-                    }
-                }
-            }
-            Divider()
-            SettingsLink {
-                Text("Settings & Privacy…")
-            }
             Divider()
             Button("Quit MY MACHINE") { NSApp.terminate(nil) }
         } label: {

@@ -4,6 +4,20 @@ import DailyMacCore
 import SwiftUI
 
 @main
+enum DailyMacEntryPoint {
+    @MainActor static func main() {
+        if CommandLine.arguments.contains(FanControlServiceIdentity.restoreArgument) {
+            guard CommandLine.arguments.count == 2 else { exit(64) }
+            FanControlHelper.restoreAndExit()
+        }
+        if CommandLine.arguments.contains(FanControlServiceIdentity.argument) {
+            guard CommandLine.arguments.count == 2 else { exit(64) }
+            FanControlHelper.run()
+        }
+        DailyMacApp.main()
+    }
+}
+
 struct DailyMacApp: App {
     @NSApplicationDelegateAdaptor(MenuBarApplicationDelegate.self) private var appDelegate
     var body: some Scene {
@@ -35,6 +49,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
     private var stateSubscription: AnyCancellable?
     private var sampleSubscription: AnyCancellable?
     private var recentSamplesSubscription: AnyCancellable?
+    private var readingModeSubscription: AnyCancellable?
     private var statusIconTimer: AnyCancellable?
     private var fanIconTimer: AnyCancellable?
     private var fanReadInFlight = false
@@ -94,10 +109,13 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
         recentSamplesSubscription = model.$recentSystemSamples
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.refreshStatusIcon() }
+        readingModeSubscription = model.$readingModeSnapshot
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshStatusIcon() }
         // A stopped or delayed sampler must not leave a colored "live" icon.
         statusIconTimer = Timer.publish(every: 30, on: .main, in: .common)
             .autoconnect()
-            .sink { [weak self] _ in self?.refreshStatusIcon() }
+            .sink { [weak self] _ in self?.model.refreshReadingModeSnapshot(); self?.refreshStatusIcon() }
         fanIconTimer = Timer.publish(every: 15, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in self?.refreshFanReadings() }
@@ -114,6 +132,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        FanControlClient.shared.shutdown()
         model.menuBarDidClose()
         popover.close()
     }
@@ -181,10 +200,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
         let state: MachineStatusIcon.State
         switch model.collectionState {
         case .monitoring:
-            if let signal = MachineStatusSignal.current(
-                sample: model.latestSystem,
-                recentSamples: model.recentSystemSamples
-            ) {
+            if let signal = model.readingModeSignal {
                 state = .live(signal)
             } else {
                 state = .waiting
@@ -194,18 +210,13 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
         case .sleeping: state = .asleep
         case .failed: state = .failed
         }
-        let average = model.collectionState == .monitoring
-            ? MachineDemandAverage.current(
-                sample: model.latestSystem,
-                recentSamples: model.recentSystemSamples
-            )
-            : nil
+        let average = model.readingModeDemand
         let isLive: Bool
         if case .live = state { isLive = true } else { isLive = false }
         let fanVisible = model.collectionState == .monitoring
         let freshFans = fanVisible && model.fanReadingsAt.map { Date().timeIntervalSince($0) < 45 } == true
             ? model.fanReadings : nil
-        let fanPercent = freshFans?.map(\.percentOfMaximum).max()
+        let fanPercent = model.instrumentReadingValue(.fan)
         let thermalLevel = isLive ? model.latestSystem?.thermalLevel : nil
         let configuration = MenuBarIconConfiguration.load()
         let icon = MachineStatusIcon.image(
@@ -218,27 +229,29 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
         statusItem?.length = icon.size.width + 4
         button.image = icon
         let averageDescription = average.map { reading in
-            "Two-minute average: CPU \(reading.cpuPercent)%, "
+            "\(model.readingModeLabel): CPU \(reading.cpuPercent)%, "
                 + (reading.gpuPercent.map { "GPU \($0)%" } ?? "GPU unavailable") + ". "
         } ?? ""
         let fanDescription: String
-        if let fans = freshFans, !fans.isEmpty {
+        if model.readingMode != .live, let fanPercent {
+            fanDescription = "\(model.readingModeLabel) fan: \(Int(fanPercent.rounded()))% of reported maximum. "
+        } else if model.readingMode == .live, let fans = freshFans, !fans.isEmpty {
             fanDescription = fans.map { fan in
                 "Fan \(fan.index + 1): \(Int(fan.rpm.rounded())) RPM, \(Int(fan.percentOfMaximum.rounded()))% of reported maximum, \(fan.speedDescription.lowercased())."
             }.joined(separator: " ") + " "
         } else {
             fanDescription = "Fan speed unavailable. "
         }
-        let thermalDescription = thermalLevel.map { "macOS thermal pressure: \($0.rawValue). " } ?? "Thermal pressure unavailable. "
+        let thermalDescription = thermalLevel.map { "Current macOS thermal pressure: \($0.rawValue). " } ?? "Thermal pressure unavailable. "
         button.setAccessibilityValue(fanDescription + thermalDescription + averageDescription + state.accessibilityValue)
         let instrumentHelp = configuration.displayedInstruments.map { instrument in
             switch instrument {
             case .physical: "Fan speed relative to reported maximum; categorical thermal pressure."
-            case .compute: "Two-minute CPU and GPU averages."
-            case .state: "Machine health above, four-step effort below."
+            case .compute: "CPU and GPU follow \(model.readingModeLabel)."
+            case .state: "Current machine health above, \(model.readingModeLabel) effort below."
             }
         }.joined(separator: " ")
-        button.toolTip = "MY MACHINE — \(fanDescription)\(thermalDescription)\(averageDescription)\(state.accessibilityValue) Icon order: \(instrumentHelp)"
+        button.toolTip = "MY MACHINE — \(model.readingModeLabel). \(fanDescription)\(thermalDescription)\(averageDescription)\(state.accessibilityValue) Icon order: \(instrumentHelp)"
     }
 
     private func refreshFanReadings() {

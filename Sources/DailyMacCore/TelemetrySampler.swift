@@ -50,7 +50,29 @@ public enum TelemetrySemantics {
     }
 
     public static func isUnexpectedGap(elapsed: TimeInterval, expectedInterval: TimeInterval) -> Bool {
-        elapsed > max(2, expectedInterval * 2.2)
+        !elapsed.isFinite || elapsed <= 0 || elapsed > max(2, expectedInterval * 2.2)
+    }
+
+    /// Host CPU ticks are unsigned 32-bit counters. Only a backwards jump close
+    /// to their boundary is a plausible rollover; a reset is not CPU activity.
+    public static func hostCPUTickDelta(current: UInt64, previous: UInt64) -> UInt64? {
+        guard current <= UInt32.max, previous <= UInt32.max else { return nil }
+        return eventCounterDelta(current: UInt32(current), previous: UInt32(previous))
+    }
+
+    /// A clock correction must not turn a real elapsed interval into overlapping
+    /// history. A small tolerance allows clock slewing and timestamp jitter.
+    public static func wallClockIsContinuous(wallElapsed: TimeInterval, monotonicElapsed: TimeInterval) -> Bool {
+        wallElapsed.isFinite && monotonicElapsed.isFinite && wallElapsed > 0
+            && monotonicElapsed > 0 && abs(wallElapsed - monotonicElapsed) <= 2
+    }
+
+    /// One driver's device percentage has usable units. Multiple accelerator
+    /// percentages cannot be combined without each device's capacity/weight.
+    public static func wholeDeviceGPUPercent(_ readings: [Double]) -> Double? {
+        guard readings.count == 1, let value = readings.first,
+              value.isFinite, (0...100).contains(value) else { return nil }
+        return value
     }
 
     /// Quartz event counters are unsigned 32-bit totals since WindowServer started.
@@ -315,14 +337,40 @@ public enum AgentWorkerClassifier {
     }
 }
 
-private struct CPUCounter {
-    let user: UInt64
-    let system: UInt64
-    let nice: UInt64
-    let idle: UInt64
+public struct HostCPUCounters: Equatable, Sendable {
+    public let user: UInt64
+    public let system: UInt64
+    public let nice: UInt64
+    public let idle: UInt64
 
-    var total: UInt64 { user &+ system &+ nice &+ idle }
-    var busy: UInt64 { user &+ system &+ nice }
+    public init(user: UInt64, system: UInt64, nice: UInt64, idle: UInt64) {
+        self.user = user
+        self.system = system
+        self.nice = nice
+        self.idle = idle
+    }
+
+    public func delta(since previous: HostCPUCounters) -> (busy: UInt64, total: UInt64)? {
+        guard let user = TelemetrySemantics.hostCPUTickDelta(current: user, previous: previous.user),
+              let system = TelemetrySemantics.hostCPUTickDelta(current: system, previous: previous.system),
+              let nice = TelemetrySemantics.hostCPUTickDelta(current: nice, previous: previous.nice),
+              let idle = TelemetrySemantics.hostCPUTickDelta(current: idle, previous: previous.idle) else { return nil }
+        return (user + system + nice, user + system + nice + idle)
+    }
+}
+
+/// A failed read clears the baseline. Recovery therefore needs two successful
+/// snapshots; absent or unchanged ticks never establish measured zero CPU.
+public struct HostCPUTracker: Sendable {
+    private var previous: HostCPUCounters?
+
+    public init() {}
+
+    public mutating func observe(_ current: HostCPUCounters?) -> Double? {
+        defer { previous = current }
+        guard let current, let previous, let delta = current.delta(since: previous), delta.total > 0 else { return nil }
+        return Double(delta.busy) / Double(delta.total) * 100
+    }
 }
 
 private enum CPUCoreKind {
@@ -437,12 +485,6 @@ private struct CPUClusterReading {
     let performanceContributionPercent: Double
 }
 
-private struct BatteryReading {
-    let percent: Double?
-    let source: PowerSource
-    let charging: Bool?
-}
-
 /// Cumulative, content-free counters exposed by Quartz. Only deltas are retained.
 private struct ManualActivityCounterSnapshot {
     let keyDown: UInt32
@@ -468,6 +510,7 @@ private struct RawProcessCounter {
     let memory: UInt64
     let diskRead: UInt64
     let diskWrite: UInt64
+    let observedAt: ContinuousClock.Instant
 }
 
 private struct ProcessKey: Hashable {
@@ -496,15 +539,16 @@ private struct ProcessCPUTimebase {
 }
 
 public actor TelemetrySampler {
-    private var previousCPU: CPUCounter?
-    private var previousCoreCPU: [CPUCounter]?
+    private var hostCPUTracker = HostCPUTracker()
+    private var previousCoreCPU: [HostCPUCounters]?
     private var previousNetwork: [UInt16: DeviceByteCounters]?
     private var previousDisk: [UInt64: DeviceByteCounters]?
-    private var previousProcesses: [ProcessKey: RawProcessCounter] = [:]
+    private var previousProcesses = CounterObservationHistory<ProcessKey, RawProcessCounter>()
     private var previousMonitorProcess: RawProcessCounter?
     private var previousMonitorProcessInstant: ContinuousClock.Instant?
     private let monotonicClock = ContinuousClock()
     private var previousInstant: ContinuousClock.Instant?
+    private var previousWallTimestamp: Date?
     private var previousExpectedInterval: TimeInterval?
     private var previousSwap: UInt64?
     private var previousManualActivity: ManualActivityCounterSnapshot?
@@ -517,23 +561,24 @@ public actor TelemetrySampler {
     public init() {}
 
     public func resetDeltas() {
-        previousCPU = nil
+        hostCPUTracker = HostCPUTracker()
         previousCoreCPU = nil
         previousNetwork = nil
         previousDisk = nil
-        previousProcesses = [:]
+        previousProcesses.replace(with: nil)
         previousMonitorProcess = nil
         previousMonitorProcessInstant = nil
         previousInstant = nil
+        previousWallTimestamp = nil
         previousExpectedInterval = nil
         previousSwap = nil
         previousManualActivity = nil
         latestProcessCollection = nil
         lastProcessCollectionInstant = nil
+        FanTelemetry.invalidateCache()
     }
 
-    public func sample(settings: MonitoringSettings, now: Date = Date()) async -> TelemetryResult {
-        let currentInstant = monotonicClock.now
+    public func sample(settings: MonitoringSettings, now suppliedTimestamp: Date? = nil) async -> TelemetryResult {
         let context = await MainActor.run { () -> (String, String?, Int32, [RunningApplicationIdentity]) in
             let foreground = NSWorkspace.shared.frontmostApplication
             let running = NSWorkspace.shared.runningApplications
@@ -560,9 +605,18 @@ public actor TelemetrySampler {
             )
         }
 
-        let elapsed = previousInstant.map { max(0.2, seconds(from: $0, to: currentInstant)) } ?? settings.baseSamplingInterval
+        // No await occurs after these clocks are read. Actor reentrancy while
+        // fetching application context cannot reverse counter observation order.
+        let currentInstant = monotonicClock.now
+        let now = suppliedTimestamp ?? Date()
+        let elapsed = previousInstant.map { seconds(from: $0, to: currentInstant) } ?? settings.baseSamplingInterval
         let observedInterval = previousExpectedInterval ?? settings.baseSamplingInterval
-        let unexpectedGap = previousInstant != nil && TelemetrySemantics.isUnexpectedGap(elapsed: elapsed, expectedInterval: observedInterval)
+        // Explicit timestamps are a fixture seam; real collection checks both
+        // clocks so manual/NTP clock steps cannot create false interval coverage.
+        let clockJump = suppliedTimestamp == nil && previousWallTimestamp.map {
+            !TelemetrySemantics.wallClockIsContinuous(wallElapsed: now.timeIntervalSince($0), monotonicElapsed: elapsed)
+        } == true
+        let unexpectedGap = previousInstant != nil && (clockJump || TelemetrySemantics.isUnexpectedGap(elapsed: elapsed, expectedInterval: observedInterval))
         if unexpectedGap { resetDeltas() }
         let observedDuration = previousInstant == nil ? 0 : min(elapsed, max(2, observedInterval * 2.2))
         let idleSeconds = TelemetrySemantics.humanInputIdleSeconds() ?? .infinity
@@ -574,17 +628,17 @@ public actor TelemetrySampler {
         )
         previousManualActivity = currentManualActivity
         let currentCPU = readCPUCounter()
-        let cpu = cpuPercent(previous: previousCPU, current: currentCPU)
-        previousCPU = currentCPU
+        let measuredCPU = hostCPUTracker.observe(currentCPU)
+        let cpu = measuredCPU ?? 0
         let currentCoreCPU = readCoreCPUCounters()
-        let coreReading = coreTopology.flatMap { topology in
+        let coreReading = measuredCPU.flatMap { cpu in coreTopology.flatMap { topology in
             cpuClusterReading(
                 previous: previousCoreCPU,
                 current: currentCoreCPU,
                 topology: topology,
                 aggregateCPUPercent: cpu
             )
-        }
+        } }
         previousCoreCPU = currentCoreCPU
         let gpu = readGPUPercent()
         let load = readLoadAverage()
@@ -621,7 +675,7 @@ public actor TelemetrySampler {
         // expensive all-process scan. A skipped scan is not a zero-CPU or
         // zero-write observation of the monitor.
         let own = readProcess(pid: getpid(), app: (ProcessInfo.processInfo.processName, nil))
-        let ownInstant = monotonicClock.now
+        let ownInstant = own?.observedAt ?? monotonicClock.now
         let previousOwn = previousMonitorProcess
         let ownElapsed = previousMonitorProcessInstant.map { seconds(from: $0, to: ownInstant) }
         let ownCPU: Double?
@@ -654,7 +708,9 @@ public actor TelemetrySampler {
         let fan = FanTelemetry.sharedRead()?.max { $0.percentOfMaximum < $1.percentOfMaximum }
         let sample = SystemSample(
             timestamp: now,
-            duration: observedDuration,
+            // The persisted schema requires a numeric CPU. Its zero placeholder
+            // is never a measured interval when the host reading is unavailable.
+            duration: measuredCPU == nil ? 0 : observedDuration,
             foregroundApp: context.0,
             foregroundBundleID: context.1,
             category: category,
@@ -688,6 +744,7 @@ public actor TelemetrySampler {
             fanMaximumRPM: fan?.maximumRPM
         )
         previousInstant = currentInstant
+        previousWallTimestamp = now
         previousExpectedInterval = nextInterval
         return TelemetryResult(system: sample, processes: collection.retained, appResources: collection.appResources, observedProcessCount: collection.observedCount, attemptedProcessCount: collection.attemptedCount, nextInterval: nextInterval, baselineResetAfterGap: unexpectedGap)
     }
@@ -698,7 +755,10 @@ public actor TelemetrySampler {
         let count = pids.withUnsafeMutableBytes { bytes in
             proc_listallpids(bytes.baseAddress, Int32(bytes.count))
         }
-        guard count > 0 else { return ProcessCollection(retained: [], allDeltas: [], appResources: [], observedCount: 0, attemptedCount: 0) }
+        guard count > 0 else {
+            previousProcesses.replace(with: nil)
+            return ProcessCollection(retained: [], allDeltas: [], appResources: [], observedCount: 0, attemptedCount: 0)
+        }
 
         let validRunningApps = ProcessOwnershipResolver.validApplications(runningApps)
         let runningByPID = Dictionary(uniqueKeysWithValues: validRunningApps.map { ($0.processID, ($0.name, $0.bundleID)) })
@@ -729,11 +789,11 @@ public actor TelemetrySampler {
                     currentSystemTicks: raw.systemTicks,
                     previousUserTicks: previous.userTicks,
                     previousSystemTicks: previous.systemTicks,
-                    elapsed: elapsed,
+                    elapsed: seconds(from: previous.observedAt, to: raw.observedAt),
                     timebaseNumerator: timebase.numerator,
                     timebaseDenominator: timebase.denominator
                   ) else { continue }
-            let cpuPercent = min(10_000, measuredCPU)
+            let cpuPercent = measuredCPU
             let read = positiveDelta(raw.diskRead, previous.diskRead)
             let write = positiveDelta(raw.diskWrite, previous.diskWrite)
             let owner = ownership[raw.processID]
@@ -755,7 +815,7 @@ public actor TelemetrySampler {
                 ownerRelation: owner?.relation
             ))
         }
-        previousProcesses = current
+        previousProcesses.replace(with: current)
         let appResources = makeAppResourceSamples(
             from: deltas,
             now: now,
@@ -863,6 +923,8 @@ public actor TelemetrySampler {
         } else {
             return nil
         }
+        // Capture time beside the CPU counters, before name/lineage queries.
+        let observedAt = monotonicClock.now
 
         var bsd = proc_bsdinfo()
         let bsdSize = MemoryLayout<proc_bsdinfo>.stride
@@ -890,11 +952,12 @@ public actor TelemetrySampler {
             systemTicks: counters.system,
             memory: counters.memory,
             diskRead: counters.read,
-            diskWrite: counters.write
+            diskWrite: counters.write,
+            observedAt: observedAt
         )
     }
 
-    private func readCPUCounter() -> CPUCounter {
+    private func readCPUCounter() -> HostCPUCounters? {
         var info = host_cpu_load_info()
         var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info_data_t>.size / MemoryLayout<integer_t>.size)
         let result = withUnsafeMutablePointer(to: &info) { pointer in
@@ -902,8 +965,8 @@ public actor TelemetrySampler {
                 host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
             }
         }
-        guard result == KERN_SUCCESS else { return CPUCounter(user: 0, system: 0, nice: 0, idle: 0) }
-        return CPUCounter(
+        guard result == KERN_SUCCESS else { return nil }
+        return HostCPUCounters(
             user: UInt64(info.cpu_ticks.0),
             system: UInt64(info.cpu_ticks.1),
             nice: UInt64(info.cpu_ticks.3),
@@ -911,7 +974,7 @@ public actor TelemetrySampler {
         )
     }
 
-    private func readCoreCPUCounters() -> [CPUCounter]? {
+    private func readCoreCPUCounters() -> [HostCPUCounters]? {
         var processorCount: natural_t = 0
         var rawInfo: processor_info_array_t?
         var rawInfoCount: mach_msg_type_number_t = 0
@@ -936,7 +999,7 @@ public actor TelemetrySampler {
         return rawInfo.withMemoryRebound(to: processor_cpu_load_info_data_t.self, capacity: count) { info in
             (0..<count).map { index in
                 let ticks = info[index].cpu_ticks
-                return CPUCounter(
+                return HostCPUCounters(
                     user: UInt64(ticks.0),
                     system: UInt64(ticks.1),
                     nice: UInt64(ticks.3),
@@ -947,8 +1010,9 @@ public actor TelemetrySampler {
     }
 
     /// Some Apple graphics drivers expose a permission-free whole-device
-    /// utilization snapshot. It is optional by design: an absent, stale, or
-    /// malformed driver value is withheld rather than estimated.
+    /// utilization snapshot. It is optional by design: an absent or malformed
+    /// driver value is withheld. This property carries no measurement timestamp,
+    /// so a successful read alone cannot establish the driver's update cadence.
     private func readGPUPercent() -> Double? {
         guard let matching = IOServiceMatching("IOAccelerator") else { return nil }
         var iterator: io_iterator_t = 0
@@ -958,9 +1022,11 @@ public actor TelemetrySampler {
         defer { IOObjectRelease(iterator) }
 
         var readings: [Double] = []
+        var acceleratorCount = 0
         while true {
             let service = IOIteratorNext(iterator)
             guard service != 0 else { break }
+            acceleratorCount += 1
             defer { IOObjectRelease(service) }
             guard let value = IORegistryEntryCreateCFProperty(
                 service,
@@ -969,11 +1035,13 @@ public actor TelemetrySampler {
                 0
             )?.takeRetainedValue(),
             let statistics = value as? [String: Any],
-            let number = statistics["Device Utilization %"] as? NSNumber else { continue }
+            let number = statistics["Device Utilization %"] as? NSNumber,
+            CFGetTypeID(number) != CFBooleanGetTypeID() else { continue }
             let percent = number.doubleValue
             if percent.isFinite, (0...100).contains(percent) { readings.append(percent) }
         }
-        return readings.max()
+        guard acceleratorCount == 1 else { return nil }
+        return TelemetrySemantics.wholeDeviceGPUPercent(readings)
     }
 
     /// Reads only hardware-source event totals. This API neither installs an event tap
@@ -1026,18 +1094,9 @@ public actor TelemetrySampler {
         )
     }
 
-    private func cpuPercent(previous: CPUCounter?, current: CPUCounter) -> Double {
-        guard let previous else { return 0 }
-        let delta = cpuTickDelta(previous: previous, current: current)
-        let total = delta.total
-        let busy = delta.busy
-        guard total > 0 else { return 0 }
-        return min(100, max(0, Double(busy) / Double(total) * 100))
-    }
-
     private func cpuClusterReading(
-        previous: [CPUCounter]?,
-        current: [CPUCounter]?,
+        previous: [HostCPUCounters]?,
+        current: [HostCPUCounters]?,
         topology: CPUCoreTopology,
         aggregateCPUPercent: Double
     ) -> CPUClusterReading? {
@@ -1050,7 +1109,7 @@ public actor TelemetrySampler {
         var efficiencyBusy: UInt64 = 0
         var efficiencyTotal: UInt64 = 0
         for index in current.indices {
-            let delta = cpuTickDelta(previous: previous[index], current: current[index])
+            guard let delta = current[index].delta(since: previous[index]) else { return nil }
             switch topology.kindsByProcessorIndex[index] {
             case .performance:
                 performanceBusy &+= delta.busy
@@ -1070,21 +1129,6 @@ public actor TelemetrySampler {
             efficiencyPercent: min(100, Double(efficiencyBusy) / Double(efficiencyTotal) * 100),
             performanceContributionPercent: min(aggregateCPUPercent, max(0, contribution))
         )
-    }
-
-    private func cpuTickDelta(previous: CPUCounter, current: CPUCounter) -> (busy: UInt64, total: UInt64) {
-        let user = cpuTickDelta(previous.user, current.user)
-        let system = cpuTickDelta(previous.system, current.system)
-        let nice = cpuTickDelta(previous.nice, current.nice)
-        let idle = cpuTickDelta(previous.idle, current.idle)
-        return (user &+ system &+ nice, user &+ system &+ nice &+ idle)
-    }
-
-    private func cpuTickDelta(_ previous: UInt64, _ current: UInt64) -> UInt64 {
-        if current >= previous { return current - previous }
-        let modulus = UInt64(UInt32.max) + 1
-        guard previous < modulus, current < modulus else { return 0 }
-        return modulus - previous + current
     }
 
     private func readLoadAverage() -> (Double, Double) {
@@ -1109,13 +1153,14 @@ public actor TelemetrySampler {
         guard result == KERN_SUCCESS else { return (0, total, 0, 0) }
         let page = UInt64(pageSize)
         let free = UInt64(info.free_count) &* page
-        let speculative = UInt64(info.speculative_count) &* page
         let inactive = UInt64(info.inactive_count) &* page
         let purgeable = UInt64(info.purgeable_count) &* page
         let compressed = UInt64(info.compressor_page_count) &* page
         let active = UInt64(info.active_count) &* page
         let wired = UInt64(info.wire_count) &* page
-        let reclaimable = min(total, free &+ speculative &+ inactive &+ purgeable)
+        // vm_statistics64 documents speculative_count as already included in
+        // free_count. Adding it again understates this app's pressure heuristic.
+        let reclaimable = min(total, free &+ inactive &+ purgeable)
         let meaningfulUse = min(total, active &+ wired &+ compressed)
         return (meaningfulUse, total, reclaimable, compressed)
     }
@@ -1147,25 +1192,21 @@ public actor TelemetrySampler {
     }
 
     private func readBattery() -> BatteryReading {
-        let sourceType = IOPSGetProvidingPowerSourceType(nil)?.takeRetainedValue() as String?
+        let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue()
+        let sourceType = IOPSGetProvidingPowerSourceType(snapshot)?.takeRetainedValue() as String?
         let source: PowerSource
         if sourceType == kIOPSACPowerValue as String { source = .adapter }
         else if sourceType == kIOPSBatteryPowerValue as String { source = .battery }
         else { source = .unknown }
 
-        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+        guard let snapshot,
               let list = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef] else {
             return BatteryReading(percent: nil, source: source, charging: nil)
         }
-        for item in list {
-            guard let description = IOPSGetPowerSourceDescription(snapshot, item)?.takeUnretainedValue() as? [String: Any] else { continue }
-            let current = (description[kIOPSCurrentCapacityKey as String] as? NSNumber)?.doubleValue
-            let maximum = (description[kIOPSMaxCapacityKey as String] as? NSNumber)?.doubleValue
-            let percent = current.flatMap { current in maximum.flatMap { $0 > 0 ? current / $0 * 100 : nil } }
-            let charging = (description[kIOPSIsChargingKey as String] as? NSNumber)?.boolValue
-            if percent != nil { return BatteryReading(percent: percent, source: source, charging: charging) }
+        let descriptions = list.compactMap {
+            IOPSGetPowerSourceDescription(snapshot, $0)?.takeUnretainedValue() as? [String: Any]
         }
-        return BatteryReading(percent: nil, source: source, charging: nil)
+        return BatteryTelemetry.reading(descriptions: descriptions, providingSource: source)
     }
 
     private func readNetwork() -> [UInt16: DeviceByteCounters]? {

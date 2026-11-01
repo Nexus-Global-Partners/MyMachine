@@ -1,17 +1,24 @@
+import AppKit
 import DailyMacCore
 import SwiftUI
 
 /// One shared coordinate system for traces, grid, labels, and inspection.
-/// A run ends at every recording/sensor gap. The canvas never bridges it.
+/// Measured runs stay separate. Quiet presentation joins distinguish battery
+/// interpolation and confirmed sleep transitions from actual sensor readings.
 struct InstrumentHistoryView: View {
     let content: MonitoringDisplayState
     let selected: Set<MachineInstrument>
     let mode: TimelineDisplayMode
+    let navigationBounds: DateInterval?
+    let batteryEstimate: BatteryDischargeEstimate?
     let onPan: (DateInterval) -> Void
     let onPanStateChange: (Bool) -> Void
+    let onJumpToActivity: ((Date, Int) -> Void)?
     @State private var inspectionX: CGFloat?
     @State private var dragWindow: DateInterval?
     @State private var dragStart: DateInterval?
+    @State private var scrollTranslation: CGFloat = 0
+    @State private var hoveredSleep: DateInterval?
     @State private var entranceStart = Date()
     @State private var entranceFinished = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -19,22 +26,31 @@ struct InstrumentHistoryView: View {
     @State private var solarBands: [SolarBand] = []
     @Environment(\.colorScheme) private var colorScheme
 
+    private let inspectionSamples: [SystemSample]
     private let series: [MachineInstrument: [InstrumentPoint]]
     private let presence: TimelinePresenceContext
     private let timeRegions: [InstrumentTimeRegion]
     private let buffer: DateInterval
     private let chargingIntervals: [DateInterval]
+    private let gapJoins: [MachineInstrument: [InstrumentHistory.GapJoin]]
 
     init(content: MonitoringDisplayState, selected: Set<MachineInstrument>, mode: TimelineDisplayMode,
-         onPan: @escaping (DateInterval) -> Void = { _ in }, onPanStateChange: @escaping (Bool) -> Void = { _ in }) {
+         navigationBounds: DateInterval? = nil,
+         batteryEstimate: BatteryDischargeEstimate? = nil,
+         onPan: @escaping (DateInterval) -> Void = { _ in }, onPanStateChange: @escaping (Bool) -> Void = { _ in },
+         onJumpToActivity: ((Date, Int) -> Void)? = nil) {
+        self.navigationBounds = navigationBounds
+        self.batteryEstimate = batteryEstimate
         self.content = content
         self.selected = selected
         self.mode = mode
         self.onPan = onPan
         self.onPanStateChange = onPanStateChange
+        self.onJumpToActivity = onJumpToActivity
         let window = content.graphBuffer ?? content.snapshot.interval
         buffer = window
         let samples = content.graphSamples ?? content.samples
+        inspectionSamples = samples
         let events = content.graphEvents ?? content.events
         let presence = TimelineSemantics.presenceContext(from: samples, within: window)
         let regions = InstrumentTimeContext.regions(
@@ -43,13 +59,19 @@ struct InstrumentHistoryView: View {
         self.presence = presence
         timeRegions = regions
         chargingIntervals = InstrumentHistory.chargingIntervals(samples: samples, in: window)
-        series = Dictionary(uniqueKeysWithValues: MachineInstrument.allCases.filter { selected.contains($0) }.map {
+        let preparedSeries = Dictionary(uniqueKeysWithValues: MachineInstrument.allCases.filter { selected.contains($0) }.map {
             ($0, InstrumentHistory.points($0, samples: samples, in: window,
                                           range: content.snapshot.range, mode: mode,
                                           displayedDuration: content.snapshot.interval.duration))
         })
+        series = preparedSeries
+        gapJoins = Dictionary(uniqueKeysWithValues: preparedSeries.map { metric, points in
+            (metric, InstrumentHistory.gapJoins(metric, points: points,
+                sleeps: regions.filter { $0.kind == .sleep }.map(\.interval)))
+        })
     }
 
+    private var bounds: DateInterval { navigationBounds ?? buffer }
     private var interval: DateInterval { dragWindow ?? content.snapshot.interval }
     private var shown: [MachineInstrument] { MachineInstrument.allCases.filter { selected.contains($0) } }
     // Supporting signals sit behind demand, including at crossings.
@@ -85,6 +107,7 @@ struct InstrumentHistoryView: View {
                 let crossesDay = !Calendar.autoupdatingCurrent.isDate(interval.start, inSameDayAs: interval.end)
                 let axisSpace: CGFloat = crossesDay || InstrumentViewport.isDayBoundary(interval.start) ? 82 : 65
                 let plot = CGRect(x: 16, y: 23, width: max(1, geometry.size.width - 57), height: max(1, geometry.size.height - axisSpace))
+                ZStack(alignment: .topLeading) {
                 TimelineView(.animation(minimumInterval: 1.0 / 60, paused: entranceFinished || reduceMotion)) { frame in
                 Canvas { context, _ in
                     var ink = context
@@ -113,26 +136,26 @@ struct InstrumentHistoryView: View {
                     }
                     for metric in paintOrder {
                         let lineInk = revealed(ink, metric: metric, rect: plot, at: frame.date)
+                        drawGapJoins(metric, context: lineInk, rect: plot)
                         let runs = Dictionary(grouping: series[metric] ?? [], by: \.run)
                         for key in runs.keys.sorted() {
                             let run = runs[key] ?? []
+                            guard InstrumentHistory.shouldDrawRun(run, in: interval, plotWidth: plot.width) else { continue }
                             let points = run.map {
                                 CGPoint(x: x($0.date, plot), y: plot.maxY - $0.value / 100 * plot.height)
                             }
-                            guard let first = points.first else { continue }
-                            let path = trace(points)
+                            guard !points.isEmpty else { continue }
+                            let path = trace(points, metric: metric)
                             if metric == .cpu || metric == .gpu || metric == .battery {
                                 var glow = lineInk
                                 glow.addFilter(.blur(radius: 1.1))
-                                glow.stroke(path, with: .color(metric.tint.opacity(colorScheme == .dark ? 0.22 : 0.12)),
+                                glow.opacity *= colorScheme == .dark ? 0.18 : 0.09
+                                glow.stroke(path, with: traceShading(metric, points: points, run: run, rect: plot),
                                             style: StrokeStyle(lineWidth: 5.5, lineCap: .round, lineJoin: .round))
                             }
-                            lineInk.stroke(path, with: traceShading(metric, points: points, run: run),
+                            lineInk.stroke(path, with: traceShading(metric, points: points, run: run, rect: plot),
                                            style: StrokeStyle(lineWidth: strokeWidth(metric), lineCap: .round, lineJoin: .round))
-                            if points.count == 1 {
-                                lineInk.fill(Path(ellipseIn: CGRect(x: first.x - 2, y: first.y - 2, width: 4, height: 4)),
-                                             with: .color(metric.tint.opacity(strokeOpacity(metric))))
-                            }
+
                         }
                     }
                     // Quiet presence rail: observed awake time, then hands-on time.
@@ -152,15 +175,8 @@ struct InstrumentHistoryView: View {
                     }
                 }
                 }
-                .accessibilityLabel("Machine history. \(shown.map(\.title).joined(separator: ", ")). \(interval.start.formatted()) to \(interval.end.formatted()). Blank sections mean no recorded readings.")
+                .accessibilityLabel("Machine history. \(shown.map(\.title).joined(separator: ", ")). \(interval.start.formatted()) to \(interval.end.formatted()). Dotted links are unmeasured connections; brief processor links never cross sleep. Tiny measured runs remain available on hover. Quiet processor ramps mark confirmed sleep, not measured zero readings. Other gaps remain blank.")
                 .contentShape(Rectangle())
-                .onContinuousHover { phase in
-                    guard dragStart == nil else { return }
-                    switch phase {
-                    case .active(let point): inspectionX = point.x
-                    case .ended: inspectionX = nil
-                    }
-                }
                 .gesture(DragGesture(minimumDistance: 5)
                     .onChanged { value in
                         if dragStart == nil {
@@ -171,21 +187,41 @@ struct InstrumentHistoryView: View {
                         }
                         guard let start = dragStart else { return }
                         inspectionX = nil
+                        hoveredSleep = nil
                         dragWindow = InstrumentViewport.panned(start, translation: value.translation.width,
-                            width: plot.width, earliest: buffer.start, latest: min(buffer.end, Date()))
+                            width: plot.width, earliest: bounds.start, latest: min(bounds.end, Date()))
                     }
-                    .onEnded { _ in
-                        guard dragStart != nil else { return }
-                        dragStart = nil
-                        onPanStateChange(false)
-                        if let dragWindow, dragWindow != content.snapshot.interval { onPan(dragWindow) }
-                        else { dragWindow = nil }
-                    })
+                    .onEnded { _ in finishPan() })
+                .overlay {
+                    InstrumentHorizontalScrollSurface { delta, finished in
+                        if finished { finishPan(); scrollTranslation = 0; return }
+                        if dragStart == nil {
+                            dragStart = interval
+                            scrollTranslation = 0
+                            entranceFinished = true
+                            onPanStateChange(true)
+                        }
+                        guard let start = dragStart else { return }
+                        inspectionX = nil
+                        hoveredSleep = nil
+                        scrollTranslation += delta
+                        dragWindow = InstrumentViewport.panned(start, translation: scrollTranslation,
+                            width: plot.width, earliest: bounds.start, latest: min(bounds.end, Date()))
+                    }
+                }
                 .onTapGesture(count: 2) { inspectionX = nil }
                 if let inspectionX {
                     inspection(at: date(min(plot.maxX, max(plot.minX, inspectionX)), plot))
                         .padding(.horizontal, 16).padding(.top, 5)
                         .allowsHitTesting(false)
+                }
+                if let hoveredSleep {
+                    gapNavigation(hoveredSleep)
+                        .position(x: plot.midX, y: plot.minY + 34)
+                }
+                if let batteryEstimate, selected.contains(.battery), dragWindow == nil, dragStart == nil {
+                    batteryForecastMarker(batteryEstimate)
+                        .position(x: plot.maxX + 22, y: plot.maxY - plot.height * 0.1)
                 }
                 if shown.allSatisfy({ series[$0]?.isEmpty != false }) {
                     VStack(spacing: 6) {
@@ -196,16 +232,29 @@ struct InstrumentHistoryView: View {
                     .frame(width: plot.width, height: plot.height).offset(x: plot.minX, y: plot.minY)
                     .allowsHitTesting(false)
                 }
+                }
+                .onContinuousHover { phase in
+                    guard dragStart == nil else { return }
+                    switch phase {
+                    case .active(let point):
+                        inspectionX = point.x
+                        if point.y > plot.minY + 54 {
+                            let time = date(min(plot.maxX, max(plot.minX, point.x)), plot)
+                            hoveredSleep = timeRegions.first { $0.kind != .away && $0.interval.duration >= 300 && $0.interval.contains(time) }?.interval
+                        }
+                    case .ended: inspectionX = nil; hoveredSleep = nil
+                    }
+                }
             }
             .frame(maxHeight: .infinity)
             .background(InstrumentGlassSurface(radius: 19))
 
         }
-        .help("Drag horizontally to move through time. Hover to inspect readings or a gap. Time is evenly spaced; missing readings stay blank. Green fill below Battery marks recorded charging. The bottom rail shows observed awake time and physical input, not focus.")
+        .help("Drag or swipe horizontally to browse; pick a date to jump days. Hover over sleep or missing readings to jump to recorded activity. Dotted links connect unmeasured gaps; processor links are limited to brief missed readings, never sleep. Quiet CPU/GPU ramps mark confirmed sleep, not measured zeros. Green fill marks recorded charging only.")
         .onChange(of: content.snapshot.interval) { _, _ in
-            if dragStart == nil { dragWindow = nil; inspectionX = nil }
+            if dragStart == nil { dragWindow = nil; inspectionX = nil; hoveredSleep = nil; entranceFinished = true }
         }
-        .onDisappear { onPanStateChange(false) }
+        .onDisappear { dragStart = nil; scrollTranslation = 0; onPanStateChange(false) }
         .task {
             entranceStart = Date()
             guard !reduceMotion else { entranceFinished = true; return }
@@ -213,7 +262,7 @@ struct InstrumentHistoryView: View {
             guard !Task.isCancelled else { return }
             entranceFinished = true
         }
-        .onChange(of: selected) { _, _ in inspectionX = nil }
+        .onChange(of: selected) { _, _ in inspectionX = nil; hoveredSleep = nil }
         .task(id: "\(solarLocation)|\(buffer.start.timeIntervalSince1970)|\(buffer.end.timeIntervalSince1970)") {
             solarBands = []
             guard let location = SolarPreferences.decode(solarLocation) else { return }
@@ -224,6 +273,84 @@ struct InstrumentHistoryView: View {
             guard !Task.isCancelled else { return }
             solarBands = bands
         }
+    }
+
+    private func batteryForecastMarker(_ estimate: BatteryDischargeEstimate) -> some View {
+        // An axis annotation at 10%, not a future point on the historical trace.
+        let rounded = Date(timeIntervalSince1970: (estimate.reachesTenPercentAt.timeIntervalSince1970 / 300).rounded() * 300)
+        return HStack(spacing: 2) {
+            Circle().fill(MachinePalette.battery).frame(width: 3, height: 3)
+            Text("≈" + rounded.formatted(date: .omitted, time: .shortened))
+                .font(.system(size: 8.5, weight: .medium)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .foregroundStyle(MachinePalette.battery)
+        .frame(width: 35, alignment: .leading)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .help("Battery estimated to reach 10% around \(rounded.formatted(date: .abbreviated, time: .shortened)). \(estimate.explanation)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery estimated to reach 10 percent around \(rounded.formatted(date: .abbreviated, time: .shortened)). At the recent discharge rate; actual time may vary.")
+    }
+
+    private func finishPan() {
+        guard dragStart != nil else { return }
+        dragStart = nil
+        onPanStateChange(false)
+        if let dragWindow, dragWindow != content.snapshot.interval { onPan(dragWindow) }
+        else { dragWindow = nil }
+    }
+
+    private func gapNavigation(_ gap: DateInterval) -> some View {
+        let label = timeRegions.first(where: { $0.interval == gap })?.kind == .sleep ? "Sleep" : "No readings"
+        let previous = InstrumentViewport.activityNeighbor(to: gap, direction: -1, recorded: presence.awakeIntervals)
+        let next = InstrumentViewport.activityNeighbor(to: gap, direction: 1, recorded: presence.awakeIntervals)
+        return HStack(spacing: 8) {
+            if onJumpToActivity != nil {
+                distantJumpButton("Previous activity", symbol: "arrow.left", from: gap.start, direction: -1)
+                Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+                distantJumpButton("Next activity", symbol: "arrow.right", from: gap.end, direction: 1)
+            } else {
+                if let previous { jumpButton("Previous activity", symbol: "arrow.left", date: previous) }
+                if previous != nil || next != nil {
+                    Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                if let next { jumpButton("Next activity", symbol: "arrow.right", date: next) }
+            }
+        }
+        .padding(.horizontal, 9).padding(.vertical, 6)
+        .background(InstrumentGlassSurface(radius: 9))
+        .fixedSize()
+        .opacity(onJumpToActivity != nil || previous != nil || next != nil ? 1 : 0)
+    }
+
+    private func distantJumpButton(_ title: String, symbol: String, from date: Date, direction: Int) -> some View {
+        Button {
+            inspectionX = nil
+            hoveredSleep = nil
+            entranceFinished = true
+            onJumpToActivity?(date, direction)
+        } label: {
+            Label(title, systemImage: symbol).font(.system(size: 10, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .help("Find the nearest saved reading beyond this gap, including outside the loaded graph.")
+    }
+
+    private func jumpButton(_ title: String, symbol: String, date: Date) -> some View {
+        Button {
+            let destination = InstrumentViewport.focused(interval, on: date,
+                earliest: bounds.start, latest: min(bounds.end, Date()))
+            inspectionX = nil
+            hoveredSleep = nil
+            entranceFinished = true
+            dragWindow = destination
+            onPan(destination)
+        } label: {
+            Label(title, systemImage: symbol).font(.system(size: 10, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .help("Jump to the nearest recorded activity at the same scale. Sleep keeps its elapsed duration.")
     }
 
     private func revealed(_ context: GraphicsContext, metric: MachineInstrument, rect: CGRect, at date: Date) -> GraphicsContext {
@@ -239,7 +366,7 @@ struct InstrumentHistoryView: View {
         for run in Dictionary(grouping: series[.battery] ?? [], by: \.run).values {
             let points = run.map { CGPoint(x: x($0.date, rect), y: rect.maxY - $0.value / 100 * rect.height) }
             guard points.count > 1, let first = points.first, let last = points.last else { continue }
-            var area = trace(points)
+            var area = trace(points, metric: .battery)
             area.addLine(to: CGPoint(x: last.x, y: rect.maxY))
             area.addLine(to: CGPoint(x: first.x, y: rect.maxY))
             area.closeSubpath()
@@ -253,6 +380,43 @@ struct InstrumentHistoryView: View {
                     Gradient(colors: [MachinePalette.battery.opacity(colorScheme == .dark ? 0.20 : 0.14),
                                       MachinePalette.battery.opacity(0.015)]),
                     startPoint: CGPoint(x: rect.midX, y: rect.minY), endPoint: CGPoint(x: rect.midX, y: rect.maxY)))
+            }
+        }
+    }
+
+    private func drawGapJoins(_ metric: MachineInstrument, context: GraphicsContext, rect: CGRect) {
+        for join in gapJoins[metric] ?? [] {
+            let a = CGPoint(x: x(join.before.date, rect), y: rect.maxY - join.before.value / 100 * rect.height)
+            let b = CGPoint(x: x(join.after.date, rect), y: rect.maxY - join.after.value / 100 * rect.height)
+            guard b.x >= rect.minX, a.x <= rect.maxX else { continue }
+            var path = Path()
+            path.move(to: a)
+            if metric == .battery {
+                let middle = (a.x + b.x) / 2
+                path.addCurve(to: b, control1: CGPoint(x: middle, y: a.y), control2: CGPoint(x: middle, y: b.y))
+                context.stroke(path, with: .color(metric.tint.opacity(strokeOpacity(metric) * 0.6)),
+                    style: StrokeStyle(lineWidth: strokeWidth(metric) * 0.85, lineCap: .round, dash: [2, 3]))
+            } else if mode == .calm, join.isBriefMissing {
+                // A dashed, quieter link is not observed demand. It never
+                // crosses confirmed sleep or enters hover/averages.
+                let middle = (a.x + b.x) / 2
+                path.addCurve(to: b, control1: CGPoint(x: middle, y: a.y), control2: CGPoint(x: middle, y: b.y))
+                context.stroke(path, with: .color(metric.tint.opacity(0.28)),
+                    style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [2, 3]))
+            } else if mode == .calm, let shoulders = InstrumentHistory.sleepShoulders(join,
+                visibleDuration: interval.duration, plotWidth: rect.width) {
+                let zeroA = CGPoint(x: x(shoulders.down, rect), y: rect.maxY)
+                let zeroB = CGPoint(x: x(shoulders.up, rect), y: rect.maxY)
+                path.addCurve(to: zeroA, control1: CGPoint(x: (a.x + zeroA.x) / 2, y: a.y),
+                    control2: CGPoint(x: (a.x + zeroA.x) / 2, y: rect.maxY))
+                path.move(to: zeroB)
+                path.addCurve(to: b, control1: CGPoint(x: (b.x + zeroB.x) / 2, y: rect.maxY),
+                    control2: CGPoint(x: (b.x + zeroB.x) / 2, y: b.y))
+                context.stroke(path, with: .color(metric.tint.opacity(0.32)),
+                    style: StrokeStyle(lineWidth: strokeWidth(metric) * 0.8, lineCap: .round, lineJoin: .round))
+                var rest = Path(); rest.move(to: zeroA); rest.addLine(to: zeroB)
+                context.stroke(rest, with: .color(metric.tint.opacity(0.18)),
+                    style: StrokeStyle(lineWidth: 1, lineCap: .round))
             }
         }
     }
@@ -290,7 +454,7 @@ struct InstrumentHistoryView: View {
 
     private func inspection(at date: Date) -> some View {
         HStack(spacing: 9) {
-            Text(date.formatted(date: interval.duration > 86400 ? .abbreviated : .omitted, time: .shortened))
+            Text(date.formatted(date: !Calendar.autoupdatingCurrent.isDate(interval.start, inSameDayAs: interval.end) ? .abbreviated : .omitted, time: .shortened))
                 .foregroundStyle(.secondary)
             if let band = solarBands.first(where: { $0.interval.contains(date) }) {
                 Text(band.phase.rawValue).foregroundStyle(.secondary)
@@ -299,14 +463,11 @@ struct InstrumentHistoryView: View {
                 Text(regionTitle(region)).foregroundStyle(.secondary)
             }
             ForEach(shown) { metric in
-                let points = series[metric] ?? []
-                let runs = Dictionary(grouping: points, by: \.run).values
-                let containing = runs.first { points in
-                    guard let first = points.first, let last = points.last else { return false }
-                    return date >= first.date && date <= last.date
+                let measured = InstrumentHistory.measuredValue(metric, at: date, samples: inspectionSamples, in: buffer)
+                let isBridge = (gapJoins[metric] ?? []).contains {
+                    date > $0.before.date && date < $0.after.date && ($0.sleep == nil)
                 }
-                let nearest = containing?.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
-                Text("\(metric.title) \(nearest.map { "\(Int($0.value.rounded()))%" } ?? "—")")
+                Text("\(metric.title) \(measured.map { "\(Int($0.rounded()))%" } ?? (isBridge ? "unmeasured" : "—"))")
                     .foregroundStyle(metric.tint)
             }
             if selected.contains(.battery), chargingIntervals.contains(where: { date >= $0.start && date < $0.end }) {
@@ -395,31 +556,66 @@ struct InstrumentHistoryView: View {
         InstrumentViewport.ticks(in: interval, width: width)
     }
 
-    private func traceShading(_ metric: MachineInstrument, points: [CGPoint], run: [InstrumentPoint]) -> GraphicsContext.Shading {
+    private func traceShading(_ metric: MachineInstrument, points: [CGPoint], run: [InstrumentPoint], rect: CGRect) -> GraphicsContext.Shading {
         let color = metric.tint.opacity(strokeOpacity(metric))
-        guard let first = points.first, let last = points.last, last.x - first.x > 16 else { return .color(color) }
-        let fade = min(0.18, 8 / (last.x - first.x))
-        let startsAfterBoundary = (run.first?.date ?? interval.start).timeIntervalSince(interval.start) > 1.5
-        let endsBeforeLive = interval.end.timeIntervalSince(run.last?.date ?? interval.end) > 120
+        guard let first = points.first, let last = points.last, last.x > first.x else { return .color(color) }
+        let fade = min(0.35, 8 / (last.x - first.x))
+        let joins = (gapJoins[metric] ?? []).filter {
+            metric == .battery || (mode == .calm && ($0.isBriefMissing ||
+                InstrumentHistory.sleepShoulders($0, visibleDuration: interval.duration, plotWidth: rect.width) != nil))
+        }
+        let startJoin = joins.first { $0.after.date == run.first?.date }
+        let endJoin = joins.first { $0.before.date == run.last?.date }
+        let startsAfterBoundary = startJoin == nil && (run.first?.date ?? interval.start).timeIntervalSince(interval.start) > 1.5
+        let endsBeforeLive = endJoin == nil && interval.end.timeIntervalSince(run.last?.date ?? interval.end) > 120
         return .linearGradient(Gradient(stops: [
-            .init(color: color.opacity(startsAfterBoundary ? 0.25 : 1), location: 0),
+            .init(color: color.opacity(startJoin?.sleep != nil ? 0.32 : startsAfterBoundary ? 0.06 : 1), location: 0),
             .init(color: color, location: fade), .init(color: color, location: 1 - fade),
-            .init(color: color.opacity(endsBeforeLive ? 0.25 : 1), location: 1)
+            .init(color: color.opacity(endJoin?.sleep != nil ? 0.32 : endsBeforeLive ? 0.06 : 1), location: 1)
         ]), startPoint: first, endPoint: CGPoint(x: last.x, y: first.y))
     }
 
-    private func trace(_ points: [CGPoint]) -> Path {
+    private func trace(_ points: [CGPoint], metric: MachineInstrument? = nil) -> Path {
         var path = Path()
         guard let first = points.first else { return path }
         path.move(to: first)
+        let controls = mode == .calm ? InstrumentHistory.boundedCurveControls(points) : []
         for index in 1..<points.count {
-            let previous = points[index - 1], point = points[index]
-            if mode == .calm {
-                let midpoint = (previous.x + point.x) / 2
-                path.addCurve(to: point, control1: CGPoint(x: midpoint, y: previous.y),
-                              control2: CGPoint(x: midpoint, y: point.y))
+            let point = points[index]
+            if !controls.isEmpty {
+                let pair = controls[index - 1]
+                path.addCurve(to: point, control1: pair.0, control2: pair.1)
             } else { path.addLine(to: point) }
         }
         return path
+    }
+}
+
+/// Receives scroll events only inside this chart. Mouse and hover events continue
+/// to SwiftUI; native momentum is respected and one load follows the gesture.
+private struct InstrumentHorizontalScrollSurface: NSViewRepresentable {
+    var onScroll: (CGFloat, Bool) -> Void
+
+    func makeNSView(context: Context) -> ScrollSurface { ScrollSurface() }
+    func updateNSView(_ view: ScrollSurface, context: Context) { view.onScroll = onScroll }
+    static func dismantleNSView(_ view: ScrollSurface, coordinator: ()) { view.settle?.cancel() }
+
+    final class ScrollSurface: NSView {
+        var onScroll: ((CGFloat, Bool) -> Void)?
+        var settle: DispatchWorkItem?
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let event = NSApp.currentEvent, event.type == .scrollWheel,
+                  abs(event.scrollingDeltaX) > 0 || !event.momentumPhase.isEmpty else { return nil }
+            return super.hitTest(point)
+        }
+        override func scrollWheel(with event: NSEvent) {
+            let delta = event.scrollingDeltaX * (event.hasPreciseScrollingDeltas ? 1 : 12)
+            guard delta != 0 else { return }
+            settle?.cancel()
+            onScroll?(delta, false)
+            let done = DispatchWorkItem { [weak self] in self?.onScroll?(0, true) }
+            settle = done
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: done)
+        }
     }
 }

@@ -54,21 +54,13 @@ struct MenuBarIconSettingsView: View {
     }
 
     private var iconPreview: some View {
-        let signal = MachineStatusSignal.current(
-            sample: model.latestSystem,
-            recentSamples: model.recentSystemSamples
-        )
+        let signal = model.readingModeSignal
         let state: MachineStatusIcon.State = signal.map { .live($0) } ?? .waiting
-        let average = MachineDemandAverage.current(
-            sample: model.latestSystem,
-            recentSamples: model.recentSystemSamples
-        )
-        let freshFans = model.fanReadingsAt.map { Date().timeIntervalSince($0) < 45 } == true
-            ? model.fanReadings : nil
+        let average = model.readingModeDemand
         let icon = MachineStatusIcon.image(
             for: state,
             average: average,
-            fanPercent: freshFans?.map(\.percentOfMaximum).max(),
+            fanPercent: model.instrumentReadingValue(.fan),
             thermalLevel: signal == nil ? nil : model.latestSystem?.thermalLevel,
             configuration: configuration
         )
@@ -84,7 +76,7 @@ struct MenuBarIconSettingsView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.75)
             }
-            .accessibilityLabel("Live menu bar icon preview")
+            .accessibilityLabel("\(model.readingModeLabel) menu bar icon preview")
     }
 
     private func instrumentRow(_ instrument: MenuBarInstrument) -> some View {
@@ -103,7 +95,7 @@ struct MenuBarIconSettingsView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(instrument.title)
                     .font(.subheadline.weight(.medium))
-                Text(instrument.explanation)
+                Text(instrument == .compute ? "CPU and GPU follow the shared Live / Average setting (\(model.readingModeLabel))." : instrument == .state ? "Current machine health above; effort follows \(model.readingModeLabel) below." : "Fan speed follows \(model.readingModeLabel); thermal pressure stays current.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

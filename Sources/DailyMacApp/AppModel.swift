@@ -117,6 +117,13 @@ final class AppModel: ObservableObject {
     /// Every saved reading needed for the live two-minute icon average. Daily
     /// reports refresh less often and must not be the source of live history.
     @Published private(set) var recentSystemSamples: [SystemSample] = []
+    @Published private(set) var readingMode = MachineReadingMode(rawValue: UserDefaults.standard.string(forKey: MachineReadingMode.storageKey) ?? "") ?? .live
+    @Published private(set) var readingModeSnapshot = MachineReadingSnapshot(mode: .live, latest: nil, samples: [])
+    @Published private(set) var readingModeAppContributors: [AppComputeContribution] = []
+    /// Loaded once from disk, then maintained with successfully saved samples.
+    @Published private(set) var readingModeSamples: [SystemSample] = []
+    @Published private(set) var batteryDischargeEstimate: BatteryDischargeEstimate?
+    private var readingModeAppCache: [AppResourceSample] = []
     @Published var todayChartSamples: [SystemSample] = []
     @Published private(set) var fanReadings: [FanReading]?
     @Published private(set) var fanReadingsAt: Date?
@@ -195,12 +202,64 @@ final class AppModel: ObservableObject {
     var monitoringAppContributors: [AppComputeContribution] { monitoringContent?.appContributors ?? [] }
     var monitoringDataThrough: Date? { monitoringContent?.dataThrough }
 
+    var readingModeLabel: String { readingMode.label }
+    var readingModeInterval: DateInterval { readingModeSnapshot.interval }
+    var readingModeApps: [AppResourceSample] {
+        readingMode == .live ? liveAppResources : readingModeAppCache.filter { $0.timestamp > readingModeInterval.start && $0.timestamp <= readingModeInterval.end }
+    }
+    private var hasCurrentReading: Bool {
+        collectionState == .monitoring && latestSystem.map { $0.duration > 0 && MachineStatusSignal.isFresh($0) } == true
+    }
+    var readingModeSignal: MachineStatusSignal? { hasCurrentReading ? readingModeSnapshot.signal : nil }
+    var readingModeDemand: MachineDemandAverage? { hasCurrentReading ? readingModeSnapshot.demand : nil }
+    var currentBatteryDischargeEstimate: BatteryDischargeEstimate? {
+        guard hasCurrentReading, latestSystem?.powerSource == .battery,
+              latestSystem?.isCharging == false,
+              let estimate = batteryDischargeEstimate,
+              estimate.reachesTenPercentAt > Date() else { return nil }
+        return estimate
+    }
+    func instrumentReadingValue(_ metric: MachineInstrument) -> Double? {
+        guard hasCurrentReading else { return nil }
+        if metric == .fan && readingMode == .live,
+           fanReadingsAt.map({ Date().timeIntervalSince($0) < 45 }) != true { return nil }
+        return readingModeSnapshot.values[metric]
+    }
+    func selectReadingMode(_ mode: MachineReadingMode) {
+        readingMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: MachineReadingMode.storageKey)
+        refreshReadingModeSnapshot()
+    }
+    func refreshReadingModeSnapshot(at now: Date = Date()) {
+        let freshFan = fanReadingsAt.map { now.timeIntervalSince($0) >= 0 && now.timeIntervalSince($0) < 45 } == true
+            ? fanReadings?.map(\.percentOfMaximum).max() : nil
+        readingModeSnapshot = MachineReadingSnapshot(mode: readingMode, latest: latestSystem,
+            samples: readingModeSamples, liveFanPercent: freshFan, at: now)
+        let apps: [AppResourceSample]
+        let interval: DateInterval
+        if readingMode == .live {
+            apps = liveAppResources.filter { now.timeIntervalSince($0.timestamp) >= 0 && now.timeIntervalSince($0.timestamp) < 90 }
+            let duration = apps.map(\.duration).filter { $0.isFinite && $0 > 0 }.max() ?? 0
+            let end = apps.map(\.timestamp).max() ?? now
+            interval = DateInterval(start: end.addingTimeInterval(-duration), end: end)
+        } else {
+            apps = readingModeAppCache
+            interval = readingModeSnapshot.interval
+        }
+        readingModeAppContributors = MachineReadingSnapshot.appContributors(samples: apps, in: interval)
+    }
+
     func setFanReadings(_ readings: [FanReading]?, at readAt: Date = Date()) {
         fanReadings = readings
         fanReadingsAt = readings == nil ? nil : readAt
+        refreshReadingModeSnapshot(at: readAt)
     }
 
     private func retainRecentSystemSample(_ sample: SystemSample) {
+        readingModeSamples = (readingModeSamples + [sample]).filter { $0.timestamp > sample.timestamp.addingTimeInterval(-14400) }
+        // Forecast once per saved reading, never during chart hover or redraw.
+        batteryDischargeEstimate = BatteryDischargeEstimate.estimate(samples: readingModeSamples, now: sample.timestamp)
+
         let cutoff = sample.timestamp.addingTimeInterval(-180)
         recentSystemSamples = Array((recentSystemSamples + [sample])
             .filter { $0.timestamp >= cutoff }
@@ -521,20 +580,80 @@ final class AppModel: ObservableObject {
         menuBarSelectedDayStart = nil
         menuBarHistoryEnd = nil
         menuBarMonitoringRangePreference = .smart
-        menuBarMonitoringContent = nil
         restartMenuBarRefresh(endingAt: Date())
     }
 
     func selectMenuBarMonitoringRange(_ range: MonitoringRange) {
-        let wasFixedToRange = menuBarMonitoringRangePreference == .fixed(range)
-        guard !wasFixedToRange || menuBarIsHistorical else { return }
-        menuBarPannedInterval = nil
-        menuBarSelectedDayStart = nil
-        menuBarHistoryEnd = nil
+        guard menuBarMonitoringRangePreference != .fixed(range) else { return }
+        let historical = menuBarIsHistorical
+        let previous = menuBarPannedInterval ?? menuBarMonitoringContent?.snapshot.interval
         menuBarMonitoringRangePreference = .fixed(range)
         menuBarMonitoringRange = range
-        menuBarMonitoringContent = nil
+        menuBarSelectedDayStart = nil
+        menuBarHistoryEnd = nil
+        menuBarPannedInterval = nil
+        if historical, let previous {
+            let anchor = previous.start.addingTimeInterval(previous.duration / 2)
+            if range == .today {
+                let start = Calendar.autoupdatingCurrent.startOfDay(for: anchor)
+                let end = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86400)
+                menuBarPannedInterval = boundedMenuBarInterval(DateInterval(start: start, end: min(end, Date())))
+            } else {
+                menuBarPannedInterval = boundedMenuBarInterval(DateInterval(start: anchor.addingTimeInterval(-range.duration / 2), duration: range.duration))
+            }
+        }
         restartMenuBarRefresh(endingAt: Date())
+    }
+
+    var menuBarNavigationBounds: DateInterval {
+        let now = Date(), calendar = Calendar.autoupdatingCurrent
+        let start = calendar.date(byAdding: .day, value: -max(1, settings.rawRetentionDays), to: calendar.startOfDay(for: now)) ?? now
+        return DateInterval(start: start, end: now)
+    }
+    var menuBarNavigationDay: Date {
+        if !menuBarIsHistorical { return Calendar.autoupdatingCurrent.startOfDay(for: Date()) }
+        if let selected = menuBarSelectedDayStart { return selected }
+        let interval = menuBarPannedInterval ?? menuBarMonitoringContent?.snapshot.interval
+        let date = interval.map { $0.start.addingTimeInterval($0.duration / 2) } ?? Date()
+        return Calendar.autoupdatingCurrent.startOfDay(for: date)
+    }
+    private func boundedMenuBarInterval(_ interval: DateInterval) -> DateInterval {
+        let bounds = menuBarNavigationBounds
+        let duration = min(interval.duration, bounds.duration)
+        let end = min(bounds.end, max(bounds.start.addingTimeInterval(duration), interval.end))
+        return DateInterval(start: end.addingTimeInterval(-duration), end: end)
+    }
+    func selectMenuBarDay(_ date: Date) {
+        let calendar = Calendar.autoupdatingCurrent
+        let day = calendar.startOfDay(for: date)
+        guard day >= menuBarNavigationBounds.start, day <= calendar.startOfDay(for: Date()) else { return }
+        if day == calendar.startOfDay(for: Date()) {
+            returnToLiveMenuBarDay()
+            return
+        }
+        let oldDay = menuBarNavigationDay
+        let shift = calendar.dateComponents([.day], from: oldDay, to: day).day ?? 0
+        let interval: DateInterval
+        if menuBarMonitoringRangePreference.isSmart || menuBarMonitoringRange == .today {
+            let end = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
+            interval = DateInterval(start: day, end: end)
+            menuBarMonitoringRangePreference = .fixed(.today)
+            menuBarMonitoringRange = .today
+        } else {
+            let old = menuBarPannedInterval ?? menuBarMonitoringContent?.snapshot.interval
+                ?? DateInterval(start: Date().addingTimeInterval(-menuBarMonitoringRange.duration), end: Date())
+            let end = calendar.date(byAdding: .day, value: shift, to: old.end) ?? day.addingTimeInterval(menuBarMonitoringRange.duration)
+            interval = DateInterval(start: end.addingTimeInterval(-menuBarMonitoringRange.duration), end: end)
+        }
+        menuBarSelectedDayStart = nil
+        menuBarHistoryEnd = nil
+        menuBarPannedInterval = boundedMenuBarInterval(interval)
+        restartMenuBarRefresh(endingAt: Date())
+    }
+    func browseMenuBarDay(_ direction: Int) {
+        guard direction == -1 || direction == 1,
+              let day = Calendar.autoupdatingCurrent.date(byAdding: .day, value: direction, to: menuBarNavigationDay) else { return }
+        selectMenuBarDay(day)
     }
 
     private func shiftedMenuBarInterval(_ direction: Int) -> DateInterval? {
@@ -570,49 +689,21 @@ final class AppModel: ObservableObject {
             menuBarSelectedDayStart = nil
             menuBarHistoryEnd = interval.end
         }
-        menuBarMonitoringContent = nil
         restartMenuBarRefresh(endingAt: Date())
     }
 
     var canBrowsePreviousMenuBarDay: Bool {
-        let calendar = Calendar.autoupdatingCurrent
-        let today = calendar.startOfDay(for: Date())
-        let current = menuBarSelectedDayStart ?? today
-        guard let previous = calendar.date(byAdding: .day, value: -1, to: current),
-              let oldest = calendar.date(byAdding: .day, value: -max(1, settings.rawRetentionDays), to: today) else {
-            return false
-        }
-        return previous >= oldest
+        guard let previous = Calendar.autoupdatingCurrent.date(byAdding: .day, value: -1, to: menuBarNavigationDay) else { return false }
+        return previous >= menuBarNavigationBounds.start
     }
-
-    func browsePreviousMenuBarDay() {
-        guard canBrowsePreviousMenuBarDay else { return }
-        menuBarPannedInterval = nil
-        let calendar = Calendar.autoupdatingCurrent
-        let current = menuBarSelectedDayStart ?? calendar.startOfDay(for: Date())
-        guard let previous = calendar.date(byAdding: .day, value: -1, to: current) else { return }
-        menuBarSelectedDayStart = previous
-        menuBarHistoryEnd = nil
-        menuBarMonitoringRangePreference = .smart
-        menuBarMonitoringContent = nil
-        restartMenuBarRefresh(endingAt: Date())
-    }
-
-    func browseNextMenuBarDay() {
-        guard let selected = menuBarSelectedDayStart else { return }
-        let calendar = Calendar.autoupdatingCurrent
-        guard let next = calendar.date(byAdding: .day, value: 1, to: selected) else { return }
-        menuBarSelectedDayStart = next >= calendar.startOfDay(for: Date()) ? nil : next
-        menuBarMonitoringContent = nil
-        restartMenuBarRefresh(endingAt: Date())
-    }
+    func browsePreviousMenuBarDay() { browseMenuBarDay(-1) }
+    func browseNextMenuBarDay() { browseMenuBarDay(1) }
 
     func returnToLiveMenuBarDay() {
         guard menuBarIsHistorical else { return }
         menuBarPannedInterval = nil
         menuBarSelectedDayStart = nil
         menuBarHistoryEnd = nil
-        menuBarMonitoringContent = nil
         restartMenuBarRefresh(endingAt: Date())
     }
 
@@ -631,9 +722,59 @@ final class AppModel: ObservableObject {
         guard interval != menuBarMonitoringContent?.snapshot.interval else { return }
         menuBarSelectedDayStart = nil
         menuBarHistoryEnd = nil
-        menuBarPannedInterval = interval
+        menuBarPannedInterval = boundedMenuBarInterval(interval)
         // Keep the moving plot visible while period cards and the next buffer load.
         restartMenuBarRefresh(endingAt: Date())
+    }
+
+    /// Find actual measured coverage beyond the loaded graph buffer. The sleep
+    /// boundary only chooses a search direction; it never supplies fake data.
+    func jumpMenuBarToRecordedActivity(from date: Date, direction: Int) {
+        guard direction == -1 || direction == 1, let store, !dataEraseInProgress,
+              let window = menuBarPannedInterval ?? menuBarMonitoringContent?.snapshot.interval else { return }
+        let bounds = menuBarNavigationBounds
+        let boundary = min(bounds.end, max(bounds.start, date))
+        let search = direction == -1
+            ? DateInterval(start: bounds.start, end: boundary)
+            : DateInterval(start: boundary, end: bounds.end)
+        menuBarRefreshGeneration &+= 1
+        let generation = menuBarRefreshGeneration, epoch = dataEpoch
+        menuBarRefreshTask?.cancel()
+        menuBarRefreshTask = nil
+        menuBarIsRefreshing = true
+        menuBarRefreshMessage = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let dates = try await store.recordedSampleTimestamps(in: search, direction: direction)
+                guard generation == self.menuBarRefreshGeneration, epoch == self.dataEpoch,
+                      !self.dataEraseInProgress else { return }
+                var destination: Date?
+                for candidate in dates {
+                    let samples = try await store.samples(in: DateInterval(start: candidate.addingTimeInterval(-0.001), end: candidate))
+                    guard generation == self.menuBarRefreshGeneration, epoch == self.dataEpoch,
+                          !self.dataEraseInProgress else { return }
+                    if let sample = samples.first(where: { $0.timestamp == candidate && $0.duration.isFinite && $0.samplingInterval.isFinite }),
+                       let coverage = TimelineSemantics.observedInterval(for: sample, within: bounds) {
+                        destination = coverage.start.addingTimeInterval(coverage.duration / 2)
+                        break
+                    }
+                }
+                self.menuBarIsRefreshing = false
+                guard let destination else {
+                    self.menuBarRefreshMessage = direction == -1
+                        ? "No earlier recorded activity remains in retained history."
+                        : "No later recorded activity is available yet."
+                    return
+                }
+                self.panMenuBar(to: InstrumentViewport.focused(window, on: destination,
+                    earliest: bounds.start, latest: bounds.end))
+            } catch {
+                guard generation == self.menuBarRefreshGeneration, epoch == self.dataEpoch else { return }
+                self.menuBarIsRefreshing = false
+                self.menuBarRefreshMessage = "Could not find recorded activity just now. Try again."
+            }
+        }
     }
 
     private func restartMenuBarRefresh(endingAt now: Date) {
@@ -718,6 +859,14 @@ final class AppModel: ObservableObject {
             recentSystemSamples = Array(try await store.samples(
                 in: DateInterval(start: Date().addingTimeInterval(-180), end: Date())
             ).suffix(32))
+            let readingWindow = DateInterval(start: Date().addingTimeInterval(-14400), end: Date())
+            readingModeSamples = try await store.samples(in: readingWindow)
+            batteryDischargeEstimate = BatteryDischargeEstimate.estimate(samples: readingModeSamples)
+            readingModeAppCache = try await store.appResourceSamples(in: readingWindow)
+            if let latestAppTime = readingModeAppCache.map(\.timestamp).max() {
+                liveAppResources = readingModeAppCache.filter { $0.timestamp == latestAppTime }
+            }
+            refreshReadingModeSnapshot()
             processImpacts = try await store.latestProcessImpacts()
 
             // Warm the small one-hour panel first so the menu-bar experience is
@@ -852,6 +1001,10 @@ final class AppModel: ObservableObject {
             // Process collection is intentionally slower than system sampling.
             // An intervening system-only tick isn't an empty process snapshot.
             if !result.appResources.isEmpty { liveAppResources = result.appResources }
+            readingModeAppCache = (readingModeAppCache + result.appResources).filter {
+                $0.timestamp > result.system.timestamp.addingTimeInterval(-14400)
+            }
+            refreshReadingModeSnapshot(at: result.system.timestamp)
             currentActivitySession = TimelineSemantics.updatingCurrentActivitySession(
                 currentActivitySession,
                 with: result.system
@@ -1042,7 +1195,8 @@ final class AppModel: ObservableObject {
                 let autoSearch = DateInterval(
                     start: now.addingTimeInterval(-36 * 60 * 60), end: now
                 )
-                let followsToday = requestedDayStart == nil && requestedPannedInterval == nil && requestedPreference.isSmart
+                let followsToday = requestedDayStart == nil && requestedHistoryEnd == nil && requestedPannedInterval == nil
+                    && (requestedPreference.isSmart || requestedPreference == .fixed(.today))
                 let recentSamples = followsToday ? try await store.samples(
                     in: autoSearch
                 ) : []
@@ -1362,6 +1516,11 @@ final class AppModel: ObservableObject {
         todaySamples = []
         todayActivityTotals = nil
         recentSystemSamples = []
+        readingModeSamples = []
+        batteryDischargeEstimate = nil
+        readingModeAppCache = []
+        readingModeAppContributors = []
+        readingModeSnapshot = MachineReadingSnapshot(mode: readingMode, latest: nil, samples: [])
         todayChartSamples = []
         monitoringContent = nil
         monitoringIsRefreshing = false

@@ -44,6 +44,124 @@ public struct InstrumentPoint: Equatable, Sendable {
 }
 
 public enum InstrumentHistory {
+    /// Presentation only. These joins never enter averages, hover readings,
+    /// charging coverage, or stored telemetry.
+    public struct GapJoin: Sendable {
+        public let before: InstrumentPoint
+        public let after: InstrumentPoint
+        public let sleep: DateInterval?
+        public let isBriefMissing: Bool
+    }
+
+    public static func gapJoins(_ metric: MachineInstrument, points: [InstrumentPoint],
+                                sleeps: [DateInterval]) -> [GapJoin] {
+        guard metric == .battery || metric == .cpu || metric == .gpu else { return [] }
+        let runs = Dictionary(grouping: points, by: \.run).values
+            .compactMap { run -> (InstrumentPoint, InstrumentPoint)? in
+                guard let first = run.min(by: { $0.date < $1.date }),
+                      let last = run.max(by: { $0.date < $1.date }) else { return nil }
+                return (first, last)
+            }.sorted { $0.0.date < $1.0.date }
+        return zip(runs, runs.dropFirst()).compactMap { left, right in
+            let before = left.1, after = right.0
+            let duration = after.date.timeIntervalSince(before.date)
+            guard duration > 1.5, duration.isFinite else { return nil }
+            if metric == .battery { return GapJoin(before: before, after: after, sleep: nil, isBriefMissing: false) }
+            // Only a lifecycle-confirmed sleep can explain a processor resting
+            // at baseline. A small sampling delay at either edge is tolerated;
+            // a brief sleep buried inside a long outage is not sufficient.
+            if let sleep = sleeps.first(where: {
+                $0.start <= before.date.addingTimeInterval(120)
+                    && $0.end >= after.date.addingTimeInterval(-120)
+                    && min($0.end, after.date).timeIntervalSince(max($0.start, before.date)) >= duration * 0.75
+            }) {
+                return GapJoin(before: before, after: after, sleep: sleep, isBriefMissing: false)
+            }
+            // A very brief missed reading can have a quiet presentation link,
+            // never a measured stroke or a link across any recorded sleep.
+            guard duration <= 90, !sleeps.contains(where: {
+                $0.start < after.date && $0.end > before.date
+            }) else { return nil }
+            return GapJoin(before: before, after: after, sleep: nil, isBriefMissing: true)
+        }
+    }
+
+    /// Estimated sleep shoulders need enough screen space to show two ramps
+    /// and a resting interval. Tiny gaps stay open instead of becoming needles.
+    /// All geometry remains inside the real gap; samples are untouched.
+    public static func sleepShoulders(_ join: GapJoin, visibleDuration: TimeInterval,
+                                      plotWidth: Double) -> (down: Date, up: Date)? {
+        guard let sleep = join.sleep, visibleDuration.isFinite, visibleDuration > 0,
+              plotWidth.isFinite, plotWidth > 0 else { return nil }
+        let duration = join.after.date.timeIntervalSince(join.before.date)
+        let gapWidth = duration / visibleDuration * plotWidth
+        guard gapWidth >= 48 else { return nil }
+        let shoulderWidth = min(24, max(18, gapWidth * 0.2))
+        let shoulder = min(duration * 0.4, shoulderWidth / plotWidth * visibleDuration)
+        let down = max(sleep.start, join.before.date.addingTimeInterval(shoulder))
+        let up = min(sleep.end, join.after.date.addingTimeInterval(-shoulder))
+        guard down < up else { return nil }
+        return (down, up)
+    }
+
+    /// Subpixel runs otherwise turn into glowing dots and horizontal caps.
+    /// Hide only the decorative stroke at this scale; coverage and hover remain.
+    public static func shouldDrawRun(_ points: [InstrumentPoint], in window: DateInterval,
+                                     plotWidth: Double) -> Bool {
+        guard let first = points.first, let last = points.last,
+              window.duration > 0, plotWidth.isFinite, plotWidth > 0 else { return false }
+        let duration = min(last.date, window.end).timeIntervalSince(max(first.date, window.start))
+        return duration / window.duration * plotWidth >= 2.5
+    }
+
+    /// Exact measured hover value, independent of bucket averages and whether
+    /// a very short run is visually suppressed at the current scale.
+    public static func measuredValue(_ metric: MachineInstrument, at date: Date,
+                                     samples: [SystemSample], in window: DateInterval) -> Double? {
+        samples.first { sample in
+            guard let measured = TimelineSemantics.observedInterval(for: sample, within: window) else { return false }
+            return measured.start <= date && date <= measured.end && metric.value(in: sample) != nil
+        }.flatMap { metric.value(in: $0) }
+    }
+
+    /// Shape-preserving cubic controls for one continuous battery run. Shared
+    /// tangents keep a steady charge flowing, rather than easing at every knot.
+    /// Plateaus and turning points remain flat; controls cannot exceed the
+    /// measured segment's bounds. No measurements or timestamps are changed.
+    public static func batteryCurveControls(_ points: [CGPoint]) -> [(CGPoint, CGPoint)] {
+        boundedCurveControls(points)
+    }
+
+    /// Shared monotone tangents avoid flat-to-steep easing at every bucket.
+    /// CPU/GPU peaks and battery plateaus stay inside their measured bounds.
+    public static func boundedCurveControls(_ points: [CGPoint]) -> [(CGPoint, CGPoint)] {
+        guard points.count > 1 else { return [] }
+        let widths = zip(points, points.dropFirst()).map { $1.x - $0.x }
+        guard widths.allSatisfy({ $0 > 0 }) else {
+            return zip(points, points.dropFirst()).map { ($0, $1) }
+        }
+        let slopes = widths.indices.map { (points[$0 + 1].y - points[$0].y) / widths[$0] }
+        var tangents = [CGFloat](repeating: 0, count: points.count)
+        tangents[0] = slopes[0]
+        tangents[points.count - 1] = slopes[slopes.count - 1]
+        for index in 1..<(points.count - 1) {
+            let before = slopes[index - 1], after = slopes[index]
+            guard before != 0, after != 0, before.sign == after.sign else { continue }
+            let w1 = 2 * widths[index] + widths[index - 1]
+            let w2 = widths[index] + 2 * widths[index - 1]
+            let harmonic = (w1 + w2) / (w1 / before + w2 / after)
+            // Ordered Bezier controls guarantee no invented overshoot, even
+            // with uneven sample spacing, without breaking tangent continuity.
+            let limit = 1.5 * min(abs(before), abs(after))
+            tangents[index] = min(abs(harmonic), limit) * (before < 0 ? -1 : 1)
+        }
+        return widths.indices.map { index in
+            let start = points[index], end = points[index + 1], third = widths[index] / 3
+            return (CGPoint(x: start.x + third, y: start.y + tangents[index] * third),
+                    CGPoint(x: end.x - third, y: end.y - tangents[index + 1] * third))
+        }
+    }
+
     /// Only explicitly measured charging coverage is shaded. Being plugged in
     /// alone is not charging (full/held batteries must remain unfilled).
     public static func chargingIntervals(samples: [SystemSample], in window: DateInterval) -> [DateInterval] {
