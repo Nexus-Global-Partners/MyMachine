@@ -3,15 +3,15 @@ import Foundation
 public enum ReportRenderer {
     public static func markdown(_ report: DailyReport) -> String {
         var lines: [String] = [
-            "# MY MACHINE — \(report.dayKey)",
+            "# MY MACHINE — \(literal(report.dayKey))",
             "",
             "_Generated locally at \(report.generatedAt.formatted(date: .abbreviated, time: .shortened))._",
             "",
             "## In brief",
             "",
-            "**\(report.headline)**",
+            "**\(literal(report.headline))**",
             "",
-            report.overview,
+            literal(report.overview),
             "",
             "Coverage: \(Formatters.duration(report.activeDuration + report.idleDuration)); longest uninterrupted stretch: \(Formatters.duration(report.longestContinuousCoverage ?? 0)); active app use: \(Formatters.duration(report.activeDuration)); idle time excluded: \(Formatters.duration(report.idleDuration))."
         ]
@@ -26,7 +26,7 @@ public enum ReportRenderer {
                 "## Method and limitations",
                 ""
             ]
-            for limitation in report.limitations { lines.append("- \(limitation)") }
+            for limitation in report.limitations { lines.append("- \(literal(limitation))") }
             lines.append("")
             lines.append(privacyFooter)
             return lines.joined(separator: "\n")
@@ -34,7 +34,7 @@ public enum ReportRenderer {
 
         lines += ["", "## How the Mac was used", ""]
         for app in report.applications.prefix(5) {
-            lines.append("- **\(escape(app.name))** — \(app.interpretation)")
+            lines.append("- **\(literal(app.name))** — \(literal(app.interpretation))")
         }
         lines += ["", "## How the machine behaved", ""]
         lines.append("- CPU averaged \(Formatters.percent(report.averageCPU)) and peaked at \(Formatters.percent(report.peakCPU)). \(PracticalInterpreter.cpu(report.averageCPU))")
@@ -50,20 +50,20 @@ public enum ReportRenderer {
         }
         lines += ["", "## Important moments", ""]
         if report.importantMoments.isEmpty { lines.append("No disruptive performance event stood out in the recorded periods.") }
-        for insight in report.importantMoments { lines.append("- **\(insight.title)** — \(insight.explanation)") }
+        for insight in report.importantMoments { lines.append("- **\(literal(insight.title))** — \(literal(insight.explanation))") }
         lines += ["", "## Work × machine patterns", ""]
-        for insight in report.correlations { lines.append("- **\(insight.title)** — \(insight.explanation)") }
+        for insight in report.correlations { lines.append("- **\(literal(insight.title))** — \(literal(insight.explanation))") }
         lines += ["", "## What I would change tomorrow", ""]
         if report.recommendations.isEmpty {
             lines.append("No data-backed change is justified today. Keep working normally while MY MACHINE builds a stronger baseline.")
         } else {
             for insight in report.recommendations {
-                lines.append("- **\(insight.title)** — \(insight.explanation)")
-                if let evidence = insight.evidence { lines.append("  - Evidence: \(evidence)") }
+                lines.append("- **\(literal(insight.title))** — \(literal(insight.explanation))")
+                if let evidence = insight.evidence { lines.append("  - Evidence: \(literal(evidence))") }
             }
         }
         lines += ["", "## Method and limitations", ""]
-        for limitation in report.limitations { lines.append("- \(limitation)") }
+        for limitation in report.limitations { lines.append("- \(literal(limitation))") }
         lines.append("")
         lines.append(privacyFooter)
         return lines.joined(separator: "\n")
@@ -71,7 +71,37 @@ public enum ReportRenderer {
 
     private static let privacyFooter = "MY MACHINE stores this report and its telemetry locally. It does not capture keystrokes or what you type; only interval input totals are used for hands-on intensity. It never captures pointer coordinates or targets, screen contents, window titles, URLs, document contents, clipboard data, message contents, paths, or network destinations."
 
-    private static func escape(_ value: String) -> String {
-        value.replacingOccurrences(of: "*", with: "\\*")
+    private static func literal(_ value: String) -> String {
+        let flattened = value.components(separatedBy: .newlines).joined(separator: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        let cleaned = String(String.UnicodeScalarView(flattened.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0)
+        })).trimmingCharacters(in: .whitespaces)
+        guard cleaned.contains("@") else { return escapePunctuation(cleaned[...]) }
+        var cursor = cleaned.startIndex
+        var result = ""
+        // Some renderers autolink email addresses after decoding entities.
+        // A code span preserves the exact visible token without a mail link.
+        for token in cleaned.split(whereSeparator: \.isWhitespace) where token.contains("@") {
+            result += escapePunctuation(cleaned[cursor..<token.startIndex])
+            let backticks = token.unicodeScalars.filter { $0.value == 96 }.count
+            let fence = String(repeating: "`", count: backticks + 1)
+            result += "\(fence) \(token) \(fence)"
+            cursor = token.endIndex
+        }
+        result += escapePunctuation(cleaned[cursor...])
+        return result
+    }
+
+    private static func escapePunctuation(_ value: Substring) -> String {
+        // Markdown decodes entities after identifying structural punctuation.
+        value.unicodeScalars.reduce(into: "") { text, scalar in
+            switch scalar.value {
+            case 33...47, 58...64, 91...96, 123...126:
+                text += "&#\(scalar.value);"
+            default:
+                text.unicodeScalars.append(scalar)
+            }
+        }
     }
 }

@@ -24,12 +24,12 @@ struct FanControlStrip: View {
                     .help(reason)
                 Spacer(minLength: 0)
             case .notEnabled, .needsApproval:
-                Button(control.availability == .needsApproval ? "Set up fan control…" : "Enable fan control…") {
+                Button(control.availability == .needsApproval ? "Approve fan control…" : "Enable fan control…") {
                     perform(control.enable)
                 }
                     .buttonStyle(.plain)
                     .help(control.availability == .needsApproval
-                        ? "Complete or update the fan-control installer in Terminal. Once approved, the controls connect automatically. Monitoring keeps working."
+                        ? "Approve MY MACHINE in System Settings. Once approved, the controls connect automatically."
                         : "Optional fan control requires macOS administrator approval. Monitoring does not.")
                 Spacer(minLength: 0)
             case .enabled:
@@ -112,7 +112,7 @@ struct FanControlSettingsSection: View {
             Text("Enabling this feature requires macOS approval for a narrowly scoped administrator helper. Manual settings expire if the app disconnects and yield when thermal pressure rises. Core monitoring needs no administrator access.")
                 .font(.caption).foregroundStyle(.secondary)
             if control.availability == .enabled || control.availability == .needsApproval {
-                Button("Disable fan control and remove helper") {
+                Button("Disable fan control") {
                     pendingRemoval = true
                     control.disable()
                     if !control.isBusy { finishRemoval() }

@@ -13,7 +13,13 @@ final class FanControlJournalStore {
     init() throws {
         guard geteuid() == 0 else { throw FanControlError.permissionRequired }
         let path = "/Library/Application Support/local.mymachine.fancontrol"
+        guard ["/", "/Library", "/Library/Application Support"].allSatisfy({
+            FanControlInstallation.protectedItem($0, directory: true)
+        }) else { throw FanControlError.unavailable("Fan recovery ancestors are not protected.") }
         if mkdir(path, 0o700) != 0 && errno != EEXIST { throw failure("create recovery directory") }
+        guard FanControlInstallation.protectedItem(path, directory: true) else {
+            throw FanControlError.unavailable("Fan recovery directory is not protected.")
+        }
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { throw failure("open recovery directory") }
         var info = stat()
@@ -28,6 +34,7 @@ final class FanControlJournalStore {
         var lockInfo = stat()
         guard fstat(lockFD, &lockInfo) == 0, lockInfo.st_uid == 0,
               lockInfo.st_mode & S_IFMT == S_IFREG, lockInfo.st_mode & 0o077 == 0,
+              FanControlInstallation.protectedItem(path + "/service.lock", directory: false),
               flock(lockFD, LOCK_EX | LOCK_NB) == 0 else {
             close(lockFD); close(fd)
             throw FanControlError.unavailable("A fan helper is already running, or its lock is not trusted.")
@@ -45,7 +52,8 @@ final class FanControlJournalStore {
         var info = stat()
         guard fstat(fd, &info) == 0, info.st_uid == 0,
               info.st_mode & S_IFMT == S_IFREG, info.st_mode & 0o077 == 0,
-              info.st_size > 0, info.st_size <= 65_536 else {
+              info.st_size > 0, info.st_size <= 65_536,
+              FanControlInstallation.protectedItem("/Library/Application Support/local.mymachine.fancontrol/" + filename, directory: false) else {
             throw FanControlError.unavailable("Fan recovery record is not trusted.")
         }
         var bytes = [UInt8](repeating: 0, count: Int(info.st_size))

@@ -41,7 +41,7 @@ jobs:
       - name: Validate release metadata
         run: |
           plutil -lint Resources/Info.plist
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "false"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)" = "15.0"
 
       - name: Package release assets

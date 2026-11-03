@@ -1,6 +1,7 @@
 import AppKit
 import DailyMacCore
 import Foundation
+import OSLog
 import ServiceManagement
 import SwiftUI
 
@@ -192,7 +193,10 @@ final class AppModel: ObservableObject {
     private var collectionReady = false
     private var notificationConfigurationGeneration = 0
     private var dataEpoch = 0
-    private var dataEraseInProgress = false
+    @Published private(set) var dataEraseInProgress = false
+    @Published private(set) var eraseCleanupPending = false
+    private var eraseCleanupTask: Task<Void, Never>?
+    private static let eraseLog = Logger(subsystem: "local.mymachine.app", category: "EraseCleanup")
     private var shouldResumeAfterDataErase = false
 
     var monitoringSnapshot: MonitoringSnapshot? { monitoringContent?.snapshot }
@@ -296,6 +300,7 @@ final class AppModel: ObservableObject {
 
     deinit {
         monitorTask?.cancel()
+        eraseCleanupTask?.cancel()
         menuBarRefreshTask?.cancel()
         menuBarLiveRefreshTask?.cancel()
         diagnosisTask?.cancel()
@@ -482,7 +487,8 @@ final class AppModel: ObservableObject {
     }
 
     func eraseAllData() {
-        guard let store else { return }
+        guard let store, !dataEraseInProgress else { return }
+        eraseCleanupTask?.cancel()
         dataEpoch &+= 1
         diagnosisGeneration &+= 1
         diagnosisTask?.cancel()
@@ -500,23 +506,51 @@ final class AppModel: ObservableObject {
         clearPublishedHistory()
         Task {
             do {
-                try await store.eraseAllData()
+                let cleaned = try await store.eraseAllData()
+                let size = await store.databaseSizeBytes()
                 guard eraseEpoch == dataEpoch else { return }
-                databaseSize = await store.databaseSizeBytes()
+                databaseSize = size
                 detector.resetAfterGap()
                 await sampler.resetDeltas()
-                dataEraseInProgress = false
-                let shouldResume = shouldResumeAfterDataErase
-                shouldResumeAfterDataErase = false
-                if shouldResume { beginLoopIfNeeded() }
+                eraseCleanupPending = !cleaned
+                if !cleaned { scheduleEraseCleanup() }
             } catch {
-                if eraseEpoch == dataEpoch {
-                    dataEraseInProgress = false
-                    let shouldResume = shouldResumeAfterDataErase
-                    shouldResumeAfterDataErase = false
-                    if shouldResume { beginLoopIfNeeded() }
+                errorMessage = "MY MACHINE could not delete all local history. Check the data folder in Settings and try again."
+                if eraseCleanupPending { scheduleEraseCleanup() }
+            }
+            dataEraseInProgress = false
+            let shouldResume = shouldResumeAfterDataErase
+            shouldResumeAfterDataErase = false
+            if shouldResume { beginLoopIfNeeded() }
+        }
+    }
+
+    func retryEraseCleanup() {
+        guard eraseCleanupPending, !dataEraseInProgress else { return }
+        scheduleEraseCleanup(immediately: true)
+    }
+
+    private func scheduleEraseCleanup(immediately: Bool = false) {
+        guard let store else { return }
+        eraseCleanupTask?.cancel()
+        let epoch = dataEpoch
+        let delays = immediately ? [0, 1, 2, 4, 8, 16] : [1, 2, 4, 8, 16]
+        eraseCleanupTask = Task { [weak self] in
+            for delay in delays {
+                do { try await Task.sleep(for: .seconds(delay)) }
+                catch { return }
+                guard let self, !Task.isCancelled, self.dataEpoch == epoch else { return }
+                let cleaned: Bool
+                do { cleaned = try await store.retryEraseCleanup() }
+                catch {
+                    Self.eraseLog.error("Local erase checkpoint failed. Cleanup remains pending.")
+                    continue
                 }
-                await show(error)
+                guard !Task.isCancelled, self.dataEpoch == epoch else { return }
+                if cleaned {
+                    self.eraseCleanupPending = false
+                    return
+                }
             }
         }
     }
@@ -853,21 +887,35 @@ final class AppModel: ObservableObject {
         do {
             settings = try await store.loadSettings()
             restoreCriticalPreferencesIfPresent()
-            latestSystem = try await store.latestSample()
-            lastSampleTimestamp = latestSystem?.timestamp
-            lastUpdated = latestSystem?.timestamp
-            recentSystemSamples = Array(try await store.samples(
-                in: DateInterval(start: Date().addingTimeInterval(-180), end: Date())
-            ).suffix(32))
-            let readingWindow = DateInterval(start: Date().addingTimeInterval(-14400), end: Date())
-            readingModeSamples = try await store.samples(in: readingWindow)
-            batteryDischargeEstimate = BatteryDischargeEstimate.estimate(samples: readingModeSamples)
-            readingModeAppCache = try await store.appResourceSamples(in: readingWindow)
-            if let latestAppTime = readingModeAppCache.map(\.timestamp).max() {
-                liveAppResources = readingModeAppCache.filter { $0.timestamp == latestAppTime }
+            let epoch = dataEpoch
+            let pending = try await store.hasPendingEraseCleanup()
+            if epoch == dataEpoch, !dataEraseInProgress, pending {
+                eraseCleanupPending = true
+                scheduleEraseCleanup(immediately: true)
             }
-            refreshReadingModeSnapshot()
-            processImpacts = try await store.latestProcessImpacts()
+            let canPublish = { self.dataEpoch == epoch && !self.dataEraseInProgress }
+            let latest = try await store.latestSample()
+            if canPublish() {
+                latestSystem = latest
+                lastSampleTimestamp = latest?.timestamp
+                lastUpdated = latest?.timestamp
+            }
+            let recent = try await store.samples(in: DateInterval(start: Date().addingTimeInterval(-180), end: Date()))
+            if canPublish() { recentSystemSamples = Array(recent.suffix(32)) }
+            let readingWindow = DateInterval(start: Date().addingTimeInterval(-14400), end: Date())
+            let readingSamples = try await store.samples(in: readingWindow)
+            let readingApps = try await store.appResourceSamples(in: readingWindow)
+            if canPublish() {
+                readingModeSamples = readingSamples
+                batteryDischargeEstimate = BatteryDischargeEstimate.estimate(samples: readingSamples)
+                readingModeAppCache = readingApps
+                if let latestAppTime = readingApps.map(\.timestamp).max() {
+                    liveAppResources = readingApps.filter { $0.timestamp == latestAppTime }
+                }
+                refreshReadingModeSnapshot()
+            }
+            let impacts = try await store.latestProcessImpacts()
+            if canPublish() { processImpacts = impacts }
 
             // Warm the small one-hour panel first so the menu-bar experience is
             // useful immediately, independent of report maintenance below.
@@ -884,7 +932,8 @@ final class AppModel: ObservableObject {
             persistCriticalPreferencesSynchronously()
             collectionState = isCurrentlyPaused ? .paused : .monitoring
             attemptLoginRegistrationIfAppropriate()
-            if !settings.isPaused { beginLoopIfNeeded() }
+            if dataEraseInProgress { shouldResumeAfterDataErase = !settings.isPaused }
+            else if !settings.isPaused { beginLoopIfNeeded() }
             if settings.briefingNotificationsEnabled != false {
                 Task { await self.configureBriefingNotifications() }
             } else {

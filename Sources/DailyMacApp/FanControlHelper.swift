@@ -4,6 +4,7 @@ import Foundation
 import IOKit
 import IOKit.pwr_mgt
 import SystemConfiguration
+import ServiceManagement
 
 enum FanControlHelper {
     /// Used only by the explicit administrator installer AFTER stopping the old
@@ -11,7 +12,12 @@ enum FanControlHelper {
     static func restoreAndExit() -> Never {
         guard geteuid() == 0 else { exit(EX_NOPERM) }
         do {
+            try FanControlInstallation.verify(requireReady: false)
             _ = try FanControlServiceIdentity.ownRequirement()
+            let aliasPath = "/Applications/MY MACHINE (Official).app"
+            if symlink(FanControlInstallation.appPath, aliasPath) != 0 && errno != EEXIST {
+                fputs("Could not create the Applications shortcut.\n", stderr)
+            }
             let journal = try FanControlJournalStore()
             if let record = try journal.load() {
                 let engine = try FanControlEngine(journal: journal.save)
@@ -23,6 +29,12 @@ enum FanControlHelper {
                 }
             }
             guard try journal.load() == nil else { exit(EX_TEMPFAIL) }
+            let service = SMAppService.daemon(plistName: FanControlServiceIdentity.plistName)
+            // A replacement executable requires registration by the user
+            // again. The installer has already stopped any running instance.
+            if service.status == .enabled || service.status == .requiresApproval {
+                try service.unregister()
+            }
             exit(EX_OK)
         } catch {
             fputs("Automatic fan restoration is not confirmed: \(error.localizedDescription)\n", stderr)
@@ -37,6 +49,7 @@ enum FanControlHelper {
             exit(EX_NOPERM)
         }
         do {
+            try FanControlInstallation.verify()
             let server = try FanControlServer(serviceName: FanControlServiceIdentity.name)
             try server.start()
             withExtendedLifetime(server) { CFRunLoopRun() }
@@ -57,6 +70,7 @@ private final class FanControlServer: NSObject, NSXPCListenerDelegate {
     private var timer: DispatchSourceTimer?
     private var signalSources: [DispatchSourceSignal] = []
     private var owner: UUID?
+    private var unregistering = false
     private var ownerUID: uid_t?
     private var heartbeatAt: ContinuousClock.Instant?
     private var restorationError: String?
@@ -77,7 +91,12 @@ private final class FanControlServer: NSObject, NSXPCListenerDelegate {
     func start() throws {
         // Recovery completes before admitting any new manual request. Records
         // whose hardware or current target no longer matches cannot be replayed.
-        if let pending = try journal.load() { _ = try engine.recoverOwnedControl(from: pending) }
+        if let pending = try journal.load() {
+            do { _ = try engine.recoverOwnedControl(from: pending) }
+            catch FanControlError.externalControl {
+                guard try journal.load() == nil else { throw FanControlError.externalControl }
+            }
+        }
         let source = DispatchSource.makeTimerSource(queue: queue)
         source.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(100))
         source.setEventHandler { [weak self] in self?.watchdog() }
@@ -135,6 +154,9 @@ private final class FanControlServer: NSObject, NSXPCListenerDelegate {
         queue.async {
             guard user == consoleUID() else { reply(nil, "The active Mac user changed."); return }
             self.respond(reply) {
+                guard !self.unregistering else {
+                    throw FanControlError.unavailable("Fan control is being disabled.")
+                }
                 guard self.owner == nil || self.owner == identifier else {
                     throw FanControlError.unavailable("Another MY MACHINE session is controlling the fans.")
                 }
@@ -174,8 +196,29 @@ private final class FanControlServer: NSObject, NSXPCListenerDelegate {
         }
     }
 
+    fileprivate func prepareToUnregister(user: uid_t, reply: @escaping (Data?, String?) -> Void) {
+        queue.async {
+            guard user == consoleUID() else { reply(nil, "The active Mac user changed."); return }
+            self.respond(reply) {
+                let result: FanControlSnapshot
+                do { result = try self.engine.restoreAutomatic() }
+                catch FanControlError.externalControl {
+                    guard try self.journal.load() == nil else { throw FanControlError.externalControl }
+                    result = try self.engine.readState()
+                }
+                self.owner = nil; self.ownerUID = nil; self.heartbeatAt = nil; self.restorationError = nil
+                // Stay drained even if the caller disconnects before launchd
+                // finishes unregistering. A repeated disable can still retry.
+                self.unregistering = true
+                return result
+            }
+        }
+    }
+
     private func disconnected(_ identifier: UUID) {
-        queue.async { if self.owner == identifier { self.restore() } }
+        queue.async {
+            if self.owner == identifier { self.restore() }
+        }
     }
 
     private func watchdog() {
@@ -235,6 +278,9 @@ private final class FanControlSession: NSObject, FanControlServiceProtocol {
         server?.set(percent: percent, identifier: identifier, user: user, reply: reply)
     }
     func automatic(withReply reply: @escaping (Data?, String?) -> Void) { server?.automatic(user: user, reply: reply) }
+    func prepareToUnregister(withReply reply: @escaping (Data?, String?) -> Void) {
+        server?.prepareToUnregister(user: user, reply: reply)
+    }
     func heartbeat(withReply reply: @escaping (Bool) -> Void) { server?.heartbeat(identifier: identifier, user: user, reply: reply) }
 }
 

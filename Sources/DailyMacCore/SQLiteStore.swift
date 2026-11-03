@@ -575,24 +575,69 @@ public actor SQLiteStore {
         return sqlite3_column_int64(statement, 0)
     }
 
-    public func eraseAllData() throws {
+    /// Returns true when the pre-erase WAL frames have been removed.
+    @discardableResult
+    public func eraseAllData() throws -> Bool {
         dataGeneration &+= 1
+        // Do not commit a cleanup marker while an old recovery copy remains.
+        try removeRecoveryArchives(olderThan: nil)
+        let marker = UUID().uuidString
+        try execute("PRAGMA synchronous=FULL;")
+        defer { try? execute("PRAGMA synchronous=NORMAL;") }
         try transaction {
             try execute("DELETE FROM app_resource_samples;")
             try execute("DELETE FROM process_samples;")
             try execute("DELETE FROM system_samples;")
             try execute("DELETE FROM events;")
             try execute("DELETE FROM daily_reports;")
+            let statement = try prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES('erase_cleanup_pending', ?);")
+            defer { sqlite3_finalize(statement) }
+            bind(marker, to: 1, in: statement)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw StoreError.write(lastError()) }
         }
-        // Recovery folders contain the same private telemetry as the active
-        // store. An explicit erase must cover them as well.
-        try removeRecoveryArchives(olderThan: nil)
+        // Logical erase already committed. A checkpoint error leaves the
+        // durable marker set, just like a busy reader does.
+        return (try? retryEraseCleanup()) == true
+    }
 
-        // The logical deletion above is authoritative. Compaction only
-        // reclaims space and must not turn a completed erase into a stopped
-        // monitoring session if SQLite cannot compact at that moment.
-        try? execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        try? execute("VACUUM;")
+    public func hasPendingEraseCleanup() throws -> Bool {
+        try eraseCleanupMarker() != nil
+    }
+
+    /// A retry never deletes rows, including samples collected after erase.
+    public func retryEraseCleanup() throws -> Bool {
+        guard let db else { throw StoreError.write("database is closed") }
+        // The store actor serializes this temporary timeout override.
+        sqlite3_busy_timeout(db, 100)
+        defer { sqlite3_busy_timeout(db, 5_000) }
+        guard let marker = try eraseCleanupMarker() else { return true }
+        var frames: Int32 = -1
+        var checkpointed: Int32 = -1
+        let status = sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_TRUNCATE, &frames, &checkpointed)
+        if status == SQLITE_BUSY || status == SQLITE_LOCKED { return false }
+        guard status == SQLITE_OK, frames == 0, checkpointed == 0 else {
+            throw StoreError.write("could not confirm local erase cleanup")
+        }
+
+        // A second process may have erased again since the checkpoint.
+        // Only clear the marker that this attempt observed.
+        let statement = try prepare("DELETE FROM metadata WHERE key = 'erase_cleanup_pending' AND value = ?;")
+        defer { sqlite3_finalize(statement) }
+        bind(marker, to: 1, in: statement)
+        let cleared = sqlite3_step(statement)
+        if cleared == SQLITE_BUSY || cleared == SQLITE_LOCKED { return false }
+        guard cleared == SQLITE_DONE else { throw StoreError.write(lastError()) }
+        return sqlite3_changes(db) == 1
+    }
+
+    private func eraseCleanupMarker() throws -> String? {
+        let statement = try prepare("SELECT value FROM metadata WHERE key = 'erase_cleanup_pending';")
+        defer { sqlite3_finalize(statement) }
+        switch sqlite3_step(statement) {
+        case SQLITE_ROW: return text(statement, 0)
+        case SQLITE_DONE: return nil
+        default: throw StoreError.statement(lastError())
+        }
     }
 
     private func removeRecoveryArchives(olderThan cutoff: Date?) throws {

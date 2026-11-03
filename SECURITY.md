@@ -24,6 +24,6 @@ You should receive an acknowledgement through GitHub. A fix and disclosure timel
 
 The app is local-first and has no analytics SDK, server, updater, AI client, or telemetry upload path. **Diagnose My Machine** copies a minimized brief only after an explicit click; an external provider sees it only if the user chooses to paste and send it.
 
-Public binaries are ad-hoc signed with Hardened Runtime but are not Developer ID signed or Apple-notarized. The signature protects bundle integrity after packaging; it is not an Apple identity or trust guarantee. Verify the release SHA-256 file and inspect or build the public source when stronger provenance is required.
+Source builds and older public ZIPs use ad-hoc Hardened Runtime signing. Manual fan control requires the official Developer ID–signed and notarized installer package. Verify the official publisher in macOS Installer and compare the release SHA-256 file before installing.
 
 The full collection contract is in [PRIVACY.md](PRIVACY.md).

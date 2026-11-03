@@ -145,7 +145,7 @@ Diagnosis handoff is intentionally not an integration layer. `AppModel` queries 
 These are the most useful next engineering tasks, in priority order:
 
 1. Move the deterministic validation executable into XCTest over time for richer CI diagnostics; keep the live hardware check as a separate local smoke test.
-2. Decide whether distribution builds should be universal, Developer ID signed, and notarized.
+2. Validate the universal official installer and fan-service lifecycle on Apple Silicon and Intel before publishing.
 3. Run a full overnight sleep/wake, login, notification, and resource-endurance cycle on hardware.
 
 ## Repository hygiene
@@ -153,3 +153,20 @@ These are the most useful next engineering tasks, in priority order:
 Never commit `.build/`, `work/`, `outputs/`, SQLite/WAL/SHM files, app backups, QA captures, or local telemetry. The original development workspace contained private app history and identifiable screenshots in `work/`; those artifacts are intentionally absent from GitHub and the handoff ZIP.
 
 Before publishing a release, verify the repository is clean, run both validation configurations, create the immutable release tag, package from that tagged commit, and attach the app ZIP, source ZIP, and generated SHA-256 file to the GitHub release. The manual release-assets workflow checks out that exact tag, verifies the draft and release metadata, repeats the source-boundary audit, and can replace those three assets without publishing the draft.
+
+
+### Official fan-control package
+
+Quit any running MY MACHINE instance before installing or upgrading. Use
+`scripts/package-official.sh` with `MYMACHINE_DEVELOPER_TEAM`,
+`MYMACHINE_APPLICATION_IDENTITY`, `MYMACHINE_INSTALLER_IDENTITY`, and
+`MYMACHINE_NOTARY_PROFILE` configured locally. It builds and verifies the
+universal, signed and stapled package for hardware validation. Keep signing
+identities and notarization credentials outside the repository. The regular
+`package.sh` and draft ZIP workflow build monitoring-only packages.
+
+After migrating an older Applications copy, open **MY MACHINE (Official)**
+in Applications. Remove the old user-installed app copy through Finder once the
+official copy is running. If the new app reports pending setup, rerun the
+official installer once the legacy fan recovery can finish. The installer
+keeps the recovery record and does not reactivate the legacy service.

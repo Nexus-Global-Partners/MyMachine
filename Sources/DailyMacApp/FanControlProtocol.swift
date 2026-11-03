@@ -6,11 +6,12 @@ import Security
     func status(withReply reply: @escaping (Data?, String?) -> Void)
     func setAllFans(percent: Double, withReply reply: @escaping (Data?, String?) -> Void)
     func automatic(withReply reply: @escaping (Data?, String?) -> Void)
+    func prepareToUnregister(withReply reply: @escaping (Data?, String?) -> Void)
     func heartbeat(withReply reply: @escaping (Bool) -> Void)
 }
 
 enum FanControlServiceIdentity {
-    static let name = "local.mymachine.fancontrol"
+    static let name = "local.mymachine.fancontrol.service"
     static let plistName = name + ".plist"
     static let argument = "--fan-helper"
     static let restoreArgument = "--fan-helper-restore"

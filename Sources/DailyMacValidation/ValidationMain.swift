@@ -640,6 +640,65 @@ struct DailyMacValidation {
             try harness.check(remaining.isEmpty, "stale telemetry reappeared after erase")
         }
 
+        await harness.run("erase retries a pinned WAL without deleting new samples") {
+            let directory = temporaryDirectory(prefix: "DailyMacEraseWAL")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            var original: SQLiteStore? = try SQLiteStore(directoryURL: directory)
+            let now = Date(timeIntervalSince1970: 1_780_000_100)
+            let sentinel = "pre-erase-wal-fixture"
+            _ = try await original?.save(sample: sample(at: now, app: sentinel), processes: [])
+            let database = directory.appendingPathComponent("DailyMac.sqlite")
+            var handle: OpaquePointer?
+            guard sqlite3_open_v2(database.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+                  let reader = handle else {
+                if let handle { sqlite3_close(handle) }
+                throw ValidationFailure.failed("could not open independent SQLite reader")
+            }
+            defer { sqlite3_close(reader) }
+            try harness.check(sqlite3_exec(reader, "BEGIN; SELECT foreground_app FROM system_samples;", nil, nil, nil) == SQLITE_OK,
+                              "could not pin a WAL read snapshot")
+            let erased = try await original?.eraseAllData()
+            try harness.check(erased == false, "erase reported complete with a pinned reader")
+            let remaining = try await original?.samples(from: .distantPast, to: .distantFuture)
+            try harness.check(remaining?.isEmpty == true, "logical erase did not commit")
+            original = nil
+            let store = try SQLiteStore(directoryURL: directory)
+            let pending = try await store.hasPendingEraseCleanup()
+            try harness.check(pending, "erase status was lost when the store reopened")
+            let wal = URL(fileURLWithPath: database.path + "-wal")
+            let oldBytes = try Data(contentsOf: wal)
+            try harness.check(oldBytes.range(of: Data(sentinel.utf8)) != nil, "fixture failed to leave the old value in WAL")
+            let newSample = sample(at: now.addingTimeInterval(60), app: "new sample")
+            try await store.save(sample: newSample, processes: [])
+            try harness.check(sqlite3_exec(reader, "ROLLBACK;", nil, nil, nil) == SQLITE_OK, "could not release reader")
+            let cleaned = try await store.retryEraseCleanup()
+            let stillPending = try await store.hasPendingEraseCleanup()
+            let newRows = try await store.samples(from: .distantPast, to: .distantFuture)
+            let newBytes = try Data(contentsOf: wal)
+            try harness.check(cleaned && !stillPending, "cleanup was not verified after reader release")
+            try harness.check(newRows.map(\.id) == [newSample.id], "cleanup retry removed newly collected data")
+            try harness.check(newBytes.range(of: Data(sentinel.utf8)) == nil, "cleanup retained the pre-erase value")
+        }
+
+        await harness.run("erase leaves the database intact when recovery removal fails") {
+            let directory = temporaryDirectory(prefix: "DailyMacEraseRecoveryFailure")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = try SQLiteStore(directoryURL: directory)
+            let original = sample(at: Date(timeIntervalSince1970: 1_780_000_100))
+            try await store.save(sample: original, processes: [])
+            let recovery = directory.appendingPathComponent("Recovery-protected", isDirectory: true)
+            try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: false)
+            try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path) }
+            var failed = false
+            do { try await store.eraseAllData() }
+            catch { failed = true }
+            let remaining = try await store.samples(from: .distantPast, to: .distantFuture)
+            let pending = try await store.hasPendingEraseCleanup()
+            try harness.check(failed && !pending && remaining.map(\.id) == [original.id],
+                              "failed recovery removal was treated as a committed erase")
+        }
+
         await harness.run("rolling snapshots clip boundary samples and withhold sparse claims") {
             let start = Date(timeIntervalSince1970: 1_780_000_000)
             let end = start.addingTimeInterval(3_600)
@@ -1307,6 +1366,50 @@ struct DailyMacValidation {
             try harness.check(markdown.contains("does not capture keystrokes"), "export omitted privacy boundary")
             try harness.check(report.totalDiskBytes == 12_000_000 && report.totalNetworkBytes == 18_000_000, "full-day I/O aggregates were not preserved")
             try harness.check(markdown.contains("disk") && markdown.contains("network"), "export omitted practical I/O context")
+        }
+
+        await harness.run("Markdown export renders persisted hostile report fields as literal text") {
+            let report = InsightEngine().makeReport(
+                dayKey: "2026-05-27", timezone: TimeZone(secondsFromGMT: 0)!,
+                samples: [], processSamples: [], events: []
+            )
+            let hostile = "![pixel](https://attacker.test/p) <img src=x> www.attacker.test a@b.test `tag@b.test`\n# injected"
+            let benign = "O’Reilly IDE & Tools"
+            let insight: [String: Any] = ["id": UUID().uuidString, "kind": "observation", "title": hostile, "explanation": hostile, "evidence": hostile]
+            var persisted = try require(JSONSerialization.jsonObject(with: JSONEncoder().encode(report)) as? [String: Any],
+                                        "could not construct legacy report fixture")
+            persisted["headline"] = hostile
+            persisted["overview"] = hostile
+            persisted["limitations"] = [hostile]
+            persisted["importantMoments"] = [insight]
+            persisted["correlations"] = [insight]
+            persisted["recommendations"] = [insight]
+            persisted["applications"] = [[
+                "name": benign, "activeDuration": 100, "averageSystemCPU": 10,
+                "averageMemoryBytes": 50, "interpretation": hostile
+            ], [
+                "name": hostile, "activeDuration": 90, "averageSystemCPU": 10,
+                "averageMemoryBytes": 50, "interpretation": benign
+            ]]
+            for coverage in [0.0, 14_400.0] {
+                persisted["longestContinuousCoverage"] = coverage
+                let decoded = try JSONDecoder().decode(DailyReport.self, from: JSONSerialization.data(withJSONObject: persisted))
+                let markdown = ReportRenderer.markdown(decoded)
+                let parsed = try AttributedString(markdown: markdown,
+                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+                let visible = String(parsed.characters)
+                let literal = hostile.replacingOccurrences(of: "\n", with: " ")
+                let occurrences = visible.components(separatedBy: literal).count - 1
+                try harness.check(occurrences == (coverage == 0 ? 3 : 12), "a dynamic field lost literal text or formatting")
+                try harness.check(!parsed.runs.contains { $0.link != nil }, "export contains an active link")
+                let blocks = try AttributedString(markdown: markdown)
+                try harness.check(!blocks.runs.contains { $0.link != nil }, "full Markdown parsing produced a link")
+                try harness.check(!markdown.contains("<img") && !markdown.contains("https://attacker.test") &&
+                                  !markdown.contains("\n# injected"), "export contains raw markup, a bare URL, or an injected heading")
+                if coverage > 0 {
+                    try harness.check(visible.contains(benign), "export changed ordinary application names")
+                }
+            }
         }
 
         await harness.run("battery calculations exclude charging transitions") {

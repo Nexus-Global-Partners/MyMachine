@@ -165,10 +165,16 @@ struct PreferencesView: View {
                             .disabled(model.todayReport == nil)
                     }
                     Button("Delete All Collected Data", role: .destructive) { confirmErase = true }
+                        .disabled(model.dataEraseInProgress)
+                    if model.eraseCleanupPending {
+                        Text("History removed. Local cleanup pending.").foregroundStyle(.secondary)
+                        Button("Retry Local Cleanup") { model.retryEraseCleanup() }
+                            .disabled(model.dataEraseInProgress)
+                    }
                 }
 
                 Section("Completely remove MY MACHINE") {
-                    Text("If you enabled fan control, first use Disable fan control and remove helper above. Then turn off Launch at Login, quit the app and move MY MACHINE.app to the Trash. To remove its history and preferences too, delete the data folder shown above and ~/Library/Preferences/local.mymachine.app.plist. Core monitoring installs no privileged helper; the optional fan-control helper is installed only after your approval. No system extension, kernel component or configuration profile is installed.")
+                    Text("First disable fan control if enabled, then turn off Launch at Login and quit. For the official install, remove the MY MACHINE app folder at /Library/local.mymachine.app and its shortcut in Applications. For a source build, move MY MACHINE.app from Applications to the Trash. You can separately remove history and preferences from the data folder above and ~/Library/Preferences/local.mymachine.app.plist.")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -183,7 +189,7 @@ struct PreferencesView: View {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) { model.eraseAllData() }
         } message: {
-            Text("This removes detailed samples, events, and daily reports. Monitoring, privacy, and launch preferences remain. Collected history cannot be recovered.")
+            Text("This removes detailed samples, events, daily reports, and recovery copies from the app’s local storage. Monitoring, privacy, and launch preferences remain.")
         }
     }
 

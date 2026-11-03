@@ -3,7 +3,7 @@ import AppKit
 import DailyMacCore
 import Darwin
 import Foundation
-import Security
+import ServiceManagement
 
 enum FanControlAvailability: Equatable {
     case checking
@@ -26,45 +26,41 @@ final class FanControlClient: ObservableObject {
     private var generation = 0
     private var connectionToken = UUID()
 
+    private var service: SMAppService { .daemon(plistName: FanControlServiceIdentity.plistName) }
+
     private init() {}
 
     /// Read-only. Merely opening a popover never registers the privileged service.
     func refresh() {
         guard !requestInFlight else { return }
+        guard FanControlInstallation.isProvisioned else {
+            let reason = FanControlInstallation.isOfficialLocation
+                ? "Fan setup is incomplete. Run the official installer again."
+                : "Manual fan control requires the official signed MY MACHINE installer."
+            availability = .unsupported(reason)
+            return
+        }
         if timer == nil {
             timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.poll() }
+                guard let client = self else { return }
+                Task { @MainActor in client.poll() }
             }
         }
-        switch installedHelperState() {
-        case .enabled:
-            availability = .enabled
-            poll()
-        case .needsApproval:
-            availability = .needsApproval
-            probeReadOnly()
-        case .notEnabled:
-            availability = .notEnabled
-            probeReadOnly()
-        case .checking, .unsupported:
-            availability = .notEnabled
-            probeReadOnly()
-        }
+        poll()
+        if availability == .notEnabled || availability == .needsApproval { probeReadOnly() }
     }
 
-    /// Ad-hoc open-source builds cannot use SMAppService LaunchDaemons (which
-    /// require notarization). The explicit installer uses normal administrator
-    /// authorization; the monitoring app never supplies credentials itself.
     func enable() {
         guard !isBusy else { return }
         errorMessage = nil
         do {
-            _ = try FanControlServiceIdentity.ownRequirement()
-            guard Bundle.main.bundleURL.standardizedFileURL.path == "/Applications/MY MACHINE.app" else {
-                throw FanControlError.unavailable("Use the packaged MY MACHINE app to enable fan control.")
-            }
-            openInstaller(removing: false)
-        } catch { errorMessage = error.localizedDescription }
+            try FanControlInstallation.verify()
+            if service.status == .notRegistered { try service.register() }
+            poll()
+            if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func setPercent(_ percent: Double) {
@@ -95,13 +91,20 @@ final class FanControlClient: ObservableObject {
         Task {
             defer { isBusy = false }
             do {
-                // Do not kill the watchdog until owned fan restoration succeeds.
-                if installedHelperState() == .enabled {
-                    let current = try await request { $0.status(withReply: $1) }
-                    if current.ownsManualControl { snapshot = try await request { $0.automatic(withReply: $1) } }
+                try FanControlInstallation.verify()
+                if service.status == .enabled {
+                    // The helper refuses further manual requests on every
+                    // connection until the service exits.
+                    _ = try await request { $0.prepareToUnregister(withReply: $1) }
                 }
-                openInstaller(removing: true)
-            } catch { errorMessage = error.localizedDescription }
+                try await service.unregister()
+                shutdown()
+                snapshot = nil
+                availability = .notEnabled
+                errorMessage = nil
+            } catch {
+                invalidateUnconfirmedControl(error)
+            }
         }
     }
 
@@ -140,17 +143,20 @@ final class FanControlClient: ObservableObject {
     }
 
     private func poll() {
-        let installed = installedHelperState()
-        guard installed == .enabled else {
+        guard !requestInFlight, !isBusy else { return }
+        switch service.status {
+        case .enabled:
+            break
+        case .notRegistered, .requiresApproval:
             if availability == .enabled {
-                shutdown()
-                snapshot = nil
-                refresh()
-            } else if installed == .needsApproval { availability = .needsApproval }
+                invalidateUnconfirmedControl(FanControlError.unavailable("Fan control approval changed."))
+            }
+            availability = service.status == .requiresApproval ? .needsApproval : .notEnabled
+            return
+        default:
+            availability = .unsupported("The signed fan service is unavailable. Reinstall the official package.")
             return
         }
-        availability = .enabled
-        guard !requestInFlight, !isBusy else { return }
         requestInFlight = true
         Task {
             defer { requestInFlight = false }
@@ -158,11 +164,12 @@ final class FanControlClient: ObservableObject {
                 let remote = try proxy()
                 if snapshot?.ownsManualControl == true { remote.heartbeat { _ in } }
                 snapshot = try await request { $0.status(withReply: $1) }
+                availability = .enabled
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
                 snapshot = nil // Never leave a confirmed-looking slider on a dead helper.
-                availability = .needsApproval // Settings offers repair/reinstall after an unavailable service.
+                availability = .unsupported("The approved helper is not responding. Run the official installer to repair fan control.")
                 connection?.invalidate(); connection = nil; connectionToken = UUID()
             }
         }
@@ -221,43 +228,6 @@ final class FanControlClient: ObservableObject {
             throw FanControlError.unavailable("Fan helper changed before the operation was confirmed.")
         }
         return result
-    }
-
-    private func openInstaller(removing: Bool) {
-        let filename = removing ? "Remove Fan Control.command" : "Install Fan Control.command"
-        guard let url = Bundle.main.resourceURL?.appendingPathComponent(filename),
-              FileManager.default.fileExists(atPath: url.path) else {
-            errorMessage = "This app package does not contain the fan-control installer."; return
-        }
-        let alert = NSAlert()
-        alert.messageText = removing ? "Remove fan control?" : "Enable fan control?"
-        alert.informativeText = removing
-            ? "The administrator installer will restore fans owned by MY MACHINE to Auto, stop the helper, and remove its root-owned copy. Monitoring keeps working."
-            : "Fan control needs a one-time administrator installation. The installer copies this signed local app into a protected system folder and installs a narrow fan helper. Your password is entered only in the macOS sudo prompt in Terminal. The helper returns owned fans to Auto after disconnect, sleep, overheating, or lost heartbeat. Setup does not apply a manual fan target. Updates first return any fan control owned by MY MACHINE to Auto."
-        alert.addButton(withTitle: "Open Installer")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        if NSWorkspace.shared.open(url) {
-            availability = .needsApproval
-            errorMessage = nil
-        } else { errorMessage = "The installer could not be opened. Open \(filename) from this app's Resources folder." }
-    }
-
-    private func installedHelperState() -> FanControlAvailability {
-        let path = "/Library/PrivilegedHelperTools/local.mymachine.fancontrol.app"
-        let plist = "/Library/LaunchDaemons/" + FanControlServiceIdentity.plistName
-        for entry in [path, plist] {
-            var info = stat()
-            guard lstat(entry, &info) == 0 else { return .notEnabled }
-            guard info.st_uid == 0, info.st_mode & S_IFMT != S_IFLNK, info.st_mode & 0o022 == 0 else { return .needsApproval }
-        }
-        var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, SecCSFlags(), &code) == errSecSuccess,
-              let code, let requirementText = try? FanControlServiceIdentity.ownRequirement() else { return .needsApproval }
-        var requirement: SecRequirement?
-        guard SecRequirementCreateWithString(requirementText as CFString, SecCSFlags(), &requirement) == errSecSuccess,
-              let requirement, SecStaticCodeCheckValidity(code, SecCSFlags(), requirement) == errSecSuccess else { return .needsApproval }
-        return .enabled
     }
 }
 
