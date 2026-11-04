@@ -30,13 +30,19 @@ public actor SQLiteStore {
 
     public init(directoryURL: URL? = nil) throws {
         let requested = (directoryURL ?? SQLiteStore.defaultDirectoryURL()).standardizedFileURL
-        // Canonicalize system aliases such as /var without following the store
-        // directory itself; secureDirectory rejects a symlink at that boundary.
-        let selected = requested.deletingLastPathComponent().resolvingSymlinksInPath()
-            .appendingPathComponent(requested.lastPathComponent, isDirectory: true)
         if directoryURL == nil {
-            try Self.migrateLegacyDirectoryIfNeeded(to: selected)
+            try Self.migrateLegacyDirectoryIfNeeded(to: requested)
         }
+        try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // SQLite's NOFOLLOW rejects aliases such as /var anywhere in the path.
+        // Resolve the parent only so secureDirectory can still reject a linked store.
+        guard let resolved = realpath(requested.deletingLastPathComponent().path, nil) else {
+            throw StoreError.cannotOpen("Could not resolve the local history directory.")
+        }
+        defer { free(resolved) }
+        let selected = URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
+            .appendingPathComponent(requested.lastPathComponent, isDirectory: true)
+        try LocalEraseReceipt.secureDirectory(selected)
         self.directoryURL = selected
         self.databaseURL = selected.appendingPathComponent("DailyMac.sqlite", isDirectory: false)
         self.encoder = JSONEncoder()
@@ -44,8 +50,6 @@ public actor SQLiteStore {
         encoder.dateEncodingStrategy = .millisecondsSince1970
         decoder.dateDecodingStrategy = .millisecondsSince1970
 
-        try FileManager.default.createDirectory(at: selected, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try LocalEraseReceipt.secureDirectory(selected)
         let lock = try LocalEraseReceipt.acquireWriterLock(in: selected)
         var keepLock = false
         defer { if !keepLock { Darwin.close(lock) } }

@@ -118,7 +118,7 @@ unzip -t "outputs/MY-MACHINE-Source-1.4.0.zip"
 (cd outputs && shasum -a 256 -c "SHA256SUMS-1.4.0.txt")
 ```
 
-The final validation check reads live hardware and timing, so it remains a local release gate. GitHub CI runs the deterministic portion in both debug and release configurations, then performs packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
+GitHub CI runs the full validation suite in both debug and release configurations, including live checks on the macOS runner. It then checks the preview package, signature, archives, checksums and source privacy boundary. The CI preview targets the runner architecture. The official release is a universal Developer ID signed and notarized ZIP and requires separate testing on supported Macs. Packaging reads the version and build number from `Resources/Info.plist`.
 
 ## Privacy and data behavior
 

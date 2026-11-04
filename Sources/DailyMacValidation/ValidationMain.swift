@@ -609,6 +609,34 @@ struct DailyMacValidation {
             )
         }
 
+        await harness.run("SQLite resolves parent aliases but rejects a symlink store or database") {
+            let root = temporaryDirectory(prefix: "DailyMacStorePaths")
+            let fs = FileManager.default
+            try fs.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? fs.removeItem(at: root) }
+
+            let realParent = root.appendingPathComponent("real", isDirectory: true)
+            let alias = root.appendingPathComponent("alias", isDirectory: true)
+            try fs.createDirectory(at: realParent, withIntermediateDirectories: false)
+            try fs.createSymbolicLink(at: alias, withDestinationURL: realParent)
+            let store = try SQLiteStore(directoryURL: alias.appendingPathComponent("store", isDirectory: true))
+            let accepted = try await store.save(sample: sample(), processes: [])
+            try harness.check(accepted && fs.fileExists(atPath: realParent.appendingPathComponent("store/DailyMac.sqlite").path),
+                              "an ancestor alias prevented the private database from opening")
+
+            let linkedStore = root.appendingPathComponent("linked-store", isDirectory: true)
+            try fs.createSymbolicLink(at: linkedStore, withDestinationURL: store.directoryURL)
+            let targetDirectory = root.appendingPathComponent("linked-db", isDirectory: true)
+            try fs.createDirectory(at: targetDirectory, withIntermediateDirectories: false)
+            try fs.createSymbolicLink(at: targetDirectory.appendingPathComponent("DailyMac.sqlite"), withDestinationURL: store.databaseURL)
+            for path in [linkedStore, targetDirectory] {
+                do {
+                    _ = try SQLiteStore(directoryURL: path)
+                    throw ValidationFailure.failed("a symlink store or database was accepted")
+                } catch is StoreError {}
+            }
+        }
+
         await harness.run("rolling SQLite boundaries follow sample interval ends") {
             let directory = temporaryDirectory(prefix: "DailyMacRollingBoundary")
             defer { try? FileManager.default.removeItem(at: directory) }
