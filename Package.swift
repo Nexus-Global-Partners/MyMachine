@@ -25,7 +25,6 @@ let package = Package(
             dependencies: ["DailyMacCore"],
             linkerSettings: [
                 .linkedFramework("ServiceManagement"),
-                .linkedFramework("Security"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedFramework("Charts")
             ]

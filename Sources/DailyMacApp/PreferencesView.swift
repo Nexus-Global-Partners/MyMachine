@@ -32,7 +32,6 @@ struct PreferencesView: View {
 
                 MenuBarIconSettingsView()
 
-                FanControlSettingsSection()
 
                 SolarSettingsView()
 
@@ -105,7 +104,7 @@ struct PreferencesView: View {
                     Text("Creates a private 24-hour summary and copies it. It can open ChatGPT or Claude, but never pastes or sends anything.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Turn off application names to replace them with anonymous labels.")
+                    Text("Application names are anonymous unless you turn this on. Review what you share before pasting it into another app.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -167,14 +166,19 @@ struct PreferencesView: View {
                     Button("Delete All Collected Data", role: .destructive) { confirmErase = true }
                         .disabled(model.dataEraseInProgress)
                     if model.eraseCleanupPending {
-                        Text("History removed. Local cleanup pending.").foregroundStyle(.secondary)
-                        Button("Retry Local Cleanup") { model.retryEraseCleanup() }
-                            .disabled(model.dataEraseInProgress)
+                        Text(model.eraseRecoveryReview
+                             ? "Monitoring is paused. Local history needs review. Confirm Delete All Collected Data to retry deletion, including any recovery copies."
+                             : "Monitoring is paused until local deletion can be verified.")
+                            .foregroundStyle(.secondary)
+                        if !model.eraseRecoveryReview {
+                            Button("Retry Local Cleanup") { model.retryEraseCleanup() }
+                                .disabled(model.dataEraseInProgress)
+                        }
                     }
                 }
 
                 Section("Completely remove MY MACHINE") {
-                    Text("First disable fan control if enabled, then turn off Launch at Login and quit. For the official install, remove the MY MACHINE app folder at /Library/local.mymachine.app and its shortcut in Applications. For a source build, move MY MACHINE.app from Applications to the Trash. You can separately remove history and preferences from the data folder above and ~/Library/Preferences/local.mymachine.app.plist.")
+                    Text("Turn off Launch at Login, quit, and move MY MACHINE.app from Applications to the Trash. You can separately remove history and preferences from the data folder above and ~/Library/Preferences/local.mymachine.app.plist.")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -215,9 +219,10 @@ struct PreferencesView: View {
 
     private var diagnosisApplicationNamesBinding: Binding<Bool> {
         Binding(
-            get: { model.settings.diagnosisIncludeApplicationNames != false },
+            get: { model.settings.diagnosisNamesAreAllowed },
             set: {
                 model.settings.diagnosisIncludeApplicationNames = $0
+                model.settings.diagnosisNameConsentVersion = 1
                 model.persistSettings()
             }
         )

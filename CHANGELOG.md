@@ -4,6 +4,10 @@ All notable user-visible changes are recorded here.
 
 ## [Unreleased]
 
+- Removed experimental manual fan adjustment and its privileged helper. Read-only fan RPM remains available on supported Macs.
+- Kept collection paused until local deletion is verified, and preserved history when report reads fail.
+- Diagnosis briefs use anonymous application labels by default. Sleep history requires a matched cycle and keeps uncertain time unrecorded.
+
 ### Build 38
 
 - Replaced the Live/Average dropdown with two compact icons. Average periods expand inline with a short motion; Live collapses them. The selected period still drives both cards and the menu-bar icon.

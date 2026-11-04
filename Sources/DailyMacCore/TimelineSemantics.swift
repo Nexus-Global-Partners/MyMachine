@@ -348,7 +348,7 @@ public enum TimelineSemantics {
             return observedInterval(for: sample, within: search)
         }.sorted { $0.start < $1.start }
 
-        let substantialSleeps = sleepIntervals(from: sleepWakeEvents, within: search)
+        let substantialSleeps = sleepIntervals(from: sleepWakeEvents, within: search, awakeSamples: recentSamples)
             .filter { $0.duration >= 3 * 60 * 60 && $0.end < date }
         var boundaries = substantialSleeps.map(\.end)
 
@@ -996,26 +996,30 @@ public enum TimelineSemantics {
     public static func sleepIntervals(
         from events: [ActivityEvent],
         within window: DateInterval,
-        extendOpenSleepThroughWindowEnd: Bool = false
+        awakeSamples: [SystemSample] = []
     ) -> [DateInterval] {
+        let awakeTimes = awakeSamples.map(\.timestamp).sorted()
+        var awakeIndex = 0
         var result: [DateInterval] = []
-        var sleepingSince: Date?
-
+        var pending: (start: Date, cycle: UUID)?
         for event in events.sorted(by: { $0.timestamp < $1.timestamp }) {
             switch event.type {
             case .sleep:
-                if sleepingSince == nil { sleepingSince = event.timestamp }
+                if let cycle = event.sleepCycleID {
+                    if pending?.cycle != cycle { pending = (event.timestamp, cycle) }
+                } else {
+                    pending = nil
+                }
             case .wake:
-                guard let start = sleepingSince else { continue }
-                appendIntersection(start: start, end: event.timestamp, window: window, to: &result)
-                sleepingSince = nil
+                defer { pending = nil }
+                guard let sleeping = pending, event.sleepCycleID == sleeping.cycle,
+                      event.timestamp > sleeping.start else { continue }
+                while awakeIndex < awakeTimes.count, awakeTimes[awakeIndex] <= sleeping.start { awakeIndex += 1 }
+                guard awakeIndex == awakeTimes.count || awakeTimes[awakeIndex] >= event.timestamp else { continue }
+                appendIntersection(start: sleeping.start, end: event.timestamp, window: window, to: &result)
             default:
                 continue
             }
-        }
-
-        if extendOpenSleepThroughWindowEnd, let start = sleepingSince {
-            appendIntersection(start: start, end: window.end, window: window, to: &result)
         }
         return result
     }

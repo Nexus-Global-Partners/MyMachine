@@ -32,6 +32,7 @@ swift build -c release --product DailyMac
 
 /usr/bin/codesign --force --deep --options runtime --timestamp=none --entitlements "Resources/DailyMac.entitlements" --sign - "$APP_DIR"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+"$PROJECT_DIR/scripts/verify-monitoring-bundle.sh" "$APP_DIR"
 
 /bin/rm -f "$APP_ARCHIVE"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$APP_ARCHIVE"

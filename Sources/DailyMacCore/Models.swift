@@ -491,14 +491,16 @@ public struct ActivityEvent: Identifiable, Codable, Equatable, Sendable {
     public let title: String
     public let explanation: String
     public let severity: EventSeverity
+    public let sleepCycleID: UUID?
 
-    public init(id: UUID = UUID(), timestamp: Date, type: ActivityEventType, title: String, explanation: String, severity: EventSeverity) {
+    public init(id: UUID = UUID(), timestamp: Date, type: ActivityEventType, title: String, explanation: String, severity: EventSeverity, sleepCycleID: UUID? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.type = type
         self.title = title
         self.explanation = explanation
         self.severity = severity
+        self.sleepCycleID = sleepCycleID
     }
 }
 
@@ -905,6 +907,11 @@ public struct MonitoringSettings: Codable, Equatable, Sendable {
     /// to decode without a migration.
     public var diagnosisDestination: DiagnosisDestination?
     public var diagnosisIncludeApplicationNames: Bool?
+    public var diagnosisNameConsentVersion: Int? = nil
+
+    public var diagnosisNamesAreAllowed: Bool {
+        diagnosisNameConsentVersion == 1 && diagnosisIncludeApplicationNames == true
+    }
 
     public static let `default` = MonitoringSettings(
         baseSamplingInterval: 15,
@@ -918,7 +925,7 @@ public struct MonitoringSettings: Codable, Equatable, Sendable {
         launchAtLoginPreference: nil,
         briefingNotificationsEnabled: nil,
         diagnosisDestination: .copyOnly,
-        diagnosisIncludeApplicationNames: true
+        diagnosisIncludeApplicationNames: false
     )
 }
 

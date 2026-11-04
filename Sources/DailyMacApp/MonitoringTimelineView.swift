@@ -129,7 +129,7 @@ struct MonitoringTimelineView: View, Equatable {
             endingAt: snapshot.interval.end
         )
 
-        let sleeps = TimelineSemantics.sleepIntervals(from: events, within: snapshot.interval)
+        let sleeps = TimelineSemantics.sleepIntervals(from: events, within: snapshot.interval, awakeSamples: orderedSamples)
         self.sleepIntervals = sleeps
         if presentation == .menuBar {
             // The compact popover never draws a battery lane. Avoid two full

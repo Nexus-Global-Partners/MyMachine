@@ -45,7 +45,6 @@ struct DailyMacValidation {
         await MachineReadingModeValidation.run(harness: harness)
         await MeasurementAccuracyValidation.run(harness: harness)
         await BatteryDischargeEstimateValidation.run(harness: harness)
-        await FanControlValidation.run(harness: harness)
 
         await harness.run("physical fan speed is bounded and never inferred from CPU load") {
             let stopped = try require(FanReading(index: 0, rpm: 0, maximumRPM: 5_000), "zero-RPM reading missing")
@@ -306,9 +305,10 @@ struct DailyMacValidation {
             ]
             let sleepStart = try moment(26, 2, 15)
             let wake = try moment(26, 8)
+            let cycle = UUID()
             let events = [
-                ActivityEvent(timestamp: sleepStart, type: .sleep, title: "Sleep", explanation: "Fixture", severity: .information),
-                ActivityEvent(timestamp: wake, type: .wake, title: "Wake", explanation: "Fixture", severity: .information)
+                ActivityEvent(timestamp: sleepStart, type: .sleep, title: "Sleep", explanation: "Fixture", severity: .information, sleepCycleID: cycle),
+                ActivityEvent(timestamp: wake, type: .wake, title: "Wake", explanation: "Fixture", severity: .information, sleepCycleID: cycle)
             ]
             let afterWake = TimelineSemantics.automaticDayWindow(
                 at: now, recentSamples: lateWork, sleepWakeEvents: events, calendar: calendar
@@ -640,7 +640,25 @@ struct DailyMacValidation {
             try harness.check(remaining.isEmpty, "stale telemetry reappeared after erase")
         }
 
-        await harness.run("erase retries a pinned WAL without deleting new samples") {
+        await harness.run("legacy named diagnosis setting requires fresh consent") {
+            var old = MonitoringSettings.default
+            old.diagnosisIncludeApplicationNames = true
+            let decoded = try JSONDecoder().decode(MonitoringSettings.self, from: JSONEncoder().encode(old))
+            try harness.check(!decoded.diagnosisNamesAreAllowed && !MonitoringSettings.default.diagnosisNamesAreAllowed,
+                              "legacy or default settings exposed names without consent")
+            old.diagnosisNameConsentVersion = 1
+            try harness.check(old.diagnosisNamesAreAllowed, "explicit name opt-in was not honored")
+        }
+
+        await harness.run("daily report never counts a zero-duration baseline as activity") {
+            let baseline = sample(duration: 0, cpu: 0)
+            let report = InsightEngine().makeReport(dayKey: DayBoundaries.key(for: baseline.timestamp), timezone: .current,
+                                                    samples: [baseline], processSamples: [], events: [])
+            try harness.check(report.activeDuration == 0 && report.idleDuration == 0 && report.applications.isEmpty,
+                              "an unavailable baseline became measured usage")
+        }
+
+        await harness.run("erase blocks writes during pinned WAL cleanup and permits new samples afterward") {
             let directory = temporaryDirectory(prefix: "DailyMacEraseWAL")
             defer { try? FileManager.default.removeItem(at: directory) }
             var original: SQLiteStore? = try SQLiteStore(directoryURL: directory)
@@ -669,12 +687,17 @@ struct DailyMacValidation {
             let oldBytes = try Data(contentsOf: wal)
             try harness.check(oldBytes.range(of: Data(sentinel.utf8)) != nil, "fixture failed to leave the old value in WAL")
             let newSample = sample(at: now.addingTimeInterval(60), app: "new sample")
-            try await store.save(sample: newSample, processes: [])
+            let acceptedEarly = try await store.save(sample: newSample, processes: [])
+            try harness.check(!acceptedEarly, "monitoring wrote new telemetry while erase remained pending")
             try harness.check(sqlite3_exec(reader, "ROLLBACK;", nil, nil, nil) == SQLITE_OK, "could not release reader")
             let cleaned = try await store.retryEraseCleanup()
             let stillPending = try await store.hasPendingEraseCleanup()
+            let acceptedAfter = try await store.save(sample: newSample, processes: [])
+            try harness.check(acceptedAfter, "monitoring could not resume after verified cleanup")
             let newRows = try await store.samples(from: .distantPast, to: .distantFuture)
             let newBytes = try Data(contentsOf: wal)
+            let databaseBytes = try Data(contentsOf: database)
+            try harness.check(databaseBytes.range(of: Data(sentinel.utf8)) == nil, "cleanup retained the pre-erase value in SQLite")
             try harness.check(cleaned && !stillPending, "cleanup was not verified after reader release")
             try harness.check(newRows.map(\.id) == [newSample.id], "cleanup retry removed newly collected data")
             try harness.check(newBytes.range(of: Data(sentinel.utf8)) == nil, "cleanup retained the pre-erase value")
@@ -1594,19 +1617,21 @@ struct DailyMacValidation {
         await harness.run("timeline pairs and clips only explicit completed sleep") {
             let start = Date(timeIntervalSince1970: 1_800_100_000)
             let interval = DateInterval(start: start, end: start.addingTimeInterval(120))
+            let firstCycle = UUID()
+            let secondCycle = UUID()
             let leadingSleep = ActivityEvent(
                 timestamp: start.addingTimeInterval(-60),
                 type: .sleep,
                 title: "Leading sleep",
                 explanation: "Explicit sleep.",
-                severity: .information
+                severity: .information, sleepCycleID: firstCycle
             )
             let firstWake = ActivityEvent(
                 timestamp: start.addingTimeInterval(30),
                 type: .wake,
                 title: "First wake",
                 explanation: "Explicit wake.",
-                severity: .information
+                severity: .information, sleepCycleID: firstCycle
             )
             let unrelated = ActivityEvent(
                 timestamp: start.addingTimeInterval(45),
@@ -1620,21 +1645,21 @@ struct DailyMacValidation {
                 type: .sleep,
                 title: "Second sleep",
                 explanation: "Explicit sleep.",
-                severity: .information
+                severity: .information, sleepCycleID: secondCycle
             )
             let duplicateSleep = ActivityEvent(
                 timestamp: start.addingTimeInterval(70),
                 type: .sleep,
                 title: "Duplicate sleep",
                 explanation: "Repeated transition.",
-                severity: .information
+                severity: .information, sleepCycleID: secondCycle
             )
             let secondWake = ActivityEvent(
                 timestamp: start.addingTimeInterval(90),
                 type: .wake,
                 title: "Second wake",
                 explanation: "Explicit wake.",
-                severity: .information
+                severity: .information, sleepCycleID: secondCycle
             )
             let unpairedSleep = ActivityEvent(
                 timestamp: start.addingTimeInterval(100),
@@ -1655,6 +1680,14 @@ struct DailyMacValidation {
                 ],
                 "timeline did not clip completed sleep pairs or extended an unpaired sleep by default"
             )
+            let awake = sample(at: start.addingTimeInterval(75))
+            let contradicted = TimelineSemantics.sleepIntervals(from: [secondSleep, secondWake], within: interval, awakeSamples: [awake])
+            try harness.check(contradicted.isEmpty, "a confirmed sleep band hid a measured awake sample")
+            let mismatched = TimelineSemantics.sleepIntervals(from: [leadingSleep, secondWake], within: interval)
+            try harness.check(mismatched.isEmpty, "an orphan sleep was paired with another cycle")
+            let legacyWake = ActivityEvent(timestamp: firstWake.timestamp, type: .wake, title: "Legacy", explanation: "", severity: .information)
+            try harness.check(TimelineSemantics.sleepIntervals(from: [leadingSleep, legacyWake], within: interval).isEmpty,
+                              "legacy wake confirmed a sleep cycle it could not prove")
         }
 
         await harness.run("timeline selection distinguishes sleep, observations, and gaps") {
@@ -2225,32 +2258,29 @@ struct DailyMacValidation {
             }
         }
 
-        await harness.run("corrupt database is preserved and recovered") {
+        await harness.run("corrupt database preserves pending erase for explicit recovery review") {
             let directory = temporaryDirectory(prefix: "DailyMacRecovery")
             defer { try? FileManager.default.removeItem(at: directory) }
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let database = directory.appendingPathComponent("DailyMac.sqlite")
+            let receipt = directory.appendingPathComponent(".erase-receipt")
+            try Data("v1:requested".utf8).write(to: receipt)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
             try Data("this is deliberately not a database".utf8).write(to: database)
-            let store = try SQLiteStore(directoryURL: directory)
-            try await store.save(sample: sample(), processes: [])
-            let recovery = try FileManager.default.contentsOfDirectory(atPath: directory.path).first { $0.hasPrefix("Recovery-") }
+            var opened: SQLiteStore? = try SQLiteStore(directoryURL: directory)
+            let archives = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            let recovery = archives.first { $0.hasPrefix("Recovery-") }
             try harness.check(recovery != nil, "corrupt database was not preserved")
-            let recoveredSamples = try await store.samples(from: .distantPast, to: .distantFuture)
-            try harness.check(recoveredSamples.count == 1, "fresh store was not usable after recovery")
-            if let recovery {
-                let recoveryURL = directory.appendingPathComponent(recovery, isDirectory: true)
-                try FileManager.default.setAttributes(
-                    [.modificationDate: Date(timeIntervalSince1970: 0)],
-                    ofItemAtPath: recoveryURL.path
-                )
-                var settings = MonitoringSettings.default
-                settings.rawRetentionDays = 1
-                try await store.performRetention(settings: settings, now: Date())
-                try harness.check(
-                    !FileManager.default.fileExists(atPath: recoveryURL.path),
-                    "expired recovery telemetry outlived raw retention"
-                )
-            }
+            opened = nil
+            let store = try SQLiteStore(directoryURL: directory)
+            let review = try await store.eraseRequiresRecoveryReview()
+            let retried = try await store.retryEraseCleanup()
+            let accepted = try await store.save(sample: sample(), processes: [])
+            try harness.check(opened == nil && review && !retried && !accepted, "restart hid the recovery copy or resumed collection")
+            let confirmed = try await store.eraseAllData()
+            let after = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            try harness.check(confirmed && !after.contains(".erase-receipt") && !after.contains(where: { $0.hasPrefix("Recovery-") }),
+                              "confirmed recovery erase did not remove the managed copies")
         }
 
         await harness.run("busy database is never mistaken for corruption") {
@@ -2312,6 +2342,38 @@ struct DailyMacValidation {
             try harness.check(failedAsExpected, "fault-injected report save unexpectedly succeeded")
             let remaining = try await store.samples(from: .distantPast, to: .distantFuture)
             try harness.check(remaining.count == 1 && remaining.first?.id == old.id, "raw sample was deleted after report finalization failed")
+        }
+
+        await harness.run("retention rejects unreadable rows and stale finalization") {
+            let directory = temporaryDirectory(prefix: "DailyMacRetentionRead")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = try SQLiteStore(directoryURL: directory)
+            let old = sample(at: Date().addingTimeInterval(-5 * 86_400))
+            try await store.save(sample: old, processes: [])
+            var connection: OpaquePointer?
+            guard sqlite3_open_v2(store.databaseURL.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+                  let connection else { throw ValidationFailure.failed("could not open retention fixture") }
+            defer { sqlite3_close(connection) }
+            try harness.check(sqlite3_exec(connection, "UPDATE system_samples SET category = 'unreadable-fixture';", nil, nil, nil) == SQLITE_OK,
+                              "could not create a malformed sample")
+            do {
+                try await RetentionCoordinator.finalizeThenRetain(store: store, settings: .default) {
+                    _ = try await store.samples(from: .distantPast, to: .distantFuture)
+                }
+                throw ValidationFailure.failed("partial read was treated as a complete report")
+            } catch is StoreError {}
+            let preserved = try await store.sampleTimestamps(before: .distantFuture)
+            try harness.check(preserved.count == 1, "raw history was deleted after a read failure")
+            try harness.check(sqlite3_exec(connection, "UPDATE system_samples SET category = 'Writing';", nil, nil, nil) == SQLITE_OK,
+                              "could not restore the sample category")
+            do {
+                try await RetentionCoordinator.finalizeThenRetain(store: store, settings: .default) {
+                    try await store.save(sample: sample(), processes: [])
+                }
+                throw ValidationFailure.failed("retention ignored a concurrent telemetry change")
+            } catch is StoreError {}
+            let stillPreserved = try await store.sampleTimestamps(before: Date().addingTimeInterval(-4 * 86_400))
+            try harness.check(stillPreserved.count == 1, "stale finalization removed older raw data")
         }
 
         await harness.run("idle cadence and retained day discovery stay accurate") {

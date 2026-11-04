@@ -69,13 +69,14 @@ enum HistoryValidation {
 
         await harness.run("daily sleep requires lifecycle evidence and never overlaps observed work") {
             let day = DayBoundaries.interval(for: "2026-09-01", timezone: utc)!
-            let sleep = ActivityEvent(timestamp: day.start.addingTimeInterval(600), type: .sleep, title: "Sleep", explanation: "Fixture", severity: .information)
-            let wake = ActivityEvent(timestamp: day.start.addingTimeInterval(3_600), type: .wake, title: "Wake", explanation: "Fixture", severity: .information)
+            let cycle = UUID()
+            let sleep = ActivityEvent(timestamp: day.start.addingTimeInterval(600), type: .sleep, title: "Sleep", explanation: "Fixture", severity: .information, sleepCycleID: cycle)
+            let wake = ActivityEvent(timestamp: day.start.addingTimeInterval(3_600), type: .wake, title: "Wake", explanation: "Fixture", severity: .information, sleepCycleID: cycle)
             let absent = MonitoringHistory.daySummaries(in: day, samples: [], reports: [], events: [sleep, wake], calendar: utcCalendar)[0]
             try harness.check(absent.source == .unavailable && absent.confirmedSleepDuration == 3_000 && absent.unobservedDuration == 83_400, "unknown day remainder became sleep")
             let observation = sample(day.start.addingTimeInterval(1_800), duration: 60, cpu: 20, gpu: 0)
             let observed = MonitoringHistory.daySummaries(in: day, samples: [observation], reports: [], events: [sleep, wake], calendar: utcCalendar)[0]
-            try harness.check(observed.confirmedSleepDuration == 2_940 && observed.observedDuration == 60 && observed.averageGPU == 0, "sleep contradicted observed work or zero GPU became missing")
+            try harness.check(observed.confirmedSleepDuration == 0 && observed.observedDuration == 60 && observed.averageGPU == 0, "sleep contradicted observed work or zero GPU became missing")
             let openSleep = MonitoringHistory.daySummaries(in: day, samples: [], reports: [], events: [sleep], calendar: utcCalendar)[0]
             try harness.check(openSleep.confirmedSleepDuration == 0, "unpaired sleep was extended over unknown history")
         }

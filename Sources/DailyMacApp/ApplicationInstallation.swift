@@ -7,7 +7,6 @@ enum ApplicationInstallation {
         guard Bundle.main.bundleIdentifier == expectedBundleIdentifier else { return false }
 
         let bundleURL = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL
-        if bundleURL.path == FanControlInstallation.appPath { return true }
         let applicationsURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
             .resolvingSymlinksInPath()
             .standardizedFileURL

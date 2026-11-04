@@ -68,7 +68,6 @@ struct InstrumentPanel: View {
             }
             thermalIndicator
             appList
-            FanControlStrip()
             Spacer(minLength: 0)
         }
         .frame(width: 214)
