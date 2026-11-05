@@ -44,6 +44,8 @@ swift build -c release --product DailyMac
   --exclude 'outputs' \
   --exclude 'work' \
   --exclude '.git' \
+  --exclude 'xcuserdata' \
+  --exclude '*.xcuserstate' \
   "$PROJECT_DIR/Package.swift" \
   "$PROJECT_DIR/.gitignore" \
   "$PROJECT_DIR/LICENSE" \
@@ -55,6 +57,9 @@ swift build -c release --product DailyMac
   "$PROJECT_DIR/PRIVACY.md" \
   "$PROJECT_DIR/.github" \
   "$PROJECT_DIR/Sources" \
+  "$PROJECT_DIR/Store" \
+  "$PROJECT_DIR/MyMachineStore.xcodeproj" \
+  "$PROJECT_DIR/Tests" \
   "$PROJECT_DIR/Resources" \
   "$PROJECT_DIR/scripts" \
   "$SOURCE_STAGE/MY-MACHINE-Source/"

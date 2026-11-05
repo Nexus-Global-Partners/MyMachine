@@ -80,3 +80,27 @@ jobs:
             outputs/SHA256SUMS-*.txt
           if-no-files-found: error
           retention-days: 7
+
+  build-and-audit-store-preview:
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Archive and audit the sandboxed Mac preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/MyMachine-Store-Preview.xcarchive"
+          xcodebuild -project MyMachineStore.xcodeproj -scheme MyMachineStore \
+            -configuration Release -destination 'generic/platform=macOS' \
+            -archivePath "$archive" -derivedDataPath "$RUNNER_TEMP/MyMachineStore" \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= -quiet archive
+          staged="$RUNNER_TEMP/StorePreview/MyMachine.app"
+          ditto --norsrc --noextattr "$archive/Products/Applications/MyMachine.app" "$staged"
+          scripts/verify-store-bundle.sh "$staged"
+
+      - name: Validate Store monitoring and history
+        run: scripts/validate-store.sh
