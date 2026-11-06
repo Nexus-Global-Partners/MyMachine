@@ -4,6 +4,8 @@ MY MACHINE is a native, local-first macOS background monitor that connects foreg
 
 Repository: [Nexus-Global-Partners/MyMachine](https://github.com/Nexus-Global-Partners/MyMachine) · [MIT license](LICENSE) · [Older binary releases](https://github.com/Nexus-Global-Partners/MyMachine/releases)
 
+The repository also contains a [separate sandboxed Mac App Store target](Store/README.md) for release preparation. The direct-download and source instructions below apply to the Swift package edition.
+
 ## Install from source with your own agent
 
 This is the current way to try the latest version on another Mac. Paste this into a coding agent running on that Mac:

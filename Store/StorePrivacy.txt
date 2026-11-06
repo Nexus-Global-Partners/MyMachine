@@ -1,0 +1,7 @@
+MyMachine records system readings after you choose Start Monitoring. It stores timestamps, total CPU utilization, memory use and capacity, battery level and charging state when available, thermal pressure, and observed sleep and wake times.
+
+History stays in the app’s private container on your Mac. The app has no account, advertising, analytics, or telemetry upload. It does not record app names, keystrokes, pointer activity, files, screen content, or network destinations.
+
+Pause Monitoring stops new readings. Launch at Login is optional. Monitoring resumes at the next launch only if you left it enabled. The app retains three days of history during monitoring and removes older history when next opened.
+
+Delete Local History pauses recording and removes the readings and managed recovery copies in the app’s container. Export History saves a copy to a location you choose. You control exported files and any copies you share.

@@ -1,22 +1,5 @@
 import Foundation
 
-/// Small, content-free measurements retained with a daily report after detailed
-/// samples expire. Optional on DailyReport so previously saved days stay readable.
-public struct DailyResourceSummary: Codable, Equatable, Sendable {
-    public let observedDuration: TimeInterval
-    public let humanActiveDuration: TimeInterval
-    public let backgroundDuration: TimeInterval
-    public let physicalInputDuration: TimeInterval
-    public let averageCPU: Double?
-    public let peakCPU: Double?
-    public let averageGPU: Double?
-    public let peakGPU: Double?
-    public let gpuObservedDuration: TimeInterval
-    public let elevatedMemoryDuration: TimeInterval
-    public let highMemoryDuration: TimeInterval
-    public let seriousThermalDuration: TimeInterval
-}
-
 public struct MonitoringDaySummary: Identifiable, Equatable, Sendable {
     public enum Source: String, Equatable, Sendable {
         case detail

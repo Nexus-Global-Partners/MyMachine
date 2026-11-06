@@ -1,0 +1,286 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		9D0926A8683C526D83E3BFC2 /* MyMachineStoreApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ECFD98C9DFF4E4783BCBB77 /* MyMachineStoreApp.swift */; };
+		5B4DE93EEE89D98C755B8CBD /* StoreHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83D4B84C380A3DB102170653 /* StoreHistory.swift */; };
+		BE410AFC654895170F012337 /* StoreMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D67B8B2FDE0F0D7DD68FD6E /* StoreMonitor.swift */; };
+		54A7F565A85E8ABC312634B2 /* BatteryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEEE111600A6C4673CBC0722 /* BatteryTelemetry.swift */; };
+		B81EC0EE51D7ACD99B346FBC /* LocalEraseReceipt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38578208B83D7210DAB18411 /* LocalEraseReceipt.swift */; };
+		87E15900891BCE62456E76C7 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35B40BA69EA06DEC0687AEAB /* Models.swift */; };
+		F300221C2B5AEBB7DE03F467 /* RetentionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A832ECB11E09A747B75C3AE /* RetentionCoordinator.swift */; };
+		971053E2AC3E34994F99BCD8 /* SQLiteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BE6A784C71FE946799B3377 /* SQLiteStore.swift */; };
+		53EF3F7E18B862949EDFA693 /* SystemMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB616E0716703CCF56F56165 /* SystemMetrics.swift */; };
+		A5C36DB0B5A67F112F2A37DD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 32C8468A1D521D39B51436A3 /* Assets.xcassets */; };
+		F410656920099754E6091A61 /* StorePrivacy.txt in Resources */ = {isa = PBXBuildFile; fileRef = 862BB71F12E24C6FAB1C1D1F /* StorePrivacy.txt */; };
+		907F742C125B6A42F1B39D99 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 505116D12ECB64C0CA056DE3 /* LICENSE */; };
+		AB20407555150AF53E53624E /* ApplicationCategorizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F050280A25011E3AD4DFE4EC /* ApplicationCategorizer.swift */; };
+		D9B02C96C6D202242A5D4662 /* CoverageEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3EB01A7C789A6AAA0E38CA7 /* CoverageEvaluator.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0ECFD98C9DFF4E4783BCBB77 /* MyMachineStoreApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyMachineStoreApp.swift; sourceTree = "<group>"; };
+		83D4B84C380A3DB102170653 /* StoreHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreHistory.swift; sourceTree = "<group>"; };
+		0D67B8B2FDE0F0D7DD68FD6E /* StoreMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreMonitor.swift; sourceTree = "<group>"; };
+		AEEE111600A6C4673CBC0722 /* BatteryTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryTelemetry.swift; sourceTree = "<group>"; };
+		38578208B83D7210DAB18411 /* LocalEraseReceipt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalEraseReceipt.swift; sourceTree = "<group>"; };
+		35B40BA69EA06DEC0687AEAB /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		7A832ECB11E09A747B75C3AE /* RetentionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetentionCoordinator.swift; sourceTree = "<group>"; };
+		5BE6A784C71FE946799B3377 /* SQLiteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteStore.swift; sourceTree = "<group>"; };
+		AB616E0716703CCF56F56165 /* SystemMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemMetrics.swift; sourceTree = "<group>"; };
+		32C8468A1D521D39B51436A3 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		862BB71F12E24C6FAB1C1D1F /* StorePrivacy.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = StorePrivacy.txt; sourceTree = "<group>"; };
+		505116D12ECB64C0CA056DE3 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
+		8FD4BA88661BB0E2DEAC2455 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F2876BB13DFE5CF4486AC794 /* Store.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Store.entitlements; sourceTree = "<group>"; };
+		65C9EC2DF12BCA3E79997014 /* MyMachine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyMachine.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F050280A25011E3AD4DFE4EC /* ApplicationCategorizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationCategorizer.swift; sourceTree = "<group>"; };
+		B3EB01A7C789A6AAA0E38CA7 /* CoverageEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageEvaluator.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		B7043A50E15FA6D26322F81E /* Project */ = {
+			isa = PBXGroup;
+			children = (
+				9143D3604D1098970F30033E /* Store app */,
+				FA6D46047884D35F21D8A783 /* Shared core */,
+				20C9AE91776EC32CCB1C342D /* Store resources */,
+				505116D12ECB64C0CA056DE3 /* LICENSE */,
+				827E14B537683A823843ADF7 /* Products */,
+			);
+			name = "Project";
+			sourceTree = "<group>";
+		};
+		9143D3604D1098970F30033E /* Store app */ = {
+			isa = PBXGroup;
+			children = (
+				0ECFD98C9DFF4E4783BCBB77 /* MyMachineStoreApp.swift */,
+				83D4B84C380A3DB102170653 /* StoreHistory.swift */,
+				0D67B8B2FDE0F0D7DD68FD6E /* StoreMonitor.swift */,
+			);
+			name = "Store app";
+			path = "Sources/MyMachineStore";
+			sourceTree = "<group>";
+		};
+		FA6D46047884D35F21D8A783 /* Shared core */ = {
+			isa = PBXGroup;
+			children = (
+				F050280A25011E3AD4DFE4EC /* ApplicationCategorizer.swift */,
+				B3EB01A7C789A6AAA0E38CA7 /* CoverageEvaluator.swift */,
+				AEEE111600A6C4673CBC0722 /* BatteryTelemetry.swift */,
+				38578208B83D7210DAB18411 /* LocalEraseReceipt.swift */,
+				35B40BA69EA06DEC0687AEAB /* Models.swift */,
+				7A832ECB11E09A747B75C3AE /* RetentionCoordinator.swift */,
+				5BE6A784C71FE946799B3377 /* SQLiteStore.swift */,
+				AB616E0716703CCF56F56165 /* SystemMetrics.swift */,
+			);
+			name = "Shared core";
+			path = "Sources/DailyMacCore";
+			sourceTree = "<group>";
+		};
+		20C9AE91776EC32CCB1C342D /* Store resources */ = {
+			isa = PBXGroup;
+			children = (
+				32C8468A1D521D39B51436A3 /* Assets.xcassets */,
+				862BB71F12E24C6FAB1C1D1F /* StorePrivacy.txt */,
+				8FD4BA88661BB0E2DEAC2455 /* Info.plist */,
+				F2876BB13DFE5CF4486AC794 /* Store.entitlements */,
+			);
+			name = "Store resources";
+			path = "Store";
+			sourceTree = "<group>";
+		};
+		827E14B537683A823843ADF7 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				65C9EC2DF12BCA3E79997014 /* MyMachine.app */,
+			);
+			name = "Products";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8C9CE99EE3CB2ABC47B2B21D /* MyMachineStore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0FF900E38ADCBF89294F0A76 /* Target configs */;
+			buildPhases = (
+				4C078FE1A8B88E81F2C2D6C8 /* Sources */,
+				758945C0A2F86D93497E853A /* Frameworks */,
+				D8588674FA877A7FC492AAC4 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = MyMachineStore;
+			productName = MyMachine;
+			productReference = 65C9EC2DF12BCA3E79997014 /* MyMachine.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		2907E52080EFF8F69DD4663A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1640;
+				TargetAttributes = {
+					8C9CE99EE3CB2ABC47B2B21D = {CreatedOnToolsVersion = 16.4; };
+				};
+			};
+			buildConfigurationList = 2A60D4AA5D92E8519FF695D8 /* Project configs */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = B7043A50E15FA6D26322F81E /* Project */;
+			productRefGroup = 827E14B537683A823843ADF7 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (8C9CE99EE3CB2ABC47B2B21D /* MyMachineStore */, );
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4C078FE1A8B88E81F2C2D6C8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9D0926A8683C526D83E3BFC2 /* MyMachineStoreApp.swift in Sources */,
+				5B4DE93EEE89D98C755B8CBD /* StoreHistory.swift in Sources */,
+				BE410AFC654895170F012337 /* StoreMonitor.swift in Sources */,
+				AB20407555150AF53E53624E /* ApplicationCategorizer.swift in Sources */,
+				D9B02C96C6D202242A5D4662 /* CoverageEvaluator.swift in Sources */,
+				54A7F565A85E8ABC312634B2 /* BatteryTelemetry.swift in Sources */,
+				B81EC0EE51D7ACD99B346FBC /* LocalEraseReceipt.swift in Sources */,
+				87E15900891BCE62456E76C7 /* Models.swift in Sources */,
+				F300221C2B5AEBB7DE03F467 /* RetentionCoordinator.swift in Sources */,
+				971053E2AC3E34994F99BCD8 /* SQLiteStore.swift in Sources */,
+				53EF3F7E18B862949EDFA693 /* SystemMetrics.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		758945C0A2F86D93497E853A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D8588674FA877A7FC492AAC4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5C36DB0B5A67F112F2A37DD /* Assets.xcassets in Resources */,
+				F410656920099754E6091A61 /* StorePrivacy.txt in Resources */,
+				907F742C125B6A42F1B39D99 /* LICENSE in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1DAAFCCEAD439F9917793FE7 /* Project Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		D22C0C8154AC37B689304B17 /* Project Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		406FD2790659ECA3314F41E5 /* Target Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Store/Store.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 39;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = read-write;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Store/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MARKETING_VERSION = 1.4.0;
+				MYMACHINE_PRIVACY_URL = "";
+				MYMACHINE_SUPPORT_URL = "";
+				OTHER_LDFLAGS = "$(inherited) -lsqlite3";
+				PRODUCT_BUNDLE_IDENTIFIER = local.mymachine.storepreview;
+				PRODUCT_MODULE_NAME = MyMachineStore;
+				PRODUCT_NAME = MyMachine;
+			};
+			name = Debug;
+		};
+		8CA98995D85C691B2AD6B8BF /* Target Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Store/Store.entitlements;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 39;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = read-write;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Store/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MARKETING_VERSION = 1.4.0;
+				MYMACHINE_PRIVACY_URL = "";
+				MYMACHINE_SUPPORT_URL = "";
+				OTHER_LDFLAGS = "$(inherited) -lsqlite3";
+				PRODUCT_BUNDLE_IDENTIFIER = local.mymachine.storepreview;
+				PRODUCT_MODULE_NAME = MyMachineStore;
+				PRODUCT_NAME = MyMachine;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2A60D4AA5D92E8519FF695D8 /* Project configs */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1DAAFCCEAD439F9917793FE7 /* Project Debug */,
+				D22C0C8154AC37B689304B17 /* Project Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0FF900E38ADCBF89294F0A76 /* Target configs */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				406FD2790659ECA3314F41E5 /* Target Debug */,
+				8CA98995D85C691B2AD6B8BF /* Target Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 2907E52080EFF8F69DD4663A /* Project object */;
+}
