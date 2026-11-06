@@ -1,6 +1,7 @@
 import AppKit
 import DailyMacCore
 import Foundation
+import OSLog
 import ServiceManagement
 import SwiftUI
 
@@ -190,9 +191,16 @@ final class AppModel: ObservableObject {
     private var lastSampleTimestamp: Date?
     private var needsFreshBaseline = true
     private var collectionReady = false
+    private var sleepCycleID: UUID?
     private var notificationConfigurationGeneration = 0
     private var dataEpoch = 0
-    private var dataEraseInProgress = false
+    @Published private(set) var dataEraseInProgress = false
+    @Published private(set) var eraseCleanupPending = false
+    @Published private(set) var eraseRecoveryReview = false
+    private var storeHistoryChecked = false
+    private var historyUnavailable: Bool { !storeHistoryChecked || dataEraseInProgress || eraseCleanupPending }
+    private var eraseCleanupTask: Task<Void, Never>?
+    private static let eraseLog = Logger(subsystem: "local.mymachine.app", category: "EraseCleanup")
     private var shouldResumeAfterDataErase = false
 
     var monitoringSnapshot: MonitoringSnapshot? { monitoringContent?.snapshot }
@@ -296,6 +304,7 @@ final class AppModel: ObservableObject {
 
     deinit {
         monitorTask?.cancel()
+        eraseCleanupTask?.cancel()
         menuBarRefreshTask?.cancel()
         menuBarLiveRefreshTask?.cancel()
         diagnosisTask?.cancel()
@@ -308,6 +317,8 @@ final class AppModel: ObservableObject {
     }
 
     func startMonitoring() {
+        guard collectionReady, !historyUnavailable else { return }
+        sleepCycleID = nil
         settings.isPaused = false
         settings.pauseUntil = nil
         persistCriticalPreferencesSynchronously()
@@ -319,6 +330,7 @@ final class AppModel: ObservableObject {
     }
 
     func pauseIndefinitely() {
+        sleepCycleID = nil
         settings.isPaused = true
         settings.pauseUntil = nil
         persistCriticalPreferencesSynchronously()
@@ -330,6 +342,7 @@ final class AppModel: ObservableObject {
     }
 
     func pauseForOneHour() {
+        sleepCycleID = nil
         settings.isPaused = false
         settings.pauseUntil = Date().addingTimeInterval(3_600)
         persistCriticalPreferencesSynchronously()
@@ -341,6 +354,7 @@ final class AppModel: ObservableObject {
     }
 
     func pauseUntilTomorrow() {
+        sleepCycleID = nil
         settings.isPaused = false
         let calendar = Calendar.autoupdatingCurrent
         let next = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date())) ?? Date().addingTimeInterval(86_400)
@@ -380,12 +394,13 @@ final class AppModel: ObservableObject {
     }
 
     func exportToday() {
-        guard let report = todayReport else { return }
+        guard !historyUnavailable, let report = todayReport else { return }
+        let epoch = dataEpoch
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "MY MACHINE \(report.dayKey).md"
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url, epoch == dataEpoch, !historyUnavailable else { return }
         do {
             try ReportRenderer.markdown(report).write(to: url, atomically: true, encoding: .utf8)
         } catch {
@@ -395,7 +410,7 @@ final class AppModel: ObservableObject {
 
     func diagnoseMachine() {
         guard !diagnosisState.isPreparing else { return }
-        guard let store, !dataEraseInProgress else {
+        guard let store, !historyUnavailable else {
             diagnosisState = .failed("Monitoring history is not available just now. Nothing was copied or sent.")
             return
         }
@@ -406,7 +421,7 @@ final class AppModel: ObservableObject {
         let endingAt = Date()
         let interval = MonitoringRange.twentyFourHours.interval(endingAt: endingAt)
         let destination = settings.diagnosisDestination ?? .copyOnly
-        let includeNames = settings.diagnosisIncludeApplicationNames != false
+        let includeNames = settings.diagnosisNamesAreAllowed
         let currentTrend7 = trend7
         let currentTrend30 = trend30
         diagnosisFeedbackTask?.cancel()
@@ -422,7 +437,7 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled,
                       generation == self.diagnosisGeneration,
                       diagnosisEpoch == self.dataEpoch,
-                      !self.dataEraseInProgress else { return }
+                      !self.historyUnavailable else { return }
 
                 let renderTask = Task.detached(priority: .userInitiated) {
                     let snapshot = InsightEngine().makeMonitoringSnapshot(
@@ -448,7 +463,7 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled,
                       generation == self.diagnosisGeneration,
                       diagnosisEpoch == self.dataEpoch,
-                      !self.dataEraseInProgress else { return }
+                      !self.historyUnavailable else { return }
 
                 let pasteboard = NSPasteboard.general
                 pasteboard.prepareForNewContents(with: .currentHostOnly)
@@ -482,7 +497,8 @@ final class AppModel: ObservableObject {
     }
 
     func eraseAllData() {
-        guard let store else { return }
+        guard let store, !dataEraseInProgress else { return }
+        eraseCleanupTask?.cancel()
         dataEpoch &+= 1
         diagnosisGeneration &+= 1
         diagnosisTask?.cancel()
@@ -493,6 +509,7 @@ final class AppModel: ObservableObject {
         diagnosisState = .idle
         let eraseEpoch = dataEpoch
         dataEraseInProgress = true
+        sleepCycleID = nil
         shouldResumeAfterDataErase = shouldResumeAfterDataErase || monitorTask != nil
         stopMonitorLoop()
         prepareForCollectionGap()
@@ -500,23 +517,77 @@ final class AppModel: ObservableObject {
         clearPublishedHistory()
         Task {
             do {
-                try await store.eraseAllData()
+                let cleaned = try await store.eraseAllData()
                 guard eraseEpoch == dataEpoch else { return }
-                databaseSize = await store.databaseSizeBytes()
-                detector.resetAfterGap()
-                await sampler.resetDeltas()
-                dataEraseInProgress = false
-                let shouldResume = shouldResumeAfterDataErase
-                shouldResumeAfterDataErase = false
-                if shouldResume { beginLoopIfNeeded() }
-            } catch {
-                if eraseEpoch == dataEpoch {
+                eraseRecoveryReview = false
+                if cleaned { await finishErase() }
+                else {
+                    eraseCleanupPending = true
                     dataEraseInProgress = false
-                    let shouldResume = shouldResumeAfterDataErase
-                    shouldResumeAfterDataErase = false
-                    if shouldResume { beginLoopIfNeeded() }
+                    collectionState = .paused
+                    scheduleEraseCleanup()
                 }
-                await show(error)
+            } catch {
+                // Unknown means pending. Never resume on an uncertain erase.
+                eraseCleanupPending = true
+                let knownPending = (try? await store.hasPendingEraseCleanup()) == true
+                let needsReview = (try? await store.eraseRequiresRecoveryReview()) != false
+                eraseRecoveryReview = !knownPending || needsReview
+                dataEraseInProgress = false
+                collectionState = .paused
+                errorMessage = "MY MACHINE could not verify deletion. Monitoring is paused. Check Local data in Settings and try again."
+            }
+        }
+    }
+
+    private func finishErase() async {
+        guard let store else { return }
+        let epoch = dataEpoch
+        let size = await store.databaseSizeBytes()
+        await sampler.resetDeltas()
+        guard epoch == dataEpoch else { return }
+        databaseSize = size
+        detector.resetAfterGap()
+        storeHistoryChecked = true
+        dataEraseInProgress = false
+        eraseRecoveryReview = false
+        eraseCleanupPending = false
+        let shouldResume = shouldResumeAfterDataErase
+        shouldResumeAfterDataErase = false
+        if !collectionReady {
+            await bootstrap()
+        } else {
+            collectionState = shouldResume && !isCurrentlyPaused ? .monitoring : .paused
+            if shouldResume, !settings.isPaused { beginLoopIfNeeded() }
+        }
+    }
+
+    func retryEraseCleanup() {
+        guard eraseCleanupPending, !eraseRecoveryReview, !dataEraseInProgress else { return }
+        scheduleEraseCleanup(immediately: true)
+    }
+
+    private func scheduleEraseCleanup(immediately: Bool = false) {
+        guard let store else { return }
+        eraseCleanupTask?.cancel()
+        let epoch = dataEpoch
+        let delays = immediately ? [0, 1, 2, 4, 8, 16] : [1, 2, 4, 8, 16]
+        eraseCleanupTask = Task { [weak self] in
+            for delay in delays {
+                do { try await Task.sleep(for: .seconds(delay)) }
+                catch { return }
+                guard let self, !Task.isCancelled, self.dataEpoch == epoch else { return }
+                let cleaned: Bool
+                do { cleaned = try await store.retryEraseCleanup() }
+                catch {
+                    Self.eraseLog.error("Local erase checkpoint failed. Cleanup remains pending.")
+                    continue
+                }
+                guard !Task.isCancelled, self.dataEpoch == epoch else { return }
+                if cleaned {
+                    await self.finishErase()
+                    return
+                }
             }
         }
     }
@@ -730,7 +801,7 @@ final class AppModel: ObservableObject {
     /// Find actual measured coverage beyond the loaded graph buffer. The sleep
     /// boundary only chooses a search direction; it never supplies fake data.
     func jumpMenuBarToRecordedActivity(from date: Date, direction: Int) {
-        guard direction == -1 || direction == 1, let store, !dataEraseInProgress,
+        guard direction == -1 || direction == 1, let store, !historyUnavailable,
               let window = menuBarPannedInterval ?? menuBarMonitoringContent?.snapshot.interval else { return }
         let bounds = menuBarNavigationBounds
         let boundary = min(bounds.end, max(bounds.start, date))
@@ -748,12 +819,12 @@ final class AppModel: ObservableObject {
             do {
                 let dates = try await store.recordedSampleTimestamps(in: search, direction: direction)
                 guard generation == self.menuBarRefreshGeneration, epoch == self.dataEpoch,
-                      !self.dataEraseInProgress else { return }
+                      !self.historyUnavailable else { return }
                 var destination: Date?
                 for candidate in dates {
                     let samples = try await store.samples(in: DateInterval(start: candidate.addingTimeInterval(-0.001), end: candidate))
                     guard generation == self.menuBarRefreshGeneration, epoch == self.dataEpoch,
-                          !self.dataEraseInProgress else { return }
+                          !self.historyUnavailable else { return }
                     if let sample = samples.first(where: { $0.timestamp == candidate && $0.duration.isFinite && $0.samplingInterval.isFinite }),
                        let coverage = TimelineSemantics.observedInterval(for: sample, within: bounds) {
                         destination = coverage.start.addingTimeInterval(coverage.duration / 2)
@@ -853,21 +924,42 @@ final class AppModel: ObservableObject {
         do {
             settings = try await store.loadSettings()
             restoreCriticalPreferencesIfPresent()
-            latestSystem = try await store.latestSample()
-            lastSampleTimestamp = latestSystem?.timestamp
-            lastUpdated = latestSystem?.timestamp
-            recentSystemSamples = Array(try await store.samples(
-                in: DateInterval(start: Date().addingTimeInterval(-180), end: Date())
-            ).suffix(32))
-            let readingWindow = DateInterval(start: Date().addingTimeInterval(-14400), end: Date())
-            readingModeSamples = try await store.samples(in: readingWindow)
-            batteryDischargeEstimate = BatteryDischargeEstimate.estimate(samples: readingModeSamples)
-            readingModeAppCache = try await store.appResourceSamples(in: readingWindow)
-            if let latestAppTime = readingModeAppCache.map(\.timestamp).max() {
-                liveAppResources = readingModeAppCache.filter { $0.timestamp == latestAppTime }
+            let epoch = dataEpoch
+            let pending = try await store.hasPendingEraseCleanup()
+            guard epoch == dataEpoch, !dataEraseInProgress else { return }
+            if pending {
+                eraseCleanupPending = true
+                let needsReview = try await store.eraseRequiresRecoveryReview()
+                guard epoch == dataEpoch, !dataEraseInProgress else { return }
+                eraseRecoveryReview = needsReview
+                collectionState = .paused
+                if !eraseRecoveryReview { scheduleEraseCleanup(immediately: true) }
+                return
             }
-            refreshReadingModeSnapshot()
-            processImpacts = try await store.latestProcessImpacts()
+            storeHistoryChecked = true
+            let canPublish = { self.dataEpoch == epoch && !self.historyUnavailable }
+            let latest = try await store.latestSample()
+            if canPublish() {
+                latestSystem = latest
+                lastSampleTimestamp = latest?.timestamp
+                lastUpdated = latest?.timestamp
+            }
+            let recent = try await store.samples(in: DateInterval(start: Date().addingTimeInterval(-180), end: Date()))
+            if canPublish() { recentSystemSamples = Array(recent.suffix(32)) }
+            let readingWindow = DateInterval(start: Date().addingTimeInterval(-14400), end: Date())
+            let readingSamples = try await store.samples(in: readingWindow)
+            let readingApps = try await store.appResourceSamples(in: readingWindow)
+            if canPublish() {
+                readingModeSamples = readingSamples
+                batteryDischargeEstimate = BatteryDischargeEstimate.estimate(samples: readingSamples)
+                readingModeAppCache = readingApps
+                if let latestAppTime = readingApps.map(\.timestamp).max() {
+                    liveAppResources = readingApps.filter { $0.timestamp == latestAppTime }
+                }
+                refreshReadingModeSnapshot()
+            }
+            let impacts = try await store.latestProcessImpacts()
+            if canPublish() { processImpacts = impacts }
 
             // Warm the small one-hour panel first so the menu-bar experience is
             // useful immediately, independent of report maintenance below.
@@ -880,11 +972,13 @@ final class AppModel: ObservableObject {
             lastRetentionDate = Date()
             try await refreshTodayReport(force: true)
             databaseSize = await store.databaseSizeBytes()
+            guard canPublish() else { return }
             collectionReady = true
             persistCriticalPreferencesSynchronously()
             collectionState = isCurrentlyPaused ? .paused : .monitoring
             attemptLoginRegistrationIfAppropriate()
-            if !settings.isPaused { beginLoopIfNeeded() }
+            if dataEraseInProgress { shouldResumeAfterDataErase = !settings.isPaused }
+            else if !settings.isPaused { beginLoopIfNeeded() }
             if settings.briefingNotificationsEnabled != false {
                 Task { await self.configureBriefingNotifications() }
             } else {
@@ -896,7 +990,7 @@ final class AppModel: ObservableObject {
     }
 
     private func beginLoopIfNeeded() {
-        guard monitorTask == nil, store != nil else { return }
+        guard monitorTask == nil, store != nil, collectionReady, !historyUnavailable else { return }
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -966,7 +1060,7 @@ final class AppModel: ObservableObject {
     }
 
     private func handle(_ result: TelemetryResult) async {
-        guard let store, !dataEraseInProgress else { return }
+        guard let store, !historyUnavailable else { return }
         let sampleEpoch = dataEpoch
         var events: [ActivityEvent] = []
         if let previous = lastSampleTimestamp {
@@ -985,7 +1079,7 @@ final class AppModel: ObservableObject {
         events.append(contentsOf: detector.observe(result.system))
         do {
             let storeGeneration = await store.currentDataGeneration()
-            guard sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
+            guard sampleEpoch == dataEpoch, !historyUnavailable else { return }
             let saved = try await store.save(
                 sample: result.system,
                 processes: result.processes,
@@ -993,7 +1087,7 @@ final class AppModel: ObservableObject {
                 events: events,
                 ifDataGeneration: storeGeneration
             )
-            guard saved, sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
+            guard saved, sampleEpoch == dataEpoch, !historyUnavailable else { return }
             retainRecentSystemSample(result.system)
             latestSystem = result.system
             // The header follows saved readings, not the two-minute report cache.
@@ -1017,7 +1111,7 @@ final class AppModel: ObservableObject {
             }
             if !result.processes.isEmpty {
                 let refreshedImpacts = try await store.latestProcessImpacts()
-                guard sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
+                guard sampleEpoch == dataEpoch, !historyUnavailable else { return }
                 processImpacts = refreshedImpacts
             }
             let newDay = DayBoundaries.key(for: result.system.timestamp)
@@ -1036,7 +1130,7 @@ final class AppModel: ObservableObject {
                 lastRetentionDate = Date()
             }
             let refreshedDatabaseSize = await store.databaseSizeBytes()
-            guard sampleEpoch == dataEpoch, !dataEraseInProgress else { return }
+            guard sampleEpoch == dataEpoch, !historyUnavailable else { return }
             databaseSize = refreshedDatabaseSize
         } catch {
             await show(error)
@@ -1050,7 +1144,7 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshMonitoring(force: Bool, endingAt now: Date = Date()) async throws {
-        guard store != nil, !dataEraseInProgress else { return }
+        guard store != nil, !historyUnavailable else { return }
         if !force, let lastMonitoringRefresh, now.timeIntervalSince(lastMonitoringRefresh) < 120 { return }
 
         monitoringRefreshGeneration &+= 1
@@ -1069,7 +1163,7 @@ final class AppModel: ObservableObject {
 
         guard generation == monitoringRefreshGeneration,
               refreshEpoch == dataEpoch,
-              !dataEraseInProgress,
+              !historyUnavailable,
               range == monitoringRange else { return }
         monitoringContent = content
         lastMonitoringRefresh = now
@@ -1173,7 +1267,7 @@ final class AppModel: ObservableObject {
     private func beginMenuBarRefreshIfNeeded(endingAt now: Date, showProgress: Bool = true) -> Task<Void, Never>? {
         guard !menuBarIsPanning else { return nil }
         if let menuBarRefreshTask { return menuBarRefreshTask }
-        guard let store, !dataEraseInProgress else { return nil }
+        guard let store, !historyUnavailable else { return nil }
 
         menuBarRefreshGeneration &+= 1
         let generation = menuBarRefreshGeneration
@@ -1229,7 +1323,7 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled,
                       generation == self.menuBarRefreshGeneration,
                       refreshEpoch == self.dataEpoch,
-                      !self.dataEraseInProgress,
+                      !self.historyUnavailable,
                       requestedPreference == self.menuBarMonitoringRangePreference,
                       requestedHistoryEnd == self.menuBarHistoryEnd,
                       requestedPannedInterval == self.menuBarPannedInterval,
@@ -1254,20 +1348,24 @@ final class AppModel: ObservableObject {
         return task
     }
 
-    private func generateReport(dayKey: String, publishAsToday: Bool) async throws {
-        guard let store, let interval = DayBoundaries.interval(for: dayKey), !dataEraseInProgress else { return }
+    private func generateReport(dayKey: String, publishAsToday: Bool,
+                                timezone: TimeZone = .current, expectedSampleCount: Int? = nil) async throws {
+        guard let store, let interval = DayBoundaries.interval(for: dayKey, timezone: timezone), !historyUnavailable else { return }
         let reportEpoch = dataEpoch
         let storeGeneration = await store.currentDataGeneration()
-        guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
+        guard reportEpoch == dataEpoch, !historyUnavailable else { return }
         let samples = try await store.samples(from: interval.start, to: interval.end)
+        if let expectedSampleCount, samples.count != expectedSampleCount {
+            throw StoreError.statement("Report input changed before finalization.")
+        }
         let processes = try await store.processSamples(from: interval.start, to: interval.end)
         let events = try await store.events(from: interval.start, to: interval.end)
         let history = try await store.reports(limit: 365).filter { $0.dayKey != dayKey }
-        guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
+        guard reportEpoch == dataEpoch, !historyUnavailable else { return }
         let report = await Task.detached(priority: .utility) {
             InsightEngine().makeReport(
                 dayKey: dayKey,
-                timezone: .autoupdatingCurrent,
+                timezone: timezone,
                 samples: samples,
                 processSamples: processes,
                 events: events,
@@ -1278,7 +1376,7 @@ final class AppModel: ObservableObject {
             let saved = try await store.save(report: report, ifDataGeneration: storeGeneration)
             guard saved else { return }
         }
-        guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
+        guard reportEpoch == dataEpoch, !historyUnavailable else { return }
         if publishAsToday {
             todayReport = report
             refreshActivityTotals(adding: samples + recentSystemSamples, at: Date())
@@ -1286,11 +1384,11 @@ final class AppModel: ObservableObject {
             lastReportRefresh = Date()
             if notificationDeliveryEnabled {
                 await NotificationCoordinator.shared.refreshNotifications(for: report)
-                guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
+                guard reportEpoch == dataEpoch, !historyUnavailable else { return }
             }
         }
         var all = try await store.reports(limit: 365)
-        guard reportEpoch == dataEpoch, !dataEraseInProgress else { return }
+        guard reportEpoch == dataEpoch, !historyUnavailable else { return }
         if publishAsToday, samples.isEmpty { all.insert(report, at: 0) }
         reports = all
         let completed = all.filter { $0.dayKey != DayBoundaries.key(for: Date()) }
@@ -1300,12 +1398,15 @@ final class AppModel: ObservableObject {
 
     private func finalizeUnreportedDays() async throws {
         guard let store else { return }
-        let startOfToday = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+        let timezone = TimeZone.current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timezone
+        let startOfToday = calendar.startOfDay(for: Date())
         let timestamps = try await store.sampleTimestamps(before: startOfToday)
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .autoupdatingCurrent
+        formatter.timeZone = timezone
         formatter.dateFormat = "yyyy-MM-dd"
         var newestByKey: [String: Date] = [:]
         var countByKey: [String: Int] = [:]
@@ -1315,19 +1416,23 @@ final class AppModel: ObservableObject {
             countByKey[key, default: 0] += 1
         }
         for key in newestByKey.keys.sorted() {
-            if let existing = try? await store.report(dayKey: key) {
+            if let existing = try await store.report(dayKey: key) {
                 // Expiring raw history must never replace a fuller retained
                 // report with a partial day. Enrich older reports only while
                 // the complete original sample set is still available.
-                guard countByKey[key, default: 0] >= existing.sampleCount else { continue }
+                let sameWindow = TimeZone(identifier: existing.timezoneIdentifier).flatMap {
+                    DayBoundaries.interval(for: key, timezone: $0)
+                } == DayBoundaries.interval(for: key, timezone: timezone)
+                if countByKey[key, default: 0] < existing.sampleCount {
+                    guard sameWindow else { throw StoreError.statement("Retained report has a different local day boundary.") }
+                    continue
+                }
                 let needsResourceSummary = existing.resourceSummary == nil
-                    && TimeZone(identifier: existing.timezoneIdentifier).flatMap {
-                        DayBoundaries.interval(for: key, timezone: $0)
-                    } == DayBoundaries.interval(for: key)
+                    && sameWindow
                 if let newest = newestByKey[key], existing.generatedAt >= newest,
-                   !needsResourceSummary { continue }
+                   sameWindow, existing.sampleCount == countByKey[key], !needsResourceSummary { continue }
             }
-            try await generateReport(dayKey: key, publishAsToday: false)
+            try await generateReport(dayKey: key, publishAsToday: false, timezone: timezone, expectedSampleCount: countByKey[key])
         }
     }
 
@@ -1338,12 +1443,12 @@ final class AppModel: ObservableObject {
     }
 
     private func record(_ event: ActivityEvent) {
-        guard let store, !dataEraseInProgress else { return }
+        guard let store, !historyUnavailable else { return }
         let eventEpoch = dataEpoch
         Task {
-            guard eventEpoch == dataEpoch, !dataEraseInProgress else { return }
+            guard eventEpoch == dataEpoch, !historyUnavailable else { return }
             let storeGeneration = await store.currentDataGeneration()
-            guard eventEpoch == dataEpoch, !dataEraseInProgress else { return }
+            guard eventEpoch == dataEpoch, !historyUnavailable else { return }
             do { try await store.save(event: event, ifDataGeneration: storeGeneration) }
             catch { await show(error) }
         }
@@ -1377,22 +1482,25 @@ final class AppModel: ObservableObject {
         }
         observe(NSWorkspace.willSleepNotification) { [weak self] _ in
             guard let self else { return }
-            guard self.collectionReady else { return }
+            guard self.collectionReady, !self.historyUnavailable else { return }
             let wasCollecting = !self.isCurrentlyPaused
             self.collectionState = .sleeping
             self.prepareForCollectionGap()
-            if wasCollecting {
-                self.record(ActivityEvent(timestamp: Date(), type: .sleep, title: "Mac went to sleep", explanation: "Collection stopped for sleep; sleep time is excluded from active-use estimates.", severity: .information))
+            self.sleepCycleID = wasCollecting && !self.historyUnavailable ? UUID() : nil
+            if let cycle = self.sleepCycleID {
+                self.record(ActivityEvent(timestamp: Date(), type: .sleep, title: "Mac went to sleep", explanation: "Collection stopped for sleep; sleep time is excluded from active-use estimates.", severity: .information, sleepCycleID: cycle))
             }
         }
         observe(NSWorkspace.didWakeNotification) { [weak self] _ in
             guard let self else { return }
-            guard self.collectionReady else { return }
+            let cycle = self.sleepCycleID
+            self.sleepCycleID = nil
+            guard self.collectionReady, !self.historyUnavailable else { return }
             let paused = self.isCurrentlyPaused
             self.collectionState = paused ? .paused : .monitoring
             self.prepareForCollectionGap()
             if !paused {
-                self.record(ActivityEvent(timestamp: Date(), type: .wake, title: "Mac woke", explanation: "Collection resumed with fresh counter baselines so sleep is not mistaken for activity.", severity: .information))
+                self.record(ActivityEvent(timestamp: Date(), type: .wake, title: "Mac woke", explanation: "Collection resumed with fresh counter baselines so sleep is not mistaken for activity.", severity: .information, sleepCycleID: cycle))
             }
             Task {
                 do { try await self.finalizeUnreportedDays() }
@@ -1572,6 +1680,7 @@ final class AppModel: ObservableObject {
 
     private func show(_ error: Error) async {
         _ = error
+        sleepCycleID = nil
         monitoringIsRefreshing = false
         stopMonitorLoop()
         collectionReady = false

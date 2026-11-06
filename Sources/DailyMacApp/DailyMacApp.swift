@@ -4,20 +4,6 @@ import DailyMacCore
 import SwiftUI
 
 @main
-enum DailyMacEntryPoint {
-    @MainActor static func main() {
-        if CommandLine.arguments.contains(FanControlServiceIdentity.restoreArgument) {
-            guard CommandLine.arguments.count == 2 else { exit(64) }
-            FanControlHelper.restoreAndExit()
-        }
-        if CommandLine.arguments.contains(FanControlServiceIdentity.argument) {
-            guard CommandLine.arguments.count == 2 else { exit(64) }
-            FanControlHelper.run()
-        }
-        DailyMacApp.main()
-    }
-}
-
 struct DailyMacApp: App {
     @NSApplicationDelegateAdaptor(MenuBarApplicationDelegate.self) private var appDelegate
     var body: some Scene {
@@ -132,7 +118,6 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate, NSPopov
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        FanControlClient.shared.shutdown()
         model.menuBarDidClose()
         popover.close()
     }

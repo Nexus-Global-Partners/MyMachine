@@ -93,7 +93,7 @@ public enum DiagnosisBriefRenderer {
         let sleepIntervals = TimelineSemantics.sleepIntervals(
             from: sleepEvents,
             within: interval,
-            extendOpenSleepThroughWindowEnd: true
+            awakeSamples: ordered
         )
         let batteryRuns = TimelineSemantics.batteryRuns(
             from: ordered,

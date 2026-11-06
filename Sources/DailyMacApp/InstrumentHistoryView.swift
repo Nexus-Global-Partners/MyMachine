@@ -55,7 +55,7 @@ struct InstrumentHistoryView: View {
         let presence = TimelineSemantics.presenceContext(from: samples, within: window)
         let regions = InstrumentTimeContext.regions(
             presence: presence,
-            sleeps: TimelineSemantics.sleepIntervals(from: events, within: window), in: window)
+            sleeps: TimelineSemantics.sleepIntervals(from: events, within: window, awakeSamples: samples), in: window)
         self.presence = presence
         timeRegions = regions
         chargingIntervals = InstrumentHistory.chargingIntervals(samples: samples, in: window)

@@ -118,7 +118,7 @@ unzip -t "outputs/MY-MACHINE-Source-1.4.0.zip"
 (cd outputs && shasum -a 256 -c "SHA256SUMS-1.4.0.txt")
 ```
 
-The final validation check reads live hardware and timing, so it remains a local release gate. GitHub CI runs the deterministic portion in both debug and release configurations, then performs packaging, signature, archive, checksum, and source-boundary checks on a clean macOS runner. The release build is host-architecture only; the current packaged artifact is arm64. `scripts/package.sh` reads the archive version from `Resources/Info.plist`, so bump the short version and build number there before a release.
+GitHub CI runs the full validation suite in both debug and release configurations, including live checks on the macOS runner. It then checks the preview package, signature, archives, checksums and source privacy boundary. The CI preview targets the runner architecture. The official release is a universal Developer ID signed and notarized ZIP and requires separate testing on supported Macs. Packaging reads the version and build number from `Resources/Info.plist`.
 
 ## Privacy and data behavior
 
@@ -145,11 +145,18 @@ Diagnosis handoff is intentionally not an integration layer. `AppModel` queries 
 These are the most useful next engineering tasks, in priority order:
 
 1. Move the deterministic validation executable into XCTest over time for richer CI diagnostics; keep the live hardware check as a separate local smoke test.
-2. Decide whether distribution builds should be universal, Developer ID signed, and notarized.
+2. Validate the universal notarized monitoring ZIP on Apple Silicon and Intel before publishing.
 3. Run a full overnight sleep/wake, login, notification, and resource-endurance cycle on hardware.
 
 ## Repository hygiene
 
 Never commit `.build/`, `work/`, `outputs/`, SQLite/WAL/SHM files, app backups, QA captures, or local telemetry. The original development workspace contained private app history and identifiable screenshots in `work/`; those artifacts are intentionally absent from GitHub and the handoff ZIP.
 
-Before publishing a release, verify the repository is clean, run both validation configurations, create the immutable release tag, package from that tagged commit, and attach the app ZIP, source ZIP, and generated SHA-256 file to the GitHub release. The manual release-assets workflow checks out that exact tag, verifies the draft and release metadata, repeats the source-boundary audit, and can replace those three assets without publishing the draft.
+Before publishing a release, verify the repository is clean, run both validation configurations, create the immutable release tag, package from that tagged commit, and attach the notarized monitoring ZIP, its hash, and the verified source ZIP and source hash to the GitHub release. The manual release-assets workflow refreshes only the source ZIP and its hash from the exact tag.
+
+
+### Official monitoring release
+
+From the clean release tag, set `MYMACHINE_DEVELOPER_TEAM`, `MYMACHINE_APPLICATION_IDENTITY`, and the local Keychain `MYMACHINE_NOTARY_PROFILE`, then run `scripts/package-official.sh`. Keep signing and notarization credentials out of the repository and off fork CI. Validate the resulting ZIP and SHA-256 on Apple Silicon and Intel; run the native validation executable without `--skip-live` and an overnight smoke test with isolated data. Confirm there is no legacy helper on any upgrade test device before replacing the app. Do not publish the ad-hoc preview ZIP as an official release.
+
+The app never executes or modifies the removed helper. Hold the upgrade path for machines with an old helper until its safe retirement has been verified. Do not run the old installer or remover.

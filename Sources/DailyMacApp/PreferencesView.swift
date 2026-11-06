@@ -32,7 +32,6 @@ struct PreferencesView: View {
 
                 MenuBarIconSettingsView()
 
-                FanControlSettingsSection()
 
                 SolarSettingsView()
 
@@ -105,7 +104,7 @@ struct PreferencesView: View {
                     Text("Creates a private 24-hour summary and copies it. It can open ChatGPT or Claude, but never pastes or sends anything.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Turn off application names to replace them with anonymous labels.")
+                    Text("Application names are anonymous unless you turn this on. Review what you share before pasting it into another app.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -165,10 +164,21 @@ struct PreferencesView: View {
                             .disabled(model.todayReport == nil)
                     }
                     Button("Delete All Collected Data", role: .destructive) { confirmErase = true }
+                        .disabled(model.dataEraseInProgress)
+                    if model.eraseCleanupPending {
+                        Text(model.eraseRecoveryReview
+                             ? "Monitoring is paused. Local history needs review. Confirm Delete All Collected Data to retry deletion, including any recovery copies."
+                             : "Monitoring is paused until local deletion can be verified.")
+                            .foregroundStyle(.secondary)
+                        if !model.eraseRecoveryReview {
+                            Button("Retry Local Cleanup") { model.retryEraseCleanup() }
+                                .disabled(model.dataEraseInProgress)
+                        }
+                    }
                 }
 
                 Section("Completely remove MY MACHINE") {
-                    Text("If you enabled fan control, first use Disable fan control and remove helper above. Then turn off Launch at Login, quit the app and move MY MACHINE.app to the Trash. To remove its history and preferences too, delete the data folder shown above and ~/Library/Preferences/local.mymachine.app.plist. Core monitoring installs no privileged helper; the optional fan-control helper is installed only after your approval. No system extension, kernel component or configuration profile is installed.")
+                    Text("Turn off Launch at Login, quit, and move MY MACHINE.app from Applications to the Trash. You can separately remove history and preferences from the data folder above and ~/Library/Preferences/local.mymachine.app.plist.")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -183,7 +193,7 @@ struct PreferencesView: View {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) { model.eraseAllData() }
         } message: {
-            Text("This removes detailed samples, events, and daily reports. Monitoring, privacy, and launch preferences remain. Collected history cannot be recovered.")
+            Text("This removes detailed samples, events, daily reports, and recovery copies from the app’s local storage. Monitoring, privacy, and launch preferences remain.")
         }
     }
 
@@ -209,9 +219,10 @@ struct PreferencesView: View {
 
     private var diagnosisApplicationNamesBinding: Binding<Bool> {
         Binding(
-            get: { model.settings.diagnosisIncludeApplicationNames != false },
+            get: { model.settings.diagnosisNamesAreAllowed },
             set: {
                 model.settings.diagnosisIncludeApplicationNames = $0
+                model.settings.diagnosisNameConsentVersion = 1
                 model.persistSettings()
             }
         )

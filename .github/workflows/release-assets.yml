@@ -1,4 +1,4 @@
-name: Refresh draft release assets
+name: Refresh draft source assets
 
 on:
   workflow_dispatch:
@@ -37,7 +37,7 @@ jobs:
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           test "$RELEASE_TAG" = "v$version"
           plutil -lint Resources/Info.plist
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "false"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' Resources/Info.plist)" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)" = "15.0"
 
       - name: Compile local validation target
@@ -71,7 +71,7 @@ jobs:
           printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/SECURITY.md'
           printf '%s\n' "$listing" | grep -q 'MY-MACHINE-Source/Sources/'
 
-      - name: Replace draft release assets
+      - name: Replace draft source assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -83,8 +83,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           gh release view "$RELEASE_TAG" --json isDraft -q '.isDraft' | grep -qx true
+          source_zip="MY-MACHINE-Source-$version.zip"
+          (cd outputs && shasum -a 256 "$source_zip" > "$source_zip.sha256")
           gh release upload "$RELEASE_TAG" \
-            "outputs/MY-MACHINE-$version.zip" \
-            "outputs/MY-MACHINE-Source-$version.zip" \
-            "outputs/SHA256SUMS-$version.txt" \
+            "outputs/$source_zip" \
+            "outputs/$source_zip.sha256" \
             --clobber

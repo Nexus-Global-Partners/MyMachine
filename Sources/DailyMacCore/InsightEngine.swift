@@ -11,7 +11,7 @@ public struct InsightEngine: Sendable {
         events: [ActivityEvent],
         historicalReports: [DailyReport] = []
     ) -> DailyReport {
-        let ordered = samples.sorted { $0.timestamp < $1.timestamp }
+        let ordered = samples.filter { CoverageEvaluator.boundedDuration(of: $0) > 0 }.sorted { $0.timestamp < $1.timestamp }
         let calibratedProcesses = processSamples.filter { $0.cpuMeasurementVersion == 1 }
         let longestContinuousCoverage = CoverageEvaluator.longestContinuousDuration(in: ordered)
         let supportsNarrative = longestContinuousCoverage >= CoverageEvaluator.narrativeMinimum
@@ -92,7 +92,7 @@ public struct InsightEngine: Sendable {
             correlations: correlations,
             recommendations: recommendations,
             limitations: limitations,
-            sampleCount: ordered.count,
+            sampleCount: samples.count,
             longestContinuousCoverage: longestContinuousCoverage,
             resourceSummary: DayBoundaries.interval(for: dayKey, timezone: timezone).map {
                 MonitoringHistory.resourceSummary(from: ordered, within: $0)
@@ -1320,7 +1320,7 @@ public struct InsightEngine: Sendable {
     }
 
     private func boundedDuration(_ sample: SystemSample) -> TimeInterval {
-        min(max(1, sample.duration), max(2, sample.samplingInterval * 2.2))
+        CoverageEvaluator.boundedDuration(of: sample)
     }
 
     private func peakThermal(_ values: [ThermalLevel]) -> ThermalLevel {

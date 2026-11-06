@@ -77,7 +77,7 @@ public enum MonitoringHistory {
     ) -> [MonitoringDaySummary] {
         guard window.duration > 0 else { return [] }
         let ordered = chronological(samples)
-        let sleep = TimelineSemantics.sleepIntervals(from: events, within: window)
+        let sleep = TimelineSemantics.sleepIntervals(from: events, within: window, awakeSamples: ordered)
         let reportsByKey = Dictionary(grouping: reports, by: \.dayKey)
         var result: [MonitoringDaySummary] = []
         var dayStart = calendar.startOfDay(for: window.start)
